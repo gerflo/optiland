@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtGui import QAction, QActionGroup, QKeySequence
 
-from .config import THEME_DARK_PATH, THEME_LIGHT_PATH
+from .theme_manager import THEMES
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QMainWindow
@@ -170,24 +170,31 @@ class ActionManager:
             action.setEnabled(settings.contains(f"Layouts/Config{slot}Geometry"))
 
     def _create_theme_actions(self) -> None:
-        """Create mutually exclusive Dark / Light theme actions."""
+        """Create mutually exclusive theme actions."""
         group = QActionGroup(self.main_window)
         group.setExclusive(True)
-        dark_action = self._create_action(
-            "dark_theme",
-            "Dark Theme",
-            checkable=True,
-            triggered=lambda: self.main_window.switch_theme(THEME_DARK_PATH),
-        )
-        light_action = self._create_action(
-            "light_theme",
-            "Light Theme",
-            checkable=True,
-            triggered=lambda: self.main_window.switch_theme(THEME_LIGHT_PATH),
-        )
-        group.addAction(dark_action)
-        group.addAction(light_action)
+        for theme in THEMES:
+            action = self._create_action(
+                f"theme_{theme.theme_id}",
+                theme.label,
+                checkable=True,
+                triggered=lambda checked=False, theme_id=theme.theme_id: self.main_window.switch_theme(
+                    theme_id
+                ),
+            )
+            group.addAction(action)
         self.actions["theme_group"] = group
+
+    def get_theme_actions(self, mode: str | None = None) -> list[QAction]:
+        """Return theme actions, optionally filtered by mode."""
+        actions: list[QAction] = []
+        for theme in THEMES:
+            if mode is not None and theme.mode != mode:
+                continue
+            action = self.get_action(f"theme_{theme.theme_id}")
+            if action:
+                actions.append(action)
+        return actions
 
     def _create_help_actions(self) -> None:
         """Create Help-menu actions."""

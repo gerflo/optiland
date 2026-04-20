@@ -52,10 +52,15 @@ from .config import (
     OPTILAND_ICON_PATH,
     ORGANIZATION_NAME,
     SIDEBAR_QSS_PATH,
-    THEME_DARK_PATH,
 )
 from .optiland_connector import OptilandConnector
 from .panel_manager import PanelManager
+from .theme_manager import (
+    DEFAULT_THEME_ID,
+    THEMES,
+    build_palette_override,
+    get_theme,
+)
 from .utils import logging_handler as _log_handler
 from .utils.plot_theme import apply_plot_theme
 from .widgets.command_palette import (
@@ -196,9 +201,12 @@ class MainWindow(FramelessWindow):
     def _init_core_components(self):
         """Initializes non-UI core components like settings, the connector,
         and the scripting interface."""
-        self.current_theme_path = THEME_DARK_PATH
         self.analysis_panels = []
         self.settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
+        self.current_theme_id = self.settings.value(
+            "Appearance/ThemeId", DEFAULT_THEME_ID, type=str
+        )
+        self.current_theme_id = get_theme(self.current_theme_id).theme_id
         saved_slot_index = self.settings.value("Layouts/NextSaveSlot", 1, type=int)
         self.next_save_slot_index = min(max(saved_slot_index, 1), self.MAX_LAYOUT_SLOTS)
         self.connector = OptilandConnector()
@@ -259,11 +267,7 @@ class MainWindow(FramelessWindow):
     def _finalize_setup(self):
         """Applies stylesheets, connects signals, and sets the initial UI state."""
         self.load_stylesheets()
-        dark_theme_action = self.action_manager.get_action("dark_theme")
-        light_theme_action = self.action_manager.get_action("light_theme")
-        if dark_theme_action and light_theme_action:
-            dark_theme_action.setChecked(self.current_theme_path == THEME_DARK_PATH)
-            light_theme_action.setChecked(self.current_theme_path != THEME_DARK_PATH)
+        self._sync_theme_actions()
 
         self._connect_dock_animations()
         self.panel_manager.connect_signals()
@@ -349,12 +353,7 @@ class MainWindow(FramelessWindow):
                         )
             self._initial_narrow_check_done = True
 
-        dark_theme_action = self.action_manager.get_action("dark_theme")
-        light_theme_action = self.action_manager.get_action("light_theme")
-        if dark_theme_action and light_theme_action:
-            is_dark = self.current_theme_path == THEME_DARK_PATH
-            dark_theme_action.setChecked(is_dark)
-            light_theme_action.setChecked(not is_dark)
+        self._sync_theme_actions()
 
     def _connect_dock_animations(self):
         """Connects dock widget view actions to an animation handler.
@@ -403,7 +402,10 @@ class MainWindow(FramelessWindow):
         view_menu.addActions(am.get_actions("dock_all", "reset_layout"))
         view_menu.addSeparator()
         theme_menu = view_menu.addMenu("&Theme")
-        theme_menu.addActions(am.get_actions("dark_theme", "light_theme"))
+        dark_theme_menu = theme_menu.addMenu("&Dark")
+        dark_theme_menu.addActions(am.get_theme_actions("dark"))
+        light_theme_menu = theme_menu.addMenu("&Light")
+        light_theme_menu.addActions(am.get_theme_actions("light"))
         view_menu.addSeparator()
 
         view_menu.addSeparator()
@@ -466,11 +468,12 @@ class MainWindow(FramelessWindow):
     def load_stylesheets(self) -> None:
         """Load and apply the current theme and sidebar stylesheets."""
         style_str = ""
+        theme = get_theme(self.current_theme_id)
         try:
-            with open(self.current_theme_path) as f_theme:
+            with open(theme.base_path) as f_theme:
                 style_str += f_theme.read()
         except Exception as e:
-            print(f"Error loading main theme {self.current_theme_path}: {e}")
+            print(f"Error loading main theme {theme.base_path}: {e}")
 
         if os.path.exists(SIDEBAR_QSS_PATH):
             try:
@@ -480,22 +483,28 @@ class MainWindow(FramelessWindow):
             except Exception as e:
                 print(f"Error loading sidebar stylesheet {SIDEBAR_QSS_PATH}: {e}")
 
+        style_str += "\n" + build_palette_override(theme)
         self.setStyleSheet(style_str)
 
-        is_dark = self.current_theme_path == THEME_DARK_PATH
-        theme_name = "dark" if is_dark else "light"
+        is_dark = theme.mode == "dark"
+        theme_name = theme.mode
         gui_plot_utils.apply_gui_matplotlib_styles(theme=theme_name)
         # Also apply the new theme-specific rcParams overrides
         apply_plot_theme(is_dark)
 
+        if hasattr(self, "panel_manager"):
+            self.panel_manager.update_theme(theme_name)
         if hasattr(self, "custom_title_bar_widget"):
             self.custom_title_bar_widget.setStyleSheet(style_str)
+            self.custom_title_bar_widget.update_theme_icons(theme_name)
+        self._sync_theme_actions()
 
-        dark_theme_action = self.action_manager.get_action("dark_theme")
-        light_theme_action = self.action_manager.get_action("light_theme")
-        if dark_theme_action and light_theme_action:
-            dark_theme_action.setChecked(is_dark)
-            light_theme_action.setChecked(not is_dark)
+    def _sync_theme_actions(self) -> None:
+        """Update check state for all theme actions."""
+        for theme in THEMES:
+            action = self.action_manager.get_action(f"theme_{theme.theme_id}")
+            if action:
+                action.setChecked(theme.theme_id == self.current_theme_id)
 
     def _update_project_name_in_title_bar(self) -> None:
         """Update the project name displayed in the custom title bar."""
@@ -660,21 +669,17 @@ class MainWindow(FramelessWindow):
             )
 
     @Slot(str)
-    def switch_theme(self, theme_path: str) -> None:
-        """Switch the application theme to *theme_path*.
+    def switch_theme(self, theme_id: str) -> None:
+        """Switch the application theme to *theme_id*.
 
         Args:
-            theme_path: Path to the QSS theme file to apply.
+            theme_id: Registered theme id to apply.
         """
-        if theme_path != self.current_theme_path:
-            self.current_theme_path = theme_path
+        theme = get_theme(theme_id)
+        if theme.theme_id != self.current_theme_id:
+            self.current_theme_id = theme.theme_id
+            self.settings.setValue("Appearance/ThemeId", self.current_theme_id)
             self.load_stylesheets()
-            theme_name = "dark" if "dark" in theme_path else "light"
-
-            if hasattr(self, "panel_manager"):
-                self.panel_manager.update_theme(theme_name)
-            if hasattr(self, "custom_title_bar_widget"):
-                self.custom_title_bar_widget.update_theme_icons(theme_name)
 
     @Slot()
     def refresh_all_gui_panels(self) -> None:
@@ -1026,26 +1031,17 @@ class MainWindow(FramelessWindow):
                 )
 
         # --- View / theme ---
-        dark_action = am.get_action("dark_theme")
-        light_action = am.get_action("light_theme")
-        if dark_action:
-            reg.register(
-                PaletteCommand(
-                    "Dark Theme",
-                    "Switch to dark mode",
-                    dark_action.trigger,
-                    category="Settings",
+        for theme in THEMES:
+            action = am.get_action(f"theme_{theme.theme_id}")
+            if action:
+                reg.register(
+                    PaletteCommand(
+                        theme.label,
+                        f"Switch to the {theme.label} theme",
+                        action.trigger,
+                        category="Settings",
+                    )
                 )
-            )
-        if light_action:
-            reg.register(
-                PaletteCommand(
-                    "Light Theme",
-                    "Switch to light mode",
-                    light_action.trigger,
-                    category="Settings",
-                )
-            )
 
         reset_action = am.get_action("reset_layout")
         if reset_action:
