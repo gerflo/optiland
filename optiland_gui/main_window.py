@@ -30,7 +30,9 @@ from PySide6.QtWidgets import (
     QDialog,
     QDockWidget,
     QFileDialog,
+    QInputDialog,
     QLabel,
+    QMainWindow,
     QMenuBar,
     QMessageBox,
     QPushButton,
@@ -96,6 +98,8 @@ class MainWindow(FramelessWindow):
         all_managed_docks (list): A list of all dock widgets managed by the main
                                     window.
     """
+
+    MAX_LAYOUT_SLOTS = 4
 
     class OptilandInterface:
         """A high-level interface for controlling the Optiland GUI via scripting.
@@ -195,9 +199,8 @@ class MainWindow(FramelessWindow):
         self.current_theme_path = THEME_DARK_PATH
         self.analysis_panels = []
         self.settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
-        self.next_save_slot_index = self.settings.value(
-            "Layouts/NextSaveSlot", 1, type=int
-        )
+        saved_slot_index = self.settings.value("Layouts/NextSaveSlot", 1, type=int)
+        self.next_save_slot_index = min(max(saved_slot_index, 1), self.MAX_LAYOUT_SLOTS)
         self.connector = OptilandConnector()
         self.iface = self.OptilandInterface(self)
         self.panel_manager = PanelManager(self, self.connector)
@@ -244,10 +247,13 @@ class MainWindow(FramelessWindow):
 
     def _setup_layout(self):
         """Sets up the central widget and the default dock layout."""
-        self.main_docking_area_placeholder = QWidget()
-        self.main_docking_area_placeholder.setObjectName("MainDockingAreaPlaceholder")
-        self.setCentralWidget(self.main_docking_area_placeholder)
         self.setDockNestingEnabled(True)
+        self.setDockOptions(
+            self.dockOptions()
+            | QMainWindow.DockOption.AllowNestedDocks
+            | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.GroupedDragging
+        )
         self._apply_revised_default_dock_layout()
 
     def _finalize_setup(self):
@@ -296,6 +302,7 @@ class MainWindow(FramelessWindow):
         and tabbing them to create a functional and organized user interface.
         This is called on first launch and when resetting the layout.
         """
+        self._normalize_all_docks()
         self.panel_manager.setup_default_layout()
 
         # Initial plot/render
@@ -304,6 +311,14 @@ class MainWindow(FramelessWindow):
             viewer_panel.viewer2D.plot_optic()
         if viewer_panel.viewer3D and hasattr(viewer_panel.viewer3D, "render_optic"):
             viewer_panel.viewer3D.render_optic()
+
+    def _normalize_all_docks(self) -> None:
+        """Clear transient animation state so docks return to normal Qt sizing."""
+        if not hasattr(self, "panel_manager"):
+            return
+        for dock in self.panel_manager.get_all_docks():
+            if dock:
+                self._restore_dock_size_constraints(dock)
 
     def showEvent(self, event: QResizeEvent):
         """Handles the window show event.
@@ -328,8 +343,10 @@ class MainWindow(FramelessWindow):
                         )
                 else:
                     sidebar_widget.force_set_collapse_state(False)
-                    if sidebar_dock.width() < 150:
-                        self.resizeDocks([sidebar_dock], [150], Qt.Horizontal)
+                    if sidebar_dock.width() < SIDEBAR_MAX_WIDTH:
+                        self.resizeDocks(
+                            [sidebar_dock], [SIDEBAR_MAX_WIDTH], Qt.Horizontal
+                        )
             self._initial_narrow_check_done = True
 
         dark_theme_action = self.action_manager.get_action("dark_theme")
@@ -350,6 +367,8 @@ class MainWindow(FramelessWindow):
             return
         for dock_widget_ref in self.panel_manager.get_all_docks():
             if dock_widget_ref:
+                if dock_widget_ref == self.panel_manager.sidebar:
+                    continue
                 action = dock_widget_ref.toggleViewAction()
                 if action:
                     with contextlib.suppress(TypeError, RuntimeError):
@@ -393,10 +412,10 @@ class MainWindow(FramelessWindow):
         if hasattr(self, "panel_manager"):
             for dock in self.panel_manager.get_all_docks():
                 if dock and dock.toggleViewAction():
+                    if dock == self.panel_manager.sidebar:
+                        continue
                     # Create a friendlier name for the menu
                     action_text = f"Toggle {dock.windowTitle()}"
-                    if "Sidebar" in dock.objectName():
-                        action_text = "Toggle Navigation Sidebar"
                     dock.toggleViewAction().setText(action_text)
                     view_menu.addAction(dock.toggleViewAction())
 
@@ -416,7 +435,13 @@ class MainWindow(FramelessWindow):
         toolbar.addActions(am.get_actions("new", "open", "save"))
         toolbar.addSeparator()
         toolbar.addActions(
-            am.get_actions("load_layout_1", "load_layout_2", "save_layout")
+            am.get_actions(
+                "load_layout_1",
+                "load_layout_2",
+                "load_layout_3",
+                "load_layout_4",
+                "save_layout",
+            )
         )
         toolbar.addSeparator()
         toolbar.addActions(am.get_actions("dock_all", "reset_layout"))
@@ -501,18 +526,15 @@ class MainWindow(FramelessWindow):
             animation = QPropertyAnimation(dock_widget, target_prop)
             animation.setStartValue(0)
             animation.setEndValue(original_dimension)
-            if is_left_or_right:
-                dock_widget.setMaximumWidth(
-                    original_dimension if original_dimension > 0 else 5000
-                )
-            else:
-                dock_widget.setMaximumHeight(
-                    original_dimension if original_dimension > 0 else 5000
-                )
+            self._set_dock_dimension_limit(
+                dock_widget,
+                is_left_or_right,
+                original_dimension if original_dimension > 0 else 5000,
+            )
             animation.setDuration(duration)
             animation.setEasingCurve(curve)
-            animation.start(QPropertyAnimation.DeleteWhenStopped)
-            self.dock_animations[dock_widget] = animation
+            self._track_dock_animation(dock_widget, animation)
+            animation.start()
         else:
             dock_widget.raise_()
 
@@ -524,6 +546,8 @@ class MainWindow(FramelessWindow):
             current_size = (
                 dock_widget.width() if is_left_or_right else dock_widget.height()
             )
+            if current_size > 0:
+                self.dock_original_sizes[dock_widget] = current_size
             target_prop = b"maximumWidth" if is_left_or_right else b"maximumHeight"
             animation = QPropertyAnimation(dock_widget, target_prop)
             animation.setStartValue(current_size)
@@ -531,11 +555,51 @@ class MainWindow(FramelessWindow):
             animation.setDuration(duration)
             animation.setEasingCurve(curve)
             animation.finished.connect(dock_widget.hide)
-            animation.finished.connect(
-                lambda: dock_widget.setMaximumSize(5000, 5000)
-            )  # Restore max size
-            animation.start(QPropertyAnimation.DeleteWhenStopped)
-            self.dock_animations[dock_widget] = animation
+            animation.finished.connect(lambda: self._restore_dock_size_constraints(dock_widget))
+            self._track_dock_animation(dock_widget, animation)
+            animation.start()
+
+    def _set_dock_dimension_limit(
+        self, dock_widget: QDockWidget, is_left_or_right: bool, value: int
+    ) -> None:
+        """Set the active animation limit on the dimension being animated."""
+        if is_left_or_right:
+            dock_widget.setMaximumWidth(value)
+        else:
+            dock_widget.setMaximumHeight(value)
+
+    def _restore_dock_size_constraints(self, dock_widget: QDockWidget) -> None:
+        """Remove temporary max-size limits applied during dock animations."""
+        dock_widget.setMaximumSize(16777215, 16777215)
+
+    def _track_dock_animation(
+        self, dock_widget: QDockWidget, animation: QPropertyAnimation
+    ) -> None:
+        """Store a live dock animation and clear it when the Qt object goes away."""
+        self.dock_animations[dock_widget] = animation
+
+        def cleanup() -> None:
+            if self.dock_animations.get(dock_widget) is animation:
+                self.dock_animations.pop(dock_widget, None)
+
+        animation.finished.connect(cleanup)
+        animation.finished.connect(lambda: self._restore_dock_size_constraints(dock_widget))
+        animation.finished.connect(animation.deleteLater)
+        animation.destroyed.connect(cleanup)
+
+    def _get_live_dock_animation(
+        self, dock_widget: QDockWidget
+    ) -> QPropertyAnimation | None:
+        """Return the current dock animation if its underlying Qt object still exists."""
+        animation = self.dock_animations.get(dock_widget)
+        if animation is None:
+            return None
+        try:
+            animation.state()
+        except RuntimeError:
+            self.dock_animations.pop(dock_widget, None)
+            return None
+        return animation
 
     def animate_dock_toggle(
         self, dock_widget: QDockWidget, show_state_after_toggle: bool
@@ -574,11 +638,9 @@ class MainWindow(FramelessWindow):
             )
 
         # Stop any currently running animation on this dock
-        if (
-            dock_widget in self.dock_animations
-            and self.dock_animations[dock_widget].state() == QPropertyAnimation.Running
-        ):
-            self.dock_animations[dock_widget].stop()
+        current_animation = self._get_live_dock_animation(dock_widget)
+        if current_animation and current_animation.state() == QPropertyAnimation.Running:
+            current_animation.stop()
 
         if show_state_after_toggle:
             self._animate_dock_show(
@@ -793,11 +855,23 @@ class MainWindow(FramelessWindow):
         if hasattr(self, "panel_manager"):
             for dock in self.panel_manager.get_all_docks():
                 if dock and dock.toggleViewAction():
+                    if dock == self.panel_manager.sidebar:
+                        continue
                     dock.toggleViewAction().setChecked(True)
 
     @Slot()
     def save_layout_slot(self):
-        target_slot = self.next_save_slot_index
+        target_slot, ok = QInputDialog.getInt(
+            self,
+            "Save Layout",
+            "Save current layout to slot:",
+            value=self.next_save_slot_index,
+            minValue=1,
+            maxValue=self.MAX_LAYOUT_SLOTS,
+        )
+        if not ok:
+            return
+
         window_geometry = self.saveGeometry()
         dock_toolbar_state = self.saveState()
         self.settings.setValue(f"Layouts/Config{target_slot}Geometry", window_geometry)
@@ -806,20 +880,23 @@ class MainWindow(FramelessWindow):
             self.toast_manager.notify(
                 f"Layout saved to configuration — {target_slot}", "success"
             )
-        self.next_save_slot_index = 2 if target_slot == 1 else 1
+        self.next_save_slot_index = target_slot
         self.settings.setValue("Layouts/NextSaveSlot", self.next_save_slot_index)
-        load_layout_1 = self.action_manager.get_action("load_layout_1")
-        if load_layout_1:
-            load_layout_1.setEnabled(self.settings.contains("Layouts/Config1Geometry"))
-
-        load_layout_2 = self.action_manager.get_action("load_layout_2")
-        if load_layout_2:
-            load_layout_2.setEnabled(self.settings.contains("Layouts/Config2Geometry"))
+        self._update_layout_slot_actions()
         logger.debug(
-            "Layout saved to slot %d. Next save will be slot %d.",
+            "Layout saved to slot %d. Next save dialog will default to slot %d.",
             target_slot,
             self.next_save_slot_index,
         )
+
+    def _update_layout_slot_actions(self) -> None:
+        """Refresh enabled state for all layout-slot load actions."""
+        for slot in range(1, self.MAX_LAYOUT_SLOTS + 1):
+            load_action = self.action_manager.get_action(f"load_layout_{slot}")
+            if load_action:
+                load_action.setEnabled(
+                    self.settings.contains(f"Layouts/Config{slot}Geometry")
+                )
 
     def _load_layout_from_slot(self, slot_number):
         geometry_key = f"Layouts/Config{slot_number}Geometry"
@@ -840,6 +917,7 @@ class MainWindow(FramelessWindow):
                         "Failed to restore dock/toolbar state from slot %d.",
                         slot_number,
                     )
+                self._normalize_all_docks()
                 if self.toast_manager:
                     self.toast_manager.notify(
                         f"Layout from configuration — {slot_number} loaded.", "success"
@@ -867,6 +945,18 @@ class MainWindow(FramelessWindow):
         """Load the window layout saved in slot 2."""
         logger.debug("Loading layout from slot 2.")
         self._load_layout_from_slot(2)
+
+    @Slot()
+    def load_layout_3_slot(self) -> None:
+        """Load the window layout saved in slot 3."""
+        logger.debug("Loading layout from slot 3.")
+        self._load_layout_from_slot(3)
+
+    @Slot()
+    def load_layout_4_slot(self) -> None:
+        """Load the window layout saved in slot 4."""
+        logger.debug("Loading layout from slot 4.")
+        self._load_layout_from_slot(4)
 
     def closeEvent(self, event: QEvent) -> None:
         """Shut down the Jupyter kernel and accept the close event."""

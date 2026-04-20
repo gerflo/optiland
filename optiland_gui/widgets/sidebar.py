@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 COLLAPSE_THRESHOLD_WIDTH = 80
 SIDEBAR_MIN_WIDTH = 60
-SIDEBAR_MAX_WIDTH = 150
+SIDEBAR_MAX_WIDTH = 100
 
 
 class SidebarWidget(QWidget):

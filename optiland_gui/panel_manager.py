@@ -20,7 +20,7 @@ from .system_properties_panel import SystemPropertiesPanel
 from .viewer_panel import ViewerPanel
 from .widgets.custom_dock_widget import CustomDockWidget
 from .widgets.python_terminal import PythonTerminalWidget
-from .widgets.sidebar import SidebarWidget
+from .widgets.sidebar import SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SidebarWidget
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -57,11 +57,13 @@ class PanelManager:
             widget=self.sidebar_content_widget,
             name="SidebarDockWidget",
             title="NavigationSidebar",
-            features=(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable),
-            allowed_areas=Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea,
+            features=QDockWidget.DockWidgetFeature.NoDockWidgetFeatures,
+            allowed_areas=Qt.LeftDockWidgetArea,
             use_custom_title_bar=False,
         )
         self.sidebar.setTitleBarWidget(QWidget())
+        self.sidebar.setMinimumWidth(SIDEBAR_MIN_WIDTH)
+        self.sidebar.setMaximumWidth(SIDEBAR_MAX_WIDTH)
 
         # Main panels
         self.viewer_panel = ViewerPanel(self.connector)
@@ -159,25 +161,49 @@ class PanelManager:
         for dock in self.all_docks:
             if dock:
                 dock.setFloating(False)
-                self.main_window.addDockWidget(Qt.LeftDockWidgetArea, dock)
+                dock.setMaximumSize(16777215, 16777215)
                 dock.show()
 
-        # Place panels in their designated areas
+        # Sidebar stays fixed on the left; all other views are regular docks.
         self.main_window.addDockWidget(Qt.LeftDockWidgetArea, self.sidebar)
-        self.main_window.addDockWidget(Qt.RightDockWidgetArea, self.lens_editor_dock)
+        self.main_window.addDockWidget(Qt.RightDockWidgetArea, self.viewer_dock)
         self.main_window.splitDockWidget(
-            self.lens_editor_dock, self.analysis_dock, Qt.Horizontal
+            self.viewer_dock, self.lens_editor_dock, Qt.Horizontal
         )
         self.main_window.splitDockWidget(
-            self.lens_editor_dock, self.viewer_dock, Qt.Vertical
+            self.viewer_dock, self.analysis_dock, Qt.Vertical
+        )
+        self.main_window.splitDockWidget(
+            self.lens_editor_dock, self.system_properties_dock, Qt.Vertical
+        )
+        self.main_window.splitDockWidget(
+            self.system_properties_dock, self.optimization_dock, Qt.Vertical
         )
         self.main_window.splitDockWidget(
             self.analysis_dock, self.terminal_dock, Qt.Vertical
         )
-        self.main_window.tabifyDockWidget(
-            self.analysis_dock, self.system_properties_dock
+
+        # Restore a predictable splitter balance after a reset.
+        self.main_window.resizeDocks(
+            [self.sidebar, self.viewer_dock, self.lens_editor_dock],
+            [SIDEBAR_MAX_WIDTH, 900, 520],
+            Qt.Horizontal,
         )
-        self.main_window.tabifyDockWidget(self.analysis_dock, self.optimization_dock)
+        self.main_window.resizeDocks(
+            [self.viewer_dock, self.analysis_dock],
+            [520, 260],
+            Qt.Vertical,
+        )
+        self.main_window.resizeDocks(
+            [self.lens_editor_dock, self.system_properties_dock, self.optimization_dock],
+            [260, 230, 230],
+            Qt.Vertical,
+        )
+        self.main_window.resizeDocks(
+            [self.analysis_dock, self.terminal_dock],
+            [330, 170],
+            Qt.Vertical,
+        )
 
         # Raise panels in reverse order so the first item ends up on top
         for dock in reversed(self.all_docks):

@@ -36,6 +36,7 @@ Documentation = "https://optiland.readthedocs.io/en/latest/"
 
 [project.scripts]
 optiland = "optiland_gui.run_gui:main"
+optiland-dev = "optiland_gui.dev_runner:main"
 
 [tool.hatch.metadata]
 allow-direct-references = true

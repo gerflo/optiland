@@ -34,10 +34,6 @@ class CustomDockTitleBar(QWidget):
         self.setObjectName("CustomDockTitleBar")
         self.dock_widget = parent_dock
 
-        # Initialise drag-tracking state
-        self._mouse_press_pos = None
-        self._window_pos_before_move = None
-
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 3, 8, 3)
         layout.setSpacing(2)
@@ -81,28 +77,22 @@ class CustomDockTitleBar(QWidget):
         super().paintEvent(event)
 
     def mousePressEvent(self, event) -> None:  # noqa: ANN001
-        """Begin a drag operation when the left button is pressed over
-        a floating dock."""
-        if (
-            event.button() == Qt.MouseButton.LeftButton
-            and self.dock_widget.isFloating()
-        ):
-            self._mouse_press_pos = event.globalPosition().toPoint()
-            self._window_pos_before_move = self.dock_widget.pos()
+        """Let Qt handle dock dragging and docking from the custom title bar."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: ANN001
-        """Move the floating dock widget as the mouse is dragged."""
-        if (
-            self.dock_widget.isFloating()
-            and event.buttons() == Qt.MouseButton.LeftButton
-            and self._mouse_press_pos is not None
-        ):
-            delta = event.globalPosition().toPoint() - self._mouse_press_pos
-            self.dock_widget.move(self._window_pos_before_move + delta)
+        """Let Qt handle live dock previews instead of moving the window manually."""
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: ANN001
-        """End the drag operation on mouse release."""
-        self._mouse_press_pos = None
+        """Let Qt finish the dock drag operation."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
         super().mouseReleaseEvent(event)

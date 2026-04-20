@@ -150,26 +150,24 @@ class ActionManager:
     def _create_layout_actions(self) -> None:
         """Create Layout-slot load and save actions."""
         settings = self.main_window.settings
-        load1 = self._create_action(
-            "load_layout_1",
-            "1",
-            triggered=self.main_window.load_layout_1_slot,
-            tooltip="Load Layout from Slot 1",
-        )
-        load2 = self._create_action(
-            "load_layout_2",
-            "2",
-            triggered=self.main_window.load_layout_2_slot,
-            tooltip="Load Layout from Slot 2",
-        )
+        load_actions = []
+        for slot in range(1, self.main_window.MAX_LAYOUT_SLOTS + 1):
+            load_actions.append(
+                self._create_action(
+                    f"load_layout_{slot}",
+                    str(slot),
+                    triggered=getattr(self.main_window, f"load_layout_{slot}_slot"),
+                    tooltip=f"Load Layout from Slot {slot}",
+                )
+            )
         self._create_action(
             "save_layout",
             "Save Current Layout",
             triggered=self.main_window.save_layout_slot,
-            tooltip="Save current window layout to next available slot (1 or 2)",
+            tooltip="Save current window layout to a chosen slot (1 to 4)",
         )
-        load1.setEnabled(settings.contains("Layouts/Config1Geometry"))
-        load2.setEnabled(settings.contains("Layouts/Config2Geometry"))
+        for slot, action in enumerate(load_actions, start=1):
+            action.setEnabled(settings.contains(f"Layouts/Config{slot}Geometry"))
 
     def _create_theme_actions(self) -> None:
         """Create mutually exclusive Dark / Light theme actions."""
