@@ -16,6 +16,7 @@ from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
+    QCompleter,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -31,6 +32,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
+
+from optiland.materials.material import Material
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -251,8 +255,75 @@ class _AccentFocusDelegate(QStyledItemDelegate):
         return editor
 
 
+class _MaterialSearchDelegate(_AccentFocusDelegate):
+    """Editable material delegate with match-as-you-type search suggestions."""
+
+    def __init__(self, owner, material_names: list[str], parent=None):
+        super().__init__(owner, parent)
+        self._material_names = material_names
+
+    def createEditor(self, parent, option, index):  # noqa: ANN001
+        editor = QLineEdit(parent)
+        editor.setObjectName("MaterialSearchEditor")
+        editor.setFrame(False)
+        editor.setStyleSheet(
+            "QLineEdit#MaterialSearchEditor {"
+            "  border: none;"
+            "  padding: 0px 2px;"
+            "  margin: 0px;"
+            "  background-color: palette(window);"
+            "  color: palette(window-text);"
+            "  selection-background-color: palette(highlight);"
+            "  selection-color: palette(highlighted-text);"
+            "}"
+        )
+        editor.setProperty("lens_row", index.row())
+        editor.setProperty("lens_col", index.column())
+        editor.setProperty("lens_table_editor", True)
+        editor.installEventFilter(self._owner)
+        editor.setTextMargins(2, 0, 2, 0)
+
+        completer = QCompleter(self._material_names, editor)
+        completer.setCaseSensitivity(Qt.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchContains)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        editor.setCompleter(completer)
+        editor.textEdited.connect(
+            lambda _=None, e=editor: self._show_editor_completer(e)
+        )
+        completer.activated.connect(
+            lambda text, e=editor: self._owner._accept_material_completion(e, text)
+        )
+
+        return editor
+
+    @staticmethod
+    def _show_editor_completer(editor: QLineEdit) -> None:
+        """Anchor the suggestions popup directly below the active editor field."""
+        if not isValid(editor):
+            return
+        completer = editor.completer()
+        if completer is None or not isValid(completer):
+            return
+        popup_rect = editor.rect()
+        popup_rect.moveTop(editor.height() + 2)
+        popup_rect.setWidth(max(popup_rect.width(), 220))
+        completer.complete(popup_rect)
+
+    def setEditorData(self, editor, index) -> None:  # noqa: ANN001
+        value = index.data(Qt.ItemDataRole.EditRole) or "Air"
+        editor.setText(str(value))
+        editor.selectAll()
+
+    def setModelData(self, editor, model, index) -> None:  # noqa: ANN001
+        material_name = editor.text().strip() or "Air"
+        model.setData(index, material_name, Qt.ItemDataRole.EditRole)
+
+
 class LensEditor(QWidget):
     """A widget for editing the properties of an optical system's surfaces."""
+
+    _material_names_cache: list[str] | None = None
 
     def __init__(self, connector: OptilandConnector, parent=None):
         super().__init__(parent)
@@ -266,6 +337,20 @@ class LensEditor(QWidget):
         self.setup_table()
         self.load_data()
         self.connect_signals()
+
+    @classmethod
+    def _get_material_names(cls) -> list[str]:
+        """Return material names for the search delegate, keeping Air first."""
+        if cls._material_names_cache is None:
+            df = Material._load_dataframe()
+            names = {
+                str(name).strip()
+                for name in df["filename_no_ext"].dropna().tolist()
+                if str(name).strip()
+            }
+            names.discard("Air")
+            cls._material_names_cache = ["Air", *sorted(names, key=str.casefold)]
+        return cls._material_names_cache
 
     def _init_ui(self):
         """Initializes the main UI components of the editor."""
@@ -282,6 +367,14 @@ class LensEditor(QWidget):
         # Accent focus delegate (SPEC §4.1)
         self._focus_delegate = _AccentFocusDelegate(self, self.tableWidget)
         self.tableWidget.setItemDelegate(self._focus_delegate)
+        self._material_delegate = _MaterialSearchDelegate(
+            self,
+            self._get_material_names(),
+            self.tableWidget,
+        )
+        self.tableWidget.setItemDelegateForColumn(
+            self.connector.COL_MATERIAL, self._material_delegate
+        )
 
         self.layout.addWidget(self.tableWidget)
 
@@ -337,6 +430,10 @@ class LensEditor(QWidget):
             is_shift_tab = event.key() == Qt.Key_Tab and bool(
                 event.modifiers() & Qt.ShiftModifier
             )
+            is_table_editor = bool(
+                hasattr(source, "property")
+                and source.property("lens_table_editor")
+            )
             if source is self.tableWidget and event.key() == Qt.Key_Insert:
                 self.add_surface_handler()
                 return True
@@ -348,6 +445,9 @@ class LensEditor(QWidget):
             ):
                 self._request_add_optimization_variable()
                 return True
+            if is_table_editor and event.key() in (Qt.Key_Return, Qt.Key_Enter):
+                if self._handle_tab_navigation(source, backwards=False):
+                    return True
             if event.key() == Qt.Key_Backtab or event.key() == Qt.Key_Tab:
                 backwards = event.key() == Qt.Key_Backtab or is_shift_tab
                 if self._handle_tab_navigation(source, backwards):
@@ -376,13 +476,26 @@ class LensEditor(QWidget):
         self._focus_cell_for_editing(*target)
         return True
 
+    def _accept_material_completion(self, editor, text: str) -> None:  # noqa: ANN001
+        """Accept a material completer choice and continue like a confirmed edit."""
+        if not isValid(editor):
+            return
+        editor.setText(text.strip() or "Air")
+        QTimer.singleShot(0, lambda e=editor: self._handle_tab_navigation(e, False))
+
     def _commit_editor_if_needed(self, source) -> None:  # noqa: ANN001
         """Commit an in-progress edit before moving focus."""
         if hasattr(source, "property") and source.property("lens_table_editor"):
-            self._focus_delegate.commitData.emit(source)
-            self._focus_delegate.closeEditor.emit(
-                source, QAbstractItemDelegate.EndEditHint.NoHint
-            )
+            editor = source.property("lens_parent_editor") or source
+            if not isValid(editor):
+                return
+            try:
+                self.tableWidget.commitData(editor)
+                self.tableWidget.closeEditor(
+                    editor, QAbstractItemDelegate.EndEditHint.NoHint
+                )
+            except (RuntimeError, TypeError):
+                return
         elif hasattr(source, "editingFinished"):
             source.editingFinished.emit()
 

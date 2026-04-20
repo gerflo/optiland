@@ -11,8 +11,8 @@ Refactored by: Jules, 2025
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPoint, QRect, Qt
-from PySide6.QtWidgets import QApplication, QMainWindow
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
 
 class FramelessWindow(QMainWindow):
@@ -25,8 +25,10 @@ class FramelessWindow(QMainWindow):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self._frameless_enabled = False
+        self.setWindowFlags(Qt.Window)
         self.setMouseTracking(True)
+        QApplication.instance().installEventFilter(self)
 
         self.grip_size = 8
         self.is_resizing = False
@@ -39,8 +41,75 @@ class FramelessWindow(QMainWindow):
         # This attribute should be set by the subclass
         self.custom_title_bar_widget = None
 
+    def set_frameless_mode(self, enabled: bool) -> None:
+        """Enable or disable frameless window mode at runtime."""
+        if self._frameless_enabled == enabled:
+            return
+
+        was_visible = self.isVisible()
+        was_maximized = self.isMaximized()
+        was_fullscreen = self.isFullScreen()
+        geometry = self.geometry()
+
+        self._frameless_enabled = enabled
+        flags = self.windowFlags()
+        if enabled:
+            flags |= Qt.FramelessWindowHint
+        else:
+            flags &= ~Qt.FramelessWindowHint
+        flags |= Qt.Window
+        self.setWindowFlags(flags)
+
+        if was_fullscreen:
+            self.showFullScreen()
+        elif was_maximized:
+            self.showMaximized()
+        else:
+            self.setGeometry(geometry)
+            if was_visible:
+                self.showNormal()
+        if was_visible and not (was_fullscreen or was_maximized):
+            self.show()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """Handle resize gestures even when child widgets cover the window edge."""
+        if not self._frameless_enabled:
+            return super().eventFilter(watched, event)
+        if not isinstance(watched, QWidget):
+            return super().eventFilter(watched, event)
+        if watched.window() is not self:
+            return super().eventFilter(watched, event)
+
+        if event.type() == QEvent.MouseMove:
+            local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+            self.updateCursorShape(local_pos)
+            if self.is_resizing and not self.isMaximized() and not self.isFullScreen():
+                self._perform_resize(event.globalPosition().toPoint())
+                return True
+
+        if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+            resize_area = self._get_resize_area(local_pos)
+            if resize_area and not self.isMaximized() and not self.isFullScreen():
+                self.resize_area = resize_area
+                self.is_resizing = True
+                self.start_geometry = self.geometry()
+                self.start_pos = event.globalPosition().toPoint()
+                return True
+
+        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+            if self.is_resizing:
+                self.is_resizing = False
+                self.resize_area = None
+                self.setCursor(Qt.ArrowCursor)
+                return True
+
+        return super().eventFilter(watched, event)
+
     def mousePressEvent(self, event: QEvent):
         """Handle mouse press events for window dragging and resizing."""
+        if not self._frameless_enabled:
+            return super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
             cursor_pos = event.position().toPoint()
             self.resize_area = self._get_resize_area(cursor_pos)
@@ -66,39 +135,27 @@ class FramelessWindow(QMainWindow):
 
     def mouseMoveEvent(self, event: QEvent):
         """Handle mouse move events for window dragging, resizing, and AeroSnap."""
+        if not self._frameless_enabled:
+            return super().mouseMoveEvent(event)
         cursor_pos = event.position().toPoint()
         global_pos = event.globalPosition().toPoint()
 
         self.updateCursorShape(cursor_pos)
 
-        if self.is_resizing and not self.isMaximized():
-            diff = global_pos - self.start_pos
-            new_geometry = QRect(self.start_geometry)
+        if self.is_resizing and not self.isMaximized() and not self.isFullScreen():
+            self._perform_resize(global_pos)
 
-            if self.resize_area in ["top_left", "top", "top_right"]:
-                new_geometry.setTop(self.start_geometry.top() + diff.y())
-            if self.resize_area in ["bottom_left", "bottom", "bottom_right"]:
-                new_geometry.setBottom(self.start_geometry.bottom() + diff.y())
-            if self.resize_area in ["top_left", "left", "bottom_left"]:
-                new_geometry.setLeft(self.start_geometry.left() + diff.x())
-            if self.resize_area in ["top_right", "right", "bottom_right"]:
-                new_geometry.setRight(self.start_geometry.right() + diff.x())
-
-            if (
-                new_geometry.width() >= self.minimumWidth()
-                and new_geometry.height() >= self.minimumHeight()
-            ):
-                self.setGeometry(new_geometry)
-
-        elif self.is_moving and not self.isMaximized():
+        elif self.is_moving and not self.isMaximized() and not self.isFullScreen():
             self.move(global_pos - self.drag_position)
 
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QEvent):
         """Handle mouse release events and implement AeroSnap actions."""
+        if not self._frameless_enabled:
+            return super().mouseReleaseEvent(event)
         if event.button() == Qt.LeftButton:
-            if self.is_moving and not self.isMaximized():
+            if self.is_moving and not self.isMaximized() and not self.isFullScreen():
                 screen = self.screen()
                 if not screen:
                     screen = QApplication.primaryScreen()
@@ -164,7 +221,10 @@ class FramelessWindow(QMainWindow):
 
     def updateCursorShape(self, pos: QPoint):
         """Update the cursor shape based on the mouse position."""
-        if self.isMaximized():
+        if not self._frameless_enabled:
+            self.setCursor(Qt.ArrowCursor)
+            return
+        if self.isMaximized() or self.isFullScreen():
             self.setCursor(Qt.ArrowCursor)
             return
 
@@ -180,6 +240,29 @@ class FramelessWindow(QMainWindow):
             self.setCursor(Qt.SizeHorCursor)
         else:
             self.setCursor(Qt.ArrowCursor)
+
+    def _perform_resize(self, global_pos: QPoint) -> None:
+        """Resize the frameless window using the active edge grip."""
+        if not self.resize_area or self.start_geometry is None or self.start_pos is None:
+            return
+
+        diff = global_pos - self.start_pos
+        new_geometry = QRect(self.start_geometry)
+
+        if self.resize_area in ["top_left", "top", "top_right"]:
+            new_geometry.setTop(self.start_geometry.top() + diff.y())
+        if self.resize_area in ["bottom_left", "bottom", "bottom_right"]:
+            new_geometry.setBottom(self.start_geometry.bottom() + diff.y())
+        if self.resize_area in ["top_left", "left", "bottom_left"]:
+            new_geometry.setLeft(self.start_geometry.left() + diff.x())
+        if self.resize_area in ["top_right", "right", "bottom_right"]:
+            new_geometry.setRight(self.start_geometry.right() + diff.x())
+
+        if (
+            new_geometry.width() >= self.minimumWidth()
+            and new_geometry.height() >= self.minimumHeight()
+        ):
+            self.setGeometry(new_geometry)
 
     def keyPressEvent(self, event: QEvent):
         """Handle key events for window management shortcuts."""

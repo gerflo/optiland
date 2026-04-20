@@ -417,6 +417,7 @@ QToolBar#QuickActionsToolbar {{
 #TitleBarMinimizeButton,
 #TitleBarMaximizeButton,
 #TitleBarCloseButton,
+QToolButton#TitleBarFullscreenButton,
 QToolButton#TitleBarSettingsButton,
 QToolButton#TitleBarGitHubButton,
 QToolButton#TitleBarHelpButton {{
@@ -426,6 +427,7 @@ QToolButton#TitleBarHelpButton {{
 #TitleBarMenuBar::item:selected,
 #TitleBarMinimizeButton:hover,
 #TitleBarMaximizeButton:hover,
+QToolButton#TitleBarFullscreenButton:hover,
 QToolButton#TitleBarSettingsButton:hover,
 QToolButton#TitleBarGitHubButton:hover,
 QToolButton#TitleBarHelpButton:hover,
@@ -434,9 +436,19 @@ QToolBar#QuickActionsToolbar QToolButton:hover {{
 }}
 
 #TitleBarMenuBar::item:pressed,
+QToolButton#TitleBarFullscreenButton:pressed,
 QToolBar#QuickActionsToolbar QToolButton:pressed,
 QToolBar#QuickActionsToolbar QToolButton:checked {{
     background-color: {p["elevated_bg"]};
+}}
+
+QFrame#TitleBarSeparator,
+QFrame#TitleBarToolsSeparator {{
+    background-color: {p["border"]};
+    max-width: 2px;
+    min-width: 2px;
+    max-height: 15px;
+    border: none;
 }}
 
 QMenuBar,

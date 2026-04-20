@@ -25,7 +25,7 @@ from PySide6.QtCore import (
     Qt,
     Slot,
 )
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QResizeEvent, QShortcut
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QMoveEvent, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QDockWidget,
@@ -105,6 +105,7 @@ class MainWindow(FramelessWindow):
     """
 
     MAX_LAYOUT_SLOTS = 4
+    MAX_RECENT_FILES = 10
 
     class OptilandInterface:
         """A high-level interface for controlling the Optiland GUI via scripting.
@@ -220,20 +221,27 @@ class MainWindow(FramelessWindow):
         self.toast_manager: ToastManager | None = None
         self.command_palette: CommandPaletteWidget | None = None
         self.command_registry = CommandRegistry.instance()
+        self._recent_file_menus: list = []
 
     def _setup_menus_and_toolbars(self):
         """Creates and populates the main menu bar, custom title bar, and toolbars."""
         # Main Menu Bar
-        self._actual_menu_bar_instance = QMenuBar(self)
-        self._populate_main_menu_bar(self._actual_menu_bar_instance)
+        self._native_menu_bar_instance = self.menuBar()
+        self._populate_main_menu_bar(self._native_menu_bar_instance)
+
+        self._fullscreen_menu_bar_instance = QMenuBar(self)
+        self._populate_main_menu_bar(self._fullscreen_menu_bar_instance)
 
         # Custom Title Bar
         self.custom_title_bar_widget = CustomTitleBar(
-            self._actual_menu_bar_instance, self
+            self._fullscreen_menu_bar_instance, self
         )
         self.custom_title_bar_widget.minimize_requested.connect(self.showMinimized)
         self.custom_title_bar_widget.maximize_restore_requested.connect(
             self._handle_maximize_restore
+        )
+        self.custom_title_bar_widget.fullscreen_requested.connect(
+            self._toggle_fullscreen
         )
         self.custom_title_bar_widget.close_requested.connect(self.close)
         self.custom_title_bar_widget.settings_requested.connect(self.show_settings_wip)
@@ -244,6 +252,7 @@ class MainWindow(FramelessWindow):
         self.title_bar_as_toolbar.setFloatable(False)
         self.title_bar_as_toolbar.addWidget(self.custom_title_bar_widget)
         self.addToolBar(Qt.TopToolBarArea, self.title_bar_as_toolbar)
+        self.title_bar_as_toolbar.hide()
 
         # Quick Actions Toolbar
         self.quick_actions_toolbar = QToolBar("QuickActionsToolbar")
@@ -298,6 +307,11 @@ class MainWindow(FramelessWindow):
 
         self._initial_narrow_check_done = False
         self._update_project_name_in_title_bar()
+        self._was_maximized_before_fullscreen = False
+        self._last_normal_geometry = self.settings.value("Window/NormalGeometry")
+        self._apply_window_chrome(False)
+        self._restore_window_placement()
+        self._restore_current_layout_state()
 
     def _apply_revised_default_dock_layout(self):
         """Applies the default docking layout to the main window.
@@ -388,6 +402,10 @@ class MainWindow(FramelessWindow):
         file_menu = menu_bar.addMenu("&File")
         file_menu.addActions(am.get_actions("new", "open", "save", "save_as"))
         file_menu.addSeparator()
+        recent_menu = file_menu.addMenu("Recent Files")
+        self._recent_file_menus.append(recent_menu)
+        self._populate_recent_files_menu(recent_menu)
+        file_menu.addSeparator()
         import_menu = file_menu.addMenu("&Import")
         import_menu.addActions(am.get_actions("import_zemax", "import_codev"))
         export_menu = file_menu.addMenu("&Export")
@@ -399,7 +417,9 @@ class MainWindow(FramelessWindow):
         edit_menu.addActions(am.get_actions("undo", "redo"))
 
         view_menu = menu_bar.addMenu("&View")
-        view_menu.addActions(am.get_actions("dock_all", "reset_layout"))
+        view_menu.addActions(
+            am.get_actions("dock_all", "reset_layout", "toggle_fullscreen")
+        )
         view_menu.addSeparator()
         theme_menu = view_menu.addMenu("&Theme")
         dark_theme_menu = theme_menu.addMenu("&Dark")
@@ -427,6 +447,78 @@ class MainWindow(FramelessWindow):
         help_menu = menu_bar.addMenu("&Help")
         help_menu.addAction(am.get_action("about"))
 
+    def _get_recent_files(self) -> list[str]:
+        """Return the persisted recent file list, filtered to existing paths."""
+        recent_files = self.settings.value("Files/Recent", [], type=list)
+        if not isinstance(recent_files, list):
+            return []
+        return [path for path in recent_files if isinstance(path, str) and os.path.isfile(path)]
+
+    def _set_recent_files(self, recent_files: list[str]) -> None:
+        """Persist and refresh the recent file list."""
+        self.settings.setValue("Files/Recent", recent_files[: self.MAX_RECENT_FILES])
+        self._refresh_recent_file_menus()
+
+    def _remember_recent_file(self, filepath: str) -> None:
+        """Move *filepath* to the top of the recent file list."""
+        normalized = os.path.normpath(filepath)
+        recent_files = [
+            path
+            for path in self._get_recent_files()
+            if os.path.normpath(path) != normalized
+        ]
+        recent_files.insert(0, filepath)
+        self._set_recent_files(recent_files)
+
+    def _populate_recent_files_menu(self, recent_menu) -> None:  # noqa: ANN001
+        """Fill a single recent-files submenu."""
+        recent_menu.clear()
+        recent_files = self._get_recent_files()
+        if not recent_files:
+            action = recent_menu.addAction("No recent files")
+            action.setEnabled(False)
+            return
+
+        for filepath in recent_files:
+            action = recent_menu.addAction(os.path.basename(filepath))
+            action.setToolTip(filepath)
+            action.triggered.connect(
+                lambda checked=False, path=filepath: self._open_recent_file(path)
+            )
+
+        recent_menu.addSeparator()
+        clear_action = recent_menu.addAction("Clear Recent Files")
+        clear_action.triggered.connect(lambda: self._set_recent_files([]))
+
+    def _refresh_recent_file_menus(self) -> None:
+        """Refresh all recent-files submenus currently attached to menu bars."""
+        for recent_menu in self._recent_file_menus:
+            self._populate_recent_files_menu(recent_menu)
+
+    def _open_recent_file(self, filepath: str) -> None:
+        """Open a file from the recent-files list if it still exists."""
+        if not os.path.isfile(filepath):
+            if self.toast_manager:
+                self.toast_manager.notify(
+                    f"Recent file not found: {filepath}", "warning"
+                )
+            recent_files = [
+                path
+                for path in self._get_recent_files()
+                if os.path.normpath(path) != os.path.normpath(filepath)
+            ]
+            self._set_recent_files(recent_files)
+            return
+        self._open_system_from_path(filepath)
+
+    def _open_system_from_path(self, filepath: str) -> None:
+        """Load a system file and update related UI state."""
+        self._remember_dialog_path("Paths/LastOpenDir", filepath)
+        self._remember_recent_file(filepath)
+        self.connector.load_optic_from_file(filepath)
+        self._update_project_name_in_title_bar()
+        logger.debug("Open System action triggered: %s", filepath)
+
     def _populate_quick_actions_toolbar(self, toolbar: QToolBar):
         """Populates the quick actions toolbar with common actions.
 
@@ -450,10 +542,97 @@ class MainWindow(FramelessWindow):
 
     def _handle_maximize_restore(self) -> None:
         """Toggle between maximized and normal window states."""
+        if self.isFullScreen():
+            self._exit_fullscreen_to_previous_state()
+            return
+        self._capture_normal_window_geometry()
         if self.isMaximized():
             self.showNormal()
         else:
             self.showMaximized()
+
+    def _toggle_fullscreen(self) -> None:
+        """Toggle fullscreen while preserving the last normal window placement."""
+        if self.isFullScreen():
+            self._exit_fullscreen_to_previous_state()
+            return
+
+        self._capture_normal_window_geometry()
+        self._was_maximized_before_fullscreen = self.isMaximized()
+        self._apply_window_chrome(True)
+        self.showFullScreen()
+
+    def _exit_fullscreen_to_previous_state(self) -> None:
+        """Leave fullscreen and restore the prior maximized/normal state."""
+        self.showNormal()
+        self._apply_window_chrome(False)
+        if self._was_maximized_before_fullscreen:
+            self.showMaximized()
+        else:
+            self._restore_last_normal_geometry()
+
+    @Slot()
+    def toggle_fullscreen_action(self) -> None:
+        """Menu/shortcut entry point for fullscreen toggling."""
+        self._toggle_fullscreen()
+
+    def _apply_window_chrome(self, frameless: bool) -> None:
+        """Switch between native window chrome and fullscreen frameless chrome."""
+        self.set_frameless_mode(frameless)
+        if hasattr(self, "title_bar_as_toolbar"):
+            self.title_bar_as_toolbar.setVisible(frameless)
+        if hasattr(self, "_native_menu_bar_instance") and self._native_menu_bar_instance:
+            native_menu_bar = self._native_menu_bar_instance
+            menu_action = getattr(native_menu_bar, "menuAction", None)
+            if callable(menu_action):
+                menu_action().setVisible(not frameless)
+            else:
+                native_menu_bar.setVisible(not frameless)
+
+    def _capture_normal_window_geometry(self) -> None:
+        """Remember the last non-maximized, non-fullscreen window geometry."""
+        if not self.isMaximized() and not self.isFullScreen():
+            self._last_normal_geometry = self.saveGeometry()
+
+    def _restore_last_normal_geometry(self) -> None:
+        """Restore the last remembered normal window geometry."""
+        if isinstance(self._last_normal_geometry, QByteArray) and self._last_normal_geometry:
+            self.restoreGeometry(self._last_normal_geometry)
+
+    def _restore_window_placement(self) -> None:
+        """Restore the last normal geometry and maximized state from settings."""
+        self._last_normal_geometry = self.settings.value("Window/NormalGeometry")
+        if isinstance(self._last_normal_geometry, QByteArray) and self._last_normal_geometry:
+            self.restoreGeometry(self._last_normal_geometry)
+        if self.settings.value("Window/WasMaximized", False, type=bool):
+            self.showMaximized()
+
+    def _save_window_placement(self) -> None:
+        """Persist the last normal geometry and whether the window was maximized."""
+        if self.isFullScreen():
+            was_maximized = False
+        else:
+            self._capture_normal_window_geometry()
+            was_maximized = self.isMaximized()
+
+        if isinstance(self._last_normal_geometry, QByteArray) and self._last_normal_geometry:
+            self.settings.setValue("Window/NormalGeometry", self._last_normal_geometry)
+        self.settings.setValue("Window/WasMaximized", was_maximized)
+
+    def _restore_current_layout_state(self) -> None:
+        """Restore the last automatically persisted dock layout, if available."""
+        state = self.settings.value("Layouts/CurrentState")
+        if not isinstance(state, QByteArray) or state.isEmpty():
+            return
+        if not self.restoreState(state):
+            logger.warning("Failed to restore the last session dock layout.")
+            return
+        self._normalize_all_docks()
+
+    def _save_current_layout_state(self) -> None:
+        """Persist the current dock layout, including docking and visibility."""
+        self._normalize_all_docks()
+        self.settings.setValue("Layouts/CurrentState", self.saveState())
 
     def changeEvent(self, event: QEvent) -> None:
         """Update the maximize button state when the window state changes."""
@@ -461,8 +640,13 @@ class MainWindow(FramelessWindow):
         if event.type() == QEvent.Type.WindowStateChange and (
             hasattr(self, "custom_title_bar_widget") and self.custom_title_bar_widget
         ):
+            if not self.isFullScreen():
+                self._capture_normal_window_geometry()
             self.custom_title_bar_widget.update_maximize_button_state(
                 self.isMaximized()
+            )
+            self.custom_title_bar_widget.update_fullscreen_button_state(
+                self.isFullScreen()
             )
 
     def load_stylesheets(self) -> None:
@@ -497,6 +681,12 @@ class MainWindow(FramelessWindow):
         if hasattr(self, "custom_title_bar_widget"):
             self.custom_title_bar_widget.setStyleSheet(style_str)
             self.custom_title_bar_widget.update_theme_icons(theme_name)
+            self.custom_title_bar_widget.update_maximize_button_state(
+                self.isMaximized()
+            )
+            self.custom_title_bar_widget.update_fullscreen_button_state(
+                self.isFullScreen()
+            )
         self._sync_theme_actions()
 
     def _sync_theme_actions(self) -> None:
@@ -686,6 +876,28 @@ class MainWindow(FramelessWindow):
         """Re-emit :attr:`opticChanged` to refresh all connected panels."""
         self.connector.opticChanged.emit()
 
+    def _remember_dialog_path(self, key: str, filepath: str) -> None:
+        """Persist the parent directory of *filepath* for future dialogs."""
+        directory = os.path.dirname(filepath)
+        if directory:
+            self.settings.setValue(key, directory)
+
+    def _get_dialog_start_dir(self, primary_key: str, fallback_key: str = "") -> str:
+        """Return the preferred start directory for file dialogs."""
+        for key in (primary_key, fallback_key):
+            if not key:
+                continue
+            value = self.settings.value(key, "", type=str)
+            if value and os.path.isdir(value):
+                return value
+
+        current_path = self.connector.get_current_filepath()
+        if current_path:
+            current_dir = os.path.dirname(current_path)
+            if current_dir and os.path.isdir(current_dir):
+                return current_dir
+        return ""
+
     @Slot()
     def new_system_action(self) -> None:
         """Slot for the *New System* action."""
@@ -699,13 +911,11 @@ class MainWindow(FramelessWindow):
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "Open Optiland System",
-            "",
+            self._get_dialog_start_dir("Paths/LastOpenDir", "Paths/LastSaveDir"),
             "Optiland JSON Files (*.json);;Zemax Files (*.zmx);;All Files (*)",
         )
         if filepath:
-            self.connector.load_optic_from_file(filepath)
-            self._update_project_name_in_title_bar()
-            logger.debug("Open System action triggered: %s", filepath)
+            self._open_system_from_path(filepath)
 
     @Slot()
     def save_system_action(self) -> None:
@@ -713,6 +923,7 @@ class MainWindow(FramelessWindow):
         current_path = self.connector.get_current_filepath()
         if current_path:
             self.connector.save_optic_to_file(current_path)
+            self._remember_dialog_path("Paths/LastSaveDir", current_path)
             self._update_project_name_in_title_bar()
             logger.debug("Save System action triggered: %s", current_path)
         else:
@@ -724,7 +935,7 @@ class MainWindow(FramelessWindow):
         filepath, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Save Optiland System As...",
-            "",
+            self._get_dialog_start_dir("Paths/LastSaveDir", "Paths/LastOpenDir"),
             "Optiland JSON Files (*.json);;All Files (*)",
         )
         if filepath:
@@ -734,6 +945,7 @@ class MainWindow(FramelessWindow):
             ):
                 filepath += ".json"
             self.connector.save_optic_to_file(filepath)
+            self._remember_dialog_path("Paths/LastSaveDir", filepath)
             self._update_project_name_in_title_bar()
             logger.debug("Save System As action triggered: %s", filepath)
 
@@ -764,10 +976,11 @@ class MainWindow(FramelessWindow):
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "Import Zemax File",
-            "",
+            self._get_dialog_start_dir("Paths/LastOpenDir", "Paths/LastSaveDir"),
             "Zemax Files (*.zmx);;All Files (*)",
         )
         if filepath:
+            self._remember_dialog_path("Paths/LastOpenDir", filepath)
             self.connector.import_zemax(filepath)
             self._update_project_name_in_title_bar()
 
@@ -779,10 +992,11 @@ class MainWindow(FramelessWindow):
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "Import CODE V File",
-            "",
+            self._get_dialog_start_dir("Paths/LastOpenDir", "Paths/LastSaveDir"),
             "CODE V Files (*.seq);;All Files (*)",
         )
         if filepath:
+            self._remember_dialog_path("Paths/LastOpenDir", filepath)
             self.connector.import_codev(filepath)
             self._update_project_name_in_title_bar()
 
@@ -792,12 +1006,13 @@ class MainWindow(FramelessWindow):
         filepath, _ = QFileDialog.getSaveFileName(
             self,
             "Export to Zemax",
-            "",
+            self._get_dialog_start_dir("Paths/LastSaveDir", "Paths/LastOpenDir"),
             "Zemax Files (*.zmx);;All Files (*)",
         )
         if filepath:
             if not filepath.lower().endswith(".zmx"):
                 filepath += ".zmx"
+            self._remember_dialog_path("Paths/LastSaveDir", filepath)
             self.connector.export_zemax(filepath)
 
     @Slot()
@@ -806,12 +1021,13 @@ class MainWindow(FramelessWindow):
         filepath, _ = QFileDialog.getSaveFileName(
             self,
             "Export to CODE V",
-            "",
+            self._get_dialog_start_dir("Paths/LastSaveDir", "Paths/LastOpenDir"),
             "CODE V Files (*.seq);;All Files (*)",
         )
         if filepath:
             if not filepath.lower().endswith(".seq"):
                 filepath += ".seq"
+            self._remember_dialog_path("Paths/LastSaveDir", filepath)
             self.connector.export_codev(filepath)
 
     @Slot()
@@ -966,6 +1182,8 @@ class MainWindow(FramelessWindow):
     def closeEvent(self, event: QEvent) -> None:
         """Shut down the Jupyter kernel and accept the close event."""
         logger.debug("Closing application.")
+        self._save_window_placement()
+        self._save_current_layout_state()
         if hasattr(self, "panel_manager") and self.panel_manager.python_terminal:
             self.panel_manager.python_terminal.shutdown_kernel()
         event.accept()
@@ -1043,6 +1261,18 @@ class MainWindow(FramelessWindow):
                     )
                 )
 
+        fullscreen_action = am.get_action("toggle_fullscreen")
+        if fullscreen_action:
+            reg.register(
+                PaletteCommand(
+                    "Toggle Full Screen",
+                    "Enter or exit full screen mode",
+                    fullscreen_action.trigger,
+                    shortcut="F11",
+                    category="Settings",
+                )
+            )
+
         reset_action = am.get_action("reset_layout")
         if reset_action:
             reg.register(
@@ -1084,10 +1314,16 @@ class MainWindow(FramelessWindow):
     def resizeEvent(self, event: QResizeEvent) -> None:
         """Reposition toasts when the window resizes."""
         super().resizeEvent(event)
+        self._capture_normal_window_geometry()
         if self.toast_manager:
             self.toast_manager.reposition()
         if self.command_palette and self.command_palette._visible:
             self.command_palette._reposition()
+
+    def moveEvent(self, event: QMoveEvent) -> None:
+        """Track the latest normal window position for session restore."""
+        super().moveEvent(event)
+        self._capture_normal_window_geometry()
 
     def _load_sample_action(self, optic_class: type[Optic]) -> None:
         """Instantiate and load the selected sample class.

@@ -146,6 +146,12 @@ class ActionManager:
             "Reset Window Layout",
             triggered=self.main_window.reset_windows_action,
         )
+        self._create_action(
+            "toggle_fullscreen",
+            "Toggle Full Screen",
+            "F11",
+            self.main_window.toggle_fullscreen_action,
+        )
 
     def _create_layout_actions(self) -> None:
         """Create Layout-slot load and save actions."""
@@ -156,8 +162,9 @@ class ActionManager:
                 self._create_action(
                     f"load_layout_{slot}",
                     str(slot),
+                    shortcut=f"Alt+{slot}",
                     triggered=getattr(self.main_window, f"load_layout_{slot}_slot"),
-                    tooltip=f"Load Layout from Slot {slot}",
+                    tooltip=f"Load Layout from Slot {slot} (Alt+{slot})",
                 )
             )
         self._create_action(

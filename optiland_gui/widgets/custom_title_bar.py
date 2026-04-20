@@ -42,6 +42,7 @@ class CustomTitleBar(QWidget):
         minimize_requested: Emitted when the minimize button is clicked.
         maximize_restore_requested: Emitted when the maximize/restore button
             is clicked.
+        fullscreen_requested: Emitted when the fullscreen button is clicked.
         close_requested: Emitted when the close button is clicked.
         settings_requested: Emitted when the settings button is clicked.
 
@@ -53,6 +54,7 @@ class CustomTitleBar(QWidget):
 
     minimize_requested = Signal()
     maximize_restore_requested = Signal()
+    fullscreen_requested = Signal()
     close_requested = Signal()
     settings_requested = Signal()
 
@@ -93,15 +95,6 @@ class CustomTitleBar(QWidget):
         separator.setFrameShadow(QFrame.Shadow.Sunken)
         layout.addWidget(separator)
 
-        # Quick-access tool buttons (settings, GitHub, documentation)
-        self.settings_button = QToolButton()
-        self.settings_button.setObjectName("TitleBarSettingsButton")
-        self.settings_button.setFixedSize(_BTN_SIZE)
-        self.settings_button.setToolTip("Settings")
-        self.settings_button.clicked.connect(self.settings_requested.emit)
-        layout.addWidget(self.settings_button)
-        layout.addSpacing(-10)
-
         self.github_button = QToolButton()
         self.github_button.setObjectName("TitleBarGitHubButton")
         self.github_button.setFixedSize(_BTN_SIZE)
@@ -116,6 +109,27 @@ class CustomTitleBar(QWidget):
         self.help_button.setToolTip("Open Documentation")
         self.help_button.clicked.connect(self._open_help_url)
         layout.addWidget(self.help_button)
+
+        self.fullscreen_button = QToolButton()
+        self.fullscreen_button.setObjectName("TitleBarFullscreenButton")
+        self.fullscreen_button.setFixedSize(_BTN_SIZE)
+        self.fullscreen_button.setToolTip("Enter Full Screen")
+        self.fullscreen_button.clicked.connect(self.fullscreen_requested.emit)
+        layout.addWidget(self.fullscreen_button)
+
+        tools_separator = QFrame()
+        tools_separator.setObjectName("TitleBarToolsSeparator")
+        tools_separator.setFrameShape(QFrame.Shape.VLine)
+        tools_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(tools_separator)
+
+        # Quick-access tool buttons (settings / preferences)
+        self.settings_button = QToolButton()
+        self.settings_button.setObjectName("TitleBarSettingsButton")
+        self.settings_button.setFixedSize(_BTN_SIZE)
+        self.settings_button.setToolTip("Preferences")
+        self.settings_button.clicked.connect(self.settings_requested.emit)
+        layout.addWidget(self.settings_button)
 
         layout.addStretch(1)
 
@@ -168,6 +182,7 @@ class CustomTitleBar(QWidget):
         self.settings_button.setIcon(QIcon(f":/icons/{theme}/settings.svg"))
         self.github_button.setIcon(QIcon(f":/icons/{theme}/brand_github.svg"))
         self.help_button.setIcon(QIcon(f":/icons/{theme}/help.svg"))
+        self.fullscreen_button.setText("[]")
 
     def set_project_name(self, name: str) -> None:
         """Set the displayed project name label.
@@ -188,6 +203,13 @@ class CustomTitleBar(QWidget):
         """
         self.maximize_button.setChecked(is_maximized)
         self.maximize_button.setToolTip("Restore" if is_maximized else "Maximize")
+
+    def update_fullscreen_button_state(self, is_fullscreen: bool) -> None:
+        """Update the fullscreen button label and tooltip."""
+        self.fullscreen_button.setText("][" if is_fullscreen else "[]")
+        self.fullscreen_button.setToolTip(
+            "Exit Full Screen" if is_fullscreen else "Enter Full Screen"
+        )
 
     def mousePressEvent(self, event) -> None:  # noqa: ANN001
         """Begin a window drag on left-button press."""
