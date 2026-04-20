@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
+    QAbstractItemDelegate,
     QAbstractItemView,
     QFormLayout,
     QHBoxLayout,
@@ -219,6 +220,10 @@ class _AccentFocusDelegate(QStyledItemDelegate):
 
     _ACCENT = QColor("#007ACC")
 
+    def __init__(self, owner, parent=None):
+        super().__init__(parent)
+        self._owner = owner
+
     def paint(
         self,
         painter: QPainter,
@@ -235,6 +240,16 @@ class _AccentFocusDelegate(QStyledItemDelegate):
             painter.drawRect(option.rect.adjusted(1, 1, -1, -1))
             painter.restore()
 
+    def createEditor(self, parent, option, index):  # noqa: ANN001
+        """Install custom tab navigation on transient table editors."""
+        editor = super().createEditor(parent, option, index)
+        if editor is not None:
+            editor.setProperty("lens_row", index.row())
+            editor.setProperty("lens_col", index.column())
+            editor.setProperty("lens_table_editor", True)
+            editor.installEventFilter(self._owner)
+        return editor
+
 
 class LensEditor(QWidget):
     """A widget for editing the properties of an optical system's surfaces."""
@@ -244,6 +259,8 @@ class LensEditor(QWidget):
         self.connector = connector
         self.setWindowTitle("Lens Editor")
         self.open_prop_source_row = -1
+        self._pending_insert_surface_index: int | None = None
+        self._pending_insert_ui_row: int | None = None
 
         self._init_ui()
         self.setup_table()
@@ -260,9 +277,10 @@ class LensEditor(QWidget):
         # ScrollPerPixel for smooth scrolling (SPEC §4.6)
         self.tableWidget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.tableWidget.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.tableWidget.setTabKeyNavigation(False)
 
         # Accent focus delegate (SPEC §4.1)
-        self._focus_delegate = _AccentFocusDelegate(self.tableWidget)
+        self._focus_delegate = _AccentFocusDelegate(self, self.tableWidget)
         self.tableWidget.setItemDelegate(self._focus_delegate)
 
         self.layout.addWidget(self.tableWidget)
@@ -315,19 +333,118 @@ class LensEditor(QWidget):
         self.tableWidget.blockSignals(False)
 
     def eventFilter(self, source, event):
-        if source is self.tableWidget and event.type() == QEvent.KeyPress:
-            if event.key() == Qt.Key_Insert:
+        if event.type() == QEvent.KeyPress:
+            is_shift_tab = event.key() == Qt.Key_Tab and bool(
+                event.modifiers() & Qt.ShiftModifier
+            )
+            if source is self.tableWidget and event.key() == Qt.Key_Insert:
                 self.add_surface_handler()
                 return True
-            if event.key() == Qt.Key_Delete:
+            if source is self.tableWidget and event.key() == Qt.Key_Delete:
                 self.remove_surface_handler()
                 return True
-            if event.key() == Qt.Key_V and event.modifiers() == (
+            if source is self.tableWidget and event.key() == Qt.Key_V and event.modifiers() == (
                 Qt.ControlModifier | Qt.ShiftModifier
             ):
                 self._request_add_optimization_variable()
                 return True
+            if event.key() == Qt.Key_Backtab or event.key() == Qt.Key_Tab:
+                backwards = event.key() == Qt.Key_Backtab or is_shift_tab
+                if self._handle_tab_navigation(source, backwards):
+                    return True
         return super().eventFilter(source, event)
+
+    def _handle_tab_navigation(self, source, backwards: bool) -> bool:
+        """Move through editable cells in a predictable row-major order."""
+        if self.tableWidget.rowCount() == 0:
+            return False
+
+        if self._pending_insert_ui_row is not None and not backwards:
+            target = self._first_editable_in_row(self._pending_insert_ui_row)
+            self._pending_insert_ui_row = None
+            if target is not None:
+                self._commit_editor_if_needed(source)
+                self._focus_cell_for_editing(*target)
+                return True
+
+        row, col = self._get_navigation_origin(source)
+        target = self._next_editable_cell(row, col, backwards=backwards)
+        if target is None:
+            return False
+
+        self._commit_editor_if_needed(source)
+        self._focus_cell_for_editing(*target)
+        return True
+
+    def _commit_editor_if_needed(self, source) -> None:  # noqa: ANN001
+        """Commit an in-progress edit before moving focus."""
+        if hasattr(source, "property") and source.property("lens_table_editor"):
+            self._focus_delegate.commitData.emit(source)
+            self._focus_delegate.closeEditor.emit(
+                source, QAbstractItemDelegate.EndEditHint.NoHint
+            )
+        elif hasattr(source, "editingFinished"):
+            source.editingFinished.emit()
+
+    def _get_navigation_origin(self, source) -> tuple[int, int]:  # noqa: ANN001
+        """Return the logical table position to advance from."""
+        if hasattr(source, "property"):
+            row = source.property("lens_row")
+            col = source.property("lens_col")
+            if isinstance(row, int) and isinstance(col, int):
+                return row, col
+        return self.tableWidget.currentRow(), self.tableWidget.currentColumn()
+
+    def _is_properties_row(self, row: int) -> bool:
+        return self.open_prop_source_row != -1 and row == self.open_prop_source_row + 1
+
+    def _iter_editable_positions(self) -> list[tuple[int, int]]:
+        """Return editable cells from Comment onward, skipping properties rows."""
+        positions: list[tuple[int, int]] = []
+        for row in range(self.tableWidget.rowCount()):
+            if self._is_properties_row(row):
+                continue
+            for col in range(self.connector.COL_COMMENT, self.tableWidget.columnCount()):
+                item = self.tableWidget.item(row, col)
+                if item and item.flags() & Qt.ItemFlag.ItemIsEditable:
+                    positions.append((row, col))
+        return positions
+
+    def _first_editable_in_row(self, row: int) -> tuple[int, int] | None:
+        """Return the first editable cell in *row*, preferring Comment."""
+        for col in range(self.connector.COL_COMMENT, self.tableWidget.columnCount()):
+            item = self.tableWidget.item(row, col)
+            if item and item.flags() & Qt.ItemFlag.ItemIsEditable:
+                return row, col
+        return None
+
+    def _next_editable_cell(
+        self, row: int, col: int, backwards: bool = False
+    ) -> tuple[int, int] | None:
+        """Return the next editable cell and wrap across the whole table."""
+        positions = self._iter_editable_positions()
+        if not positions:
+            return None
+        if backwards:
+            for position in reversed(positions):
+                if position < (row, col):
+                    return position
+            return positions[-1]
+
+        for position in positions:
+            if position > (row, col):
+                return position
+        return positions[0]
+
+    def _focus_cell_for_editing(self, row: int, col: int) -> None:
+        """Focus and open a table cell for editing."""
+        item = self.tableWidget.item(row, col)
+        if item is None:
+            return
+        self.tableWidget.setFocus()
+        self.tableWidget.setCurrentCell(row, col)
+        self.tableWidget.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+        self.tableWidget.editItem(item)
 
     def _request_add_optimization_variable(self) -> None:
         """Emit requestAddOptimizationVariable for the currently focused cell."""
@@ -363,6 +480,22 @@ class LensEditor(QWidget):
     def full_refresh_from_optic(self):
         self.load_data()
         self.update_headers_on_selection()
+        if self._pending_insert_surface_index is not None:
+            self._pending_insert_ui_row = self.map_surface_index_to_ui_row(
+                self._pending_insert_surface_index
+            )
+            self._pending_insert_surface_index = None
+            self.tableWidget.setFocus()
+            self.tableWidget.setCurrentCell(
+                self._pending_insert_ui_row, self.connector.COL_TYPE
+            )
+            target = self._first_editable_in_row(self._pending_insert_ui_row)
+            if target is not None:
+                item = self.tableWidget.item(*target)
+                if item is not None:
+                    self.tableWidget.scrollToItem(
+                        item, QAbstractItemView.PositionAtCenter
+                    )
 
     def _process_table_cell(self, row, col_idx, header):
         """Creates and configures the appropriate widget or item for a
@@ -379,6 +512,9 @@ class LensEditor(QWidget):
             widget.propertiesIconClicked.connect(
                 lambda r=row: self.toggle_properties_widget(r)
             )
+            widget.type_edit.setProperty("lens_row", row)
+            widget.type_edit.setProperty("lens_col", col_idx)
+            widget.type_edit.installEventFilter(self)
             self.tableWidget.setCellWidget(row, col_idx, widget)
 
             # Badge for non-standard variable types (asphere_coeff, index, …)
@@ -519,6 +655,7 @@ class LensEditor(QWidget):
         if surface_index_to_add_before is not None and not isinstance(
             surface_index_to_add_before, bool
         ):
+            self._pending_insert_surface_index = surface_index_to_add_before
             self.connector.add_surface(index=surface_index_to_add_before)
         else:
             ui_row = self.tableWidget.currentRow()
@@ -528,6 +665,7 @@ class LensEditor(QWidget):
                 if ui_row != -1
                 else self.connector.get_surface_count() - 1
             )
+            self._pending_insert_surface_index = insert_pos
             self.connector.add_surface(index=insert_pos)
 
     @Slot()
