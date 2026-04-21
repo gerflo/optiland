@@ -168,9 +168,11 @@ def test_catalog_browser_uses_download_button_and_filter_row(qapp) -> None:
 
     assert panel.results_table.columnCount() == 8
     assert panel.results_table.horizontalHeader().sectionsMovable()
-    assert panel.results_table.cellWidget(0, 0) is panel.manufacturer_filter
-    assert panel.results_table.cellWidget(0, 6) is panel.material_filter
-    assert panel.results_table.cellWidget(0, 7) is panel.coating_filter
+    assert panel.manufacturer_filter.parentWidget() is panel.filter_row_container
+    assert panel.material_filter.parentWidget() is panel.filter_row_container
+    assert panel.coating_filter.parentWidget() is panel.filter_row_container
+    assert panel.filter_row_container.parentWidget() is panel.table_view_content
+    assert panel.results_table.parentWidget() is panel.table_view_content
 
 
 def test_catalog_browser_import_folder_passes_directory_to_connector(monkeypatch, qapp) -> None:
@@ -192,6 +194,7 @@ def test_catalog_browser_busy_indicator_toggles_import_ui_state(qapp) -> None:
     connector = _DummyConnector()
     panel = CatalogBrowserPanel(connector)
     panel._set_task_busy(True)
+    QTest.qWait(150)
 
     assert panel.import_busy_indicator.text() in {"|", "/", "-", "\\"}
     assert not panel.download_catalog_button.isEnabled()
@@ -257,20 +260,20 @@ def test_catalog_browser_restores_saved_column_widths_and_sort(monkeypatch, qapp
 def test_catalog_browser_numeric_columns_are_right_aligned_with_two_decimals(qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
 
-    efl_item = panel.results_table.item(1, 4)
-    diameter_item = panel.results_table.item(1, 5)
+    efl_item = panel.results_table.item(0, 4)
+    diameter_item = panel.results_table.item(0, 5)
 
     assert efl_item.text() == "12.35"
     assert diameter_item.text() == "25.00"
     assert bool(efl_item.textAlignment() & int(Qt.AlignmentFlag.AlignRight))
     assert bool(diameter_item.textAlignment() & int(Qt.AlignmentFlag.AlignRight))
-    assert panel.results_table.item(1, 6).text() == "N-BK7"
-    assert panel.results_table.item(1, 7).text() == "VIS"
+    assert panel.results_table.item(0, 6).text() == "N-BK7"
+    assert panel.results_table.item(0, 7).text() == "VIS"
 
 
 def test_catalog_browser_copy_shortcuts_copy_current_cell_and_row(qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
-    panel.results_table.setCurrentCell(1, 1)
+    panel.results_table.setCurrentCell(0, 1)
 
     panel._copy_current_cell_to_clipboard()
     assert qapp.clipboard().text() == "49-847"
@@ -280,13 +283,13 @@ def test_catalog_browser_copy_shortcuts_copy_current_cell_and_row(qapp) -> None:
     expected = []
     for visual_column in range(panel.results_table.columnCount()):
         logical_column = header.logicalIndex(visual_column)
-        expected.append(panel.results_table.item(1, logical_column).text())
+        expected.append(panel.results_table.item(0, logical_column).text())
     assert qapp.clipboard().text() == "\t".join(expected)
 
 
 def test_catalog_browser_can_open_selected_product_url(monkeypatch, qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
-    panel.results_table.setCurrentCell(1, 0)
+    panel.results_table.setCurrentCell(0, 0)
     opened_urls: list[str] = []
 
     monkeypatch.setattr(
@@ -306,8 +309,8 @@ def test_catalog_browser_filter_row_filters_material_and_part_number(qapp) -> No
     panel.material_filter.setText("BK7")
     panel.refresh()
 
-    assert panel.results_table.rowCount() == 2
-    assert panel.results_table.item(1, 1).text() == "49-847"
+    assert panel.results_table.rowCount() == 1
+    assert panel.results_table.item(0, 1).text() == "49-847"
 
 
 def test_catalog_browser_filter_row_reduces_results_when_part_number_does_not_match(qapp) -> None:
@@ -316,8 +319,18 @@ def test_catalog_browser_filter_row_reduces_results_when_part_number_does_not_ma
     panel.part_number_filter.setText("00-000")
     panel.refresh()
 
-    assert panel.results_table.rowCount() == 1
+    assert panel.results_table.rowCount() == 0
     assert panel.results_table.currentItem() is None
+
+
+def test_catalog_browser_filter_row_stays_pinned_when_table_scrolls(qapp) -> None:
+    panel = CatalogBrowserPanel(_ResultConnector())
+    initial_y = panel.filter_row_container.y()
+    panel.results_table.setRowCount(50)
+    panel.results_table.verticalScrollBar().setValue(200)
+    QTest.qWait(10)
+
+    assert panel.filter_row_container.y() == initial_y
 
 
 def test_catalog_browser_notify_uses_parent_toast_manager(qapp) -> None:

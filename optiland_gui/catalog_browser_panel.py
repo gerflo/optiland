@@ -6,7 +6,18 @@ import re
 from typing import Callable
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QSettings, Qt, QThread, QTimer, QUrl, Signal, Slot
+from PySide6.QtCore import (
+    QEvent,
+    QObject,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -18,6 +29,8 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -54,6 +67,20 @@ class _CatalogTaskWorker(QObject):
         self.finished.emit(result, None)
 
 
+class _PinnedFilterRow(QWidget):
+    """A fixed-height row that should not impose a large minimum width."""
+
+    def __init__(self, height: int, parent=None) -> None:
+        super().__init__(parent)
+        self._row_height = height
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, self._row_height)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(0, self._row_height)
+
+
 class CatalogBrowserPanel(QWidget):
     """Search, inspect, import, and insert stock-lens catalog records."""
 
@@ -85,6 +112,7 @@ class CatalogBrowserPanel(QWidget):
         self._busy_frames = ["|", "/", "-", "\\"]
         self._busy_frame_index = 0
         self._filter_widgets_ready = False
+        self._filter_row_height = 30
         self._busy_timer = QTimer(self)
         self._busy_timer.setInterval(120)
         self._busy_timer.timeout.connect(self._advance_busy_indicator)
@@ -127,6 +155,32 @@ class CatalogBrowserPanel(QWidget):
         controls_layout.addWidget(self.import_busy_indicator)
         layout.addWidget(controls_box)
 
+        self.table_view_scroll = QScrollArea()
+        self.table_view_scroll.setWidgetResizable(True)
+        self.table_view_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.table_view_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.table_view_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        self.table_view_content = QWidget()
+        self.table_view_content.setObjectName("CatalogTableViewContent")
+        self.table_view_layout = QVBoxLayout(self.table_view_content)
+        self.table_view_layout.setContentsMargins(0, 0, 0, 0)
+        self.table_view_layout.setSpacing(0)
+
+        self.filter_row_container = _PinnedFilterRow(self._filter_row_height)
+        self.filter_row_container.setObjectName("CatalogFilterRowContainer")
+        self.filter_row_container.setFixedHeight(self._filter_row_height)
+        self.filter_row_container.setMinimumWidth(0)
+        self.filter_row_container.setSizePolicy(
+            QSizePolicy.Policy.MinimumExpanding,
+            QSizePolicy.Policy.Fixed,
+        )
+        self.table_view_layout.addWidget(self.filter_row_container)
+
         self.results_table = QTableWidget(0, len(self.RESULT_COLUMNS))
         self.results_table.setHorizontalHeaderLabels(self.RESULT_COLUMNS)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -140,9 +194,14 @@ class CatalogBrowserPanel(QWidget):
         header.setSectionsMovable(True)
         header.setSortIndicatorShown(True)
         self.results_table.setSortingEnabled(False)
+        self.results_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.copy_cell_shortcut = QShortcut(QKeySequence("Ctrl+C"), self.results_table)
         self.copy_insert_shortcut = QShortcut(QKeySequence("Ctrl+Insert"), self.results_table)
-        layout.addWidget(self.results_table, 1)
+        self.table_view_layout.addWidget(self.results_table, 1)
+        self.table_view_scroll.setWidget(self.table_view_content)
+        layout.addWidget(self.table_view_scroll, 1)
 
         self.status_label = QLabel("No catalog entries loaded.")
         layout.addWidget(self.status_label)
@@ -176,8 +235,10 @@ class CatalogBrowserPanel(QWidget):
         header.sectionClicked.connect(self._toggle_sort_column)
         header.sectionMoved.connect(self._save_table_state)
         header.sectionResized.connect(self._sync_filter_row_geometry)
+        header.sectionMoved.connect(self._sync_filter_row_geometry)
         header.sortIndicatorChanged.connect(self._save_table_state)
         header.sortIndicatorChanged.connect(lambda *_args: self.refresh())
+        self.results_table.installEventFilter(self)
         self.copy_cell_shortcut.activated.connect(self._copy_current_cell_to_clipboard)
         self.copy_insert_shortcut.activated.connect(self._copy_current_cell_to_clipboard)
         self.insert_before_button.clicked.connect(lambda: self._insert_selected("before"))
@@ -217,7 +278,7 @@ class CatalogBrowserPanel(QWidget):
         self._current_results = self.connector.search_catalog_lenses(query)
         self._sort_current_results()
         self._refresh_manufacturer_filter()
-        self.results_table.setRowCount(len(self._current_results) + 1)
+        self.results_table.setRowCount(len(self._current_results))
         for row, record in enumerate(self._current_results):
             values = [
                 record.get("manufacturer", ""),
@@ -229,7 +290,7 @@ class CatalogBrowserPanel(QWidget):
                 record.get("material_summary", "") or "",
                 record.get("coating", "") or "",
             ]
-            table_row = row + 1
+            table_row = row
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.UserRole, record.get("catalog_id"))
@@ -238,7 +299,6 @@ class CatalogBrowserPanel(QWidget):
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                     )
                 self.results_table.setItem(table_row, col, item)
-        self.results_table.setRowHeight(0, 30)
         self._sync_filter_row_geometry()
 
         count = len(self._current_results)
@@ -248,24 +308,22 @@ class CatalogBrowserPanel(QWidget):
         if count == 0:
             self.details_text.clear()
         else:
-            self.results_table.selectRow(1)
+            self.results_table.selectRow(0)
             self._update_details()
 
     def _ensure_filter_row(self) -> None:
-        """Create the embedded filter row once and attach it to the first table row."""
+        """Create a pinned filter row that stays under the table header."""
         if self._filter_widgets_ready:
             return
-        if self.results_table.rowCount() == 0:
-            self.results_table.setRowCount(1)
-        self.manufacturer_filter = QComboBox(self.results_table)
+        self.manufacturer_filter = QComboBox(self.filter_row_container)
         self.manufacturer_filter.addItem("All", "")
-        self.part_number_filter = QLineEdit(self.results_table)
-        self.name_filter = QLineEdit(self.results_table)
-        self.category_filter = QLineEdit(self.results_table)
-        self.efl_filter = QLineEdit(self.results_table)
-        self.diameter_filter = QLineEdit(self.results_table)
-        self.material_filter = QLineEdit(self.results_table)
-        self.coating_filter = QLineEdit(self.results_table)
+        self.part_number_filter = QLineEdit(self.filter_row_container)
+        self.name_filter = QLineEdit(self.filter_row_container)
+        self.category_filter = QLineEdit(self.filter_row_container)
+        self.efl_filter = QLineEdit(self.filter_row_container)
+        self.diameter_filter = QLineEdit(self.filter_row_container)
+        self.material_filter = QLineEdit(self.filter_row_container)
+        self.coating_filter = QLineEdit(self.filter_row_container)
 
         self.part_number_filter.setPlaceholderText("filter")
         self.name_filter.setPlaceholderText("filter")
@@ -274,6 +332,18 @@ class CatalogBrowserPanel(QWidget):
         self.diameter_filter.setPlaceholderText("5-25")
         self.material_filter.setPlaceholderText("filter")
         self.coating_filter.setPlaceholderText("filter")
+
+        self.manufacturer_filter.setMinimumWidth(0)
+        for widget in (
+            self.part_number_filter,
+            self.name_filter,
+            self.category_filter,
+            self.efl_filter,
+            self.diameter_filter,
+            self.material_filter,
+            self.coating_filter,
+        ):
+            widget.setMinimumWidth(0)
 
         for widget in (
             self.part_number_filter,
@@ -287,15 +357,8 @@ class CatalogBrowserPanel(QWidget):
             widget.textChanged.connect(self.refresh)
         self.manufacturer_filter.currentIndexChanged.connect(self.refresh)
 
-        self.results_table.setCellWidget(0, 0, self.manufacturer_filter)
-        self.results_table.setCellWidget(0, 1, self.part_number_filter)
-        self.results_table.setCellWidget(0, 2, self.name_filter)
-        self.results_table.setCellWidget(0, 3, self.category_filter)
-        self.results_table.setCellWidget(0, 4, self.efl_filter)
-        self.results_table.setCellWidget(0, 5, self.diameter_filter)
-        self.results_table.setCellWidget(0, 6, self.material_filter)
-        self.results_table.setCellWidget(0, 7, self.coating_filter)
         self._filter_widgets_ready = True
+        self._sync_filter_row_geometry()
 
     def _refresh_manufacturer_filter(self) -> None:
         """Refresh the manufacturer combo used inside the table filter row."""
@@ -601,8 +664,6 @@ class CatalogBrowserPanel(QWidget):
         selected = self.results_table.selectedItems()
         if not selected:
             return ""
-        if selected[0].row() == 0:
-            return ""
         return str(selected[0].data(Qt.UserRole) or "")
 
     def _selected_catalog_details(self) -> dict | None:
@@ -615,7 +676,7 @@ class CatalogBrowserPanel(QWidget):
     def _copy_current_cell_to_clipboard(self) -> None:
         """Copy the currently focused result cell to the clipboard."""
         item = self.results_table.currentItem()
-        if item is None or item.row() <= 0:
+        if item is None:
             return
         QApplication.clipboard().setText(item.text())
         self._notify("Copied cell value.", "info")
@@ -623,7 +684,7 @@ class CatalogBrowserPanel(QWidget):
     def _copy_selected_row_to_clipboard(self) -> None:
         """Copy the selected result row as a tab-separated line."""
         row = self.results_table.currentRow()
-        if row <= 0:
+        if row < 0:
             return
         values = []
         header = self.results_table.horizontalHeader()
@@ -659,7 +720,7 @@ class CatalogBrowserPanel(QWidget):
         open_url_action = menu.addAction("Open Product Webpage")
 
         current_item = self.results_table.currentItem()
-        has_item = current_item is not None and current_item.row() > 0
+        has_item = current_item is not None and current_item.row() >= 0
         copy_cell_action.setEnabled(has_item)
         copy_row_action.setEnabled(has_item)
         open_url_action.setEnabled(has_item)
@@ -673,10 +734,37 @@ class CatalogBrowserPanel(QWidget):
             self._open_selected_catalog_url()
 
     def _sync_filter_row_geometry(self, *args) -> None:  # noqa: ANN002
-        """Keep the embedded filter row sized sensibly after header changes."""
+        """Keep the filter row aligned with the table columns."""
         if not self._filter_widgets_ready:
             return
-        self.results_table.setRowHeight(0, 30)
+        header = self.results_table.horizontalHeader()
+        total_width = sum(
+            header.sectionSize(column) for column in range(self.results_table.columnCount())
+        )
+        frame_width = self.results_table.frameWidth() * 2
+        vertical_scrollbar_width = self.results_table.verticalScrollBar().sizeHint().width()
+        content_width = total_width + frame_width + vertical_scrollbar_width
+        self.filter_row_container.setMinimumWidth(content_width)
+        self.results_table.setMinimumWidth(content_width)
+        widgets = (
+            self.manufacturer_filter,
+            self.part_number_filter,
+            self.name_filter,
+            self.category_filter,
+            self.efl_filter,
+            self.diameter_filter,
+            self.material_filter,
+            self.coating_filter,
+        )
+        margin = 2
+        for column, widget in enumerate(widgets):
+            widget.setGeometry(
+                header.sectionViewportPosition(column) + margin,
+                margin,
+                max(40, header.sectionSize(column) - (margin * 2)),
+                self._filter_row_height - (margin * 2),
+            )
+        self.filter_row_container.update()
 
     def _notify(self, message: str, level: str) -> None:
         toast_manager = None
@@ -762,6 +850,11 @@ class CatalogBrowserPanel(QWidget):
         self._busy_timer.stop()
         self.import_busy_indicator.clear()
         self.import_busy_indicator.setVisible(False)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if watched is self.results_table and event.type() == QEvent.Type.Resize:
+            self._sync_filter_row_geometry()
+        return super().eventFilter(watched, event)
 
     def _advance_busy_indicator(self) -> None:
         """Advance the spinner frame shown beside the import button."""

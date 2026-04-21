@@ -203,6 +203,7 @@ class SagViewer(QWidget):
     def update_theme(self, theme="dark"):
         self.current_theme = theme
         self.settings_toggle_btn.setIcon(QIcon(f":/icons/{theme}/settings.svg"))
+        self.toolbar.update_theme()
         self.plot_sag()
 
     @Slot()
@@ -463,7 +464,7 @@ class MatplotlibViewer(QWidget):
             self._user_initiated_view_change = True
 
     def reset_view(self):
-        """Resets the view to the default 1:1 aspect ratio and zoom."""
+        """Resets the view to the default zoom and panel-filling framing."""
         self._user_initiated_view_change = False
         self.plot_optic(preserve_zoom=False)
 
@@ -578,6 +579,7 @@ class MatplotlibViewer(QWidget):
             gui_plot_utils.apply_gui_matplotlib_styles(theme=self.current_theme)
             self.plot_optic()
         self.settings_toggle_btn.setIcon(QIcon(f":/icons/{theme}/settings.svg"))
+        self.toolbar.update_theme()
 
     def plot_optic(self, preserve_zoom=False):
         """
@@ -631,44 +633,15 @@ class MatplotlibViewer(QWidget):
                     self.ax.set_xlabel("Z-axis (mm)")
                     self.ax.set_ylabel("Y-axis (mm)")
                     self.ax.grid(True, linestyle="--", alpha=0.7)
+                    self.ax.set_aspect("auto")
 
                     if should_preserve_limits and xlim is not None and ylim is not None:
                         self.ax.set_xlim(xlim)
                         self.ax.set_ylim(ylim)
-                        self.ax.set_aspect("auto")
                     else:
-                        fig_width, fig_height = self.figure.get_size_inches()
-                        widget_aspect = fig_height / fig_width
-
-                        xlim_data = self.ax.get_xlim()
-                        ylim_data = self.ax.get_ylim()
-                        x_range = xlim_data[1] - xlim_data[0]
-                        y_range = ylim_data[1] - ylim_data[0]
-
-                        if x_range == 0:
-                            x_range = 1e-6
-                        if y_range == 0:
-                            y_range = 1e-6
-
-                        data_aspect = y_range / x_range
-
-                        # determine which axis to expand to achieve equal aspect ratio
-                        if data_aspect < widget_aspect:
-                            # expand Y
-                            y_center = (ylim_data[0] + ylim_data[1]) / 2
-                            new_y_range = x_range * widget_aspect
-                            self.ax.set_ylim(
-                                y_center - new_y_range / 2, y_center + new_y_range / 2
-                            )
-                        else:
-                            # expand X
-                            x_center = (xlim_data[0] + xlim_data[1]) / 2
-                            new_x_range = y_range / widget_aspect
-                            self.ax.set_xlim(
-                                x_center - new_x_range / 2, x_center + new_x_range / 2
-                            )
-
-                        self.ax.set_aspect("equal")
+                        self.ax.relim()
+                        self.ax.autoscale_view()
+                        self.ax.margins(x=0.03, y=0.08)
 
                 except Exception:
                     self.ax.text(

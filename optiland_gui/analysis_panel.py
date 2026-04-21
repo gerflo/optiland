@@ -32,7 +32,7 @@ from PySide6.QtCore import (
     QTimer,
     Slot,
 )
-from PySide6.QtGui import QIcon, QRegularExpressionValidator
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -93,6 +93,7 @@ class CustomMatplotlibToolbar(NavigationToolbar):
 
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent, coordinates=False)
+        self._original_icons = {}
 
         # Assign unique object names to each tool button
         for action in self.actions():
@@ -102,6 +103,44 @@ class CustomMatplotlibToolbar(NavigationToolbar):
                 button_widget = self.widgetForAction(action)
                 if button_widget:
                     button_widget.setObjectName(f"MPL{action_id}Button")
+            self._original_icons[action] = QIcon(action.icon())
+
+        self.update_theme()
+
+    def _toolbar_foreground_color(self) -> QColor:
+        """Return the palette color used to tint toolbar icons."""
+        palette = self.palette()
+        color = palette.color(palette.ColorRole.ButtonText)
+        if not color.isValid():
+            color = palette.color(palette.ColorRole.WindowText)
+        return color
+
+    def _tinted_icon(self, icon: QIcon, color: QColor) -> QIcon:
+        """Return a monochrome copy of ``icon`` tinted with ``color``."""
+        if icon.isNull():
+            return icon
+
+        icon_size = self.iconSize()
+        width = max(16, icon_size.width())
+        height = max(16, icon_size.height())
+        source = icon.pixmap(width, height)
+        if source.isNull():
+            return icon
+
+        tinted = QPixmap(source.size())
+        tinted.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(tinted)
+        painter.drawPixmap(0, 0, source)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+        painter.fillRect(tinted.rect(), color)
+        painter.end()
+        return QIcon(tinted)
+
+    def update_theme(self):
+        """Retint the default Matplotlib toolbar icons to match the active theme."""
+        foreground = self._toolbar_foreground_color()
+        for action, original_icon in self._original_icons.items():
+            action.setIcon(self._tinted_icon(original_icon, foreground))
 
 
 class AnalysisPanel(QWidget):
@@ -889,6 +928,8 @@ class AnalysisPanel(QWidget):
         self.btnApplySettings.setIcon(QIcon(f":/icons/{theme_name}/check_apply.svg"))
         self.btnSaveSettings.setIcon(QIcon(f":/icons/{theme_name}/save_settings.svg"))
         self.btnLoadSettings.setIcon(QIcon(f":/icons/{theme_name}/load_settings.svg"))
+        if self.active_mpl_toolbar_widget:
+            self.active_mpl_toolbar_widget.update_theme()
 
         # This new line will refresh the plot using the new theme
         self._refresh_current_plot_page_slot()
