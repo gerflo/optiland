@@ -13,6 +13,8 @@ class CatalogSearchQuery:
 
     text: str = ""
     manufacturer: str = ""
+    part_number: str = ""
+    product_name: str = ""
     category: str = ""
     efl_min: float | None = None
     efl_max: float | None = None
@@ -33,6 +35,8 @@ class CatalogSearchService:
         """Return matching records sorted by manufacturer and part number."""
         text = query.text.casefold().strip()
         manufacturer = query.manufacturer.casefold().strip()
+        part_number = query.part_number.casefold().strip()
+        product_name = query.product_name.casefold().strip()
         category = query.category.casefold().strip()
         material_text = query.material_text.casefold().strip()
         coating_text = query.coating_text.casefold().strip()
@@ -42,6 +46,10 @@ class CatalogSearchService:
             if text and text not in record.search_blob:
                 continue
             if manufacturer and record.manufacturer.casefold() != manufacturer:
+                continue
+            if part_number and part_number not in record.part_number.casefold():
+                continue
+            if product_name and product_name not in record.product_name.casefold():
                 continue
             if category and category not in record.category.casefold():
                 continue

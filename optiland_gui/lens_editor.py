@@ -497,19 +497,17 @@ class LensEditor(QWidget):
                 if col == self.connector.COL_MATERIAL
                 else editor_text
             )
-            if item is not None and editor_text is not None:
-                if not editor.parent() is self.tableWidget.viewport():
-                    item.setText(fallback_text)
-                    return
-            try:
-                self.tableWidget.commitData(editor)
-                self.tableWidget.closeEditor(
-                    editor, QAbstractItemDelegate.EndEditHint.NoHint
-                )
-            except (RuntimeError, TypeError):
-                if item is not None and editor_text is not None:
-                    item.setText(fallback_text)
-                return
+            belongs_to_view = editor.parent() is self.tableWidget.viewport()
+            if item is not None and fallback_text is not None and item.text() != fallback_text:
+                item.setText(fallback_text)
+            if belongs_to_view:
+                try:
+                    self.tableWidget.closeEditor(
+                        editor, QAbstractItemDelegate.EndEditHint.NoHint
+                    )
+                except (RuntimeError, TypeError):
+                    pass
+            self.tableWidget.setFocus(Qt.FocusReason.OtherFocusReason)
         elif hasattr(source, "editingFinished"):
             source.editingFinished.emit()
 

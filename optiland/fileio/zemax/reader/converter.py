@@ -67,6 +67,13 @@ class ZemaxToOpticConverter(BaseOpticReader):
         finally:
             src_handler.cleanup()
 
+    def read_text(self, text: str) -> Optic:
+        """Read Zemax source text and return a fully-configured Optic."""
+        data_model = ZemaxDataParser("<memory>").parse_text(text)
+        self.data = data_model.to_dict()
+        self.current_cs = CoordinateSystem()
+        return self.convert()
+
     # ------------------------------------------------------------------
     # Conversion
     # ------------------------------------------------------------------

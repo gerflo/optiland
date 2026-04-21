@@ -77,30 +77,44 @@ class ZemaxDataParser:
             ValueError: If the file cannot be read or contains no aperture data.
         """
         encodings = ["utf-16", "utf-8", "iso-8859-1"]
-        success = False
         for encoding in encodings:
+            self._reset_state()
             try:
                 with open(self.filename, encoding=encoding) as fh:
-                    for line in fh:
-                        tokens = line.split()
-                        if not tokens:
-                            continue
-                        operand = tokens[0]
-                        if operand in self._operand_table:
-                            self._operand_table[operand](tokens)
+                    self._parse_lines(fh)
             except (UnicodeError, UnicodeDecodeError):
                 continue
 
             if self.data_model.aperture:
-                success = True
-                break
+                self._finalize_fields()
+                self._finalize_surface()
+                return self.data_model
 
-        if not success:
+        raise ValueError("Failed to read Zemax file.")
+
+    def parse_text(self, text: str) -> ZemaxDataModel:
+        """Parse Zemax source text directly without reading from disk."""
+        self._reset_state()
+        self._parse_lines(text.splitlines())
+        if not self.data_model.aperture:
             raise ValueError("Failed to read Zemax file.")
-
         self._finalize_fields()
         self._finalize_surface()
         return self.data_model
+
+    def _reset_state(self) -> None:
+        self.data_model = ZemaxDataModel()
+        self._current_surf = -1
+        self._current_surf_data = {}
+
+    def _parse_lines(self, lines) -> None:  # noqa: ANN001
+        for line in lines:
+            tokens = line.split()
+            if not tokens:
+                continue
+            operand = tokens[0]
+            if operand in self._operand_table:
+                self._operand_table[operand](tokens)
 
     # ------------------------------------------------------------------
     # Per-operand handlers
@@ -205,13 +219,18 @@ class ZemaxDataParser:
 
         # Try to resolve to a real Material from the glass catalog
         try:
-            self._current_surf_data["material"] = Material(material_name)
+            self._current_surf_data["material"] = Material(
+                material_name,
+                warn_on_inexact=False,
+            )
         except ValueError:
             if self.data_model.glass_catalogs:
                 for mfg in self.data_model.glass_catalogs:
                     try:
                         self._current_surf_data["material"] = Material(
-                            material_name, mfg.lower()
+                            material_name,
+                            mfg.lower(),
+                            warn_on_inexact=False,
                         )
                         break
                     except ValueError:
@@ -220,7 +239,9 @@ class ZemaxDataParser:
         # Fall back to AbbeMaterial if catalog lookup failed
         if not isinstance(self._current_surf_data["material"], BaseMaterial):
             self._current_surf_data["material"] = AbbeMaterial(
-                self._current_surf_data["index"], self._current_surf_data["abbe"]
+                self._current_surf_data["index"],
+                self._current_surf_data["abbe"],
+                model="polynomial",
             )
 
     def _read_stop(self, data: list[str]) -> None:

@@ -15,7 +15,7 @@ from PySide6.QtCore import QObject, Signal
 from optiland.optic import Optic
 from optiland_gui.catalogs.insertion import record_to_insert_specs
 from optiland_gui.services.analysis_runner import AnalysisRunner
-from optiland_gui.services.catalog_service import CatalogService
+from optiland_gui.services.catalog_service import CatalogDownloadResult, CatalogService
 from optiland_gui.services.file_service import (
     FileService,
     SpecialFloatEncoder,  # re-exported for backward compat
@@ -30,6 +30,7 @@ __all__ = [
     "OptilandConnector",
     "SpecialFloatEncoder",
     "json_inf_nan_hook",
+    "CatalogDownloadResult",
 ]
 
 
@@ -553,6 +554,22 @@ class OptilandConnector(QObject):
     def get_catalog_lens_details(self, catalog_id: str) -> dict | None:
         """Return a full catalog record payload by id."""
         return self._catalog_service.get_record_details(catalog_id)
+
+    def resolve_catalog_product_url(self, catalog_id: str) -> str | None:
+        """Resolve a current product webpage URL for a catalog entry."""
+        return self._catalog_service.resolve_product_url(catalog_id)
+
+    def download_edmund_catalog(self) -> CatalogDownloadResult:
+        """Download Edmund's official Zemax catalog archive and import supported files."""
+        result = self._catalog_service.download_edmund_catalog()
+        self.catalogChanged.emit()
+        return result
+
+    def download_thorlabs_catalog(self) -> CatalogDownloadResult:
+        """Download Thorlabs' official Zemax catalog package and import supported files."""
+        result = self._catalog_service.download_thorlabs_catalog()
+        self.catalogChanged.emit()
+        return result
 
     def insert_catalog_lens(
         self,

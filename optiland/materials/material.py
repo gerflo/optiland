@@ -58,6 +58,7 @@ class Material(MaterialFile):
         name,
         reference=None,
         robust_search=True,
+        warn_on_inexact=True,
         min_wavelength=None,
         max_wavelength=None,
         propagation_model=None,
@@ -65,6 +66,7 @@ class Material(MaterialFile):
         self.name = name
         self.reference = reference
         self.robust = robust_search
+        self.warn_on_inexact = warn_on_inexact
         self.min_wavelength = min_wavelength
         self.max_wavelength = max_wavelength
         file, self.material_data = self._retrieve_file()
@@ -176,7 +178,7 @@ class Material(MaterialFile):
         dfi = dfi.sort_values(by="similarity_score").reset_index(drop=True)
 
         # Warning if no exact matches found
-        if dfi["similarity_score"].iloc[0] > 0:
+        if self.warn_on_inexact and dfi["similarity_score"].iloc[0] > 0:
             print(
                 f"Warning: No exact matches found for material {self.name}. "
                 "Material may be invalid.",
@@ -258,6 +260,7 @@ class Material(MaterialFile):
                 "name": self.name,
                 "reference": self.reference,
                 "robust_search": self.robust,
+                "warn_on_inexact": self.warn_on_inexact,
                 "min_wavelength": self.min_wavelength,
                 "max_wavelength": self.max_wavelength,
             },

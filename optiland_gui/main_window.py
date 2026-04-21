@@ -23,9 +23,18 @@ from PySide6.QtCore import (
     QPropertyAnimation,
     QSettings,
     Qt,
+    QUrl,
     Slot,
 )
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QMoveEvent, QResizeEvent, QShortcut
+from PySide6.QtGui import (
+    QAction,
+    QDesktopServices,
+    QIcon,
+    QKeySequence,
+    QMoveEvent,
+    QResizeEvent,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QDialog,
     QDockWidget,
@@ -61,6 +70,7 @@ from .theme_manager import (
     build_palette_override,
     get_theme,
 )
+from .services.catalog_service import EDMUND_ZEMAX_PAGE_URL, THORLABS_ZEMAX_PAGE_URL
 from .utils import logging_handler as _log_handler
 from .utils.plot_theme import apply_plot_theme
 from .widgets.command_palette import (
@@ -159,24 +169,17 @@ class MainWindow(FramelessWindow):
 
         def show_lens_editor(self):
             """Brings the Lens Data Editor dock widget to the front."""
-            self._win.panel_manager.lens_editor_dock.show()
-            self._win.panel_manager.lens_editor_dock.raise_()
+            self._win.focus_dock_widget(self._win.panel_manager.lens_editor_dock)
 
         def show_analysis_panel(self):
             """Brings the Analysis Panel dock widget to the front."""
             dock = self._win.panel_manager.analysis_dock
-            dock.show()
-            dock.raise_()
-            # Also ensure its tab is selected
-            parent_tab_widget = dock.parentWidget()
-            if isinstance(parent_tab_widget, QTabWidget):
-                parent_tab_widget.setCurrentWidget(dock)
+            self._win.focus_dock_widget(dock)
 
         def show_catalog_browser(self):
             """Bring the stock lens catalog dock widget to the front."""
             dock = self._win.panel_manager.catalog_browser_dock
-            dock.show()
-            dock.raise_()
+            self._win.focus_dock_widget(dock)
 
         def refresh_all(self):
             """Triggers a full refresh of all GUI panels.
@@ -420,7 +423,12 @@ class MainWindow(FramelessWindow):
         import_menu.addActions(am.get_actions("import_zemax", "import_codev"))
         catalog_import_menu = import_menu.addMenu("&Catalog")
         catalog_import_menu.addActions(
-            am.get_actions("import_edmund_catalog", "import_thorlabs_catalog")
+            am.get_actions(
+                "download_edmund_catalog",
+                "download_thorlabs_catalog",
+                "import_edmund_catalog",
+                "import_thorlabs_catalog",
+            )
         )
         export_menu = file_menu.addMenu("&Export")
         export_menu.addActions(am.get_actions("export_zemax", "export_codev"))
@@ -739,7 +747,7 @@ class MainWindow(FramelessWindow):
         """Handles the animation for showing a dock widget."""
         if dock_widget.isHidden():
             dock_widget.show()
-            dock_widget.raise_()
+            self.focus_dock_widget(dock_widget)
             target_prop = b"maximumWidth" if is_left_or_right else b"maximumHeight"
             animation = QPropertyAnimation(dock_widget, target_prop)
             animation.setStartValue(0)
@@ -754,7 +762,22 @@ class MainWindow(FramelessWindow):
             self._track_dock_animation(dock_widget, animation)
             animation.start()
         else:
-            dock_widget.raise_()
+            self.focus_dock_widget(dock_widget)
+
+    def focus_dock_widget(self, dock_widget: QDockWidget) -> None:
+        """Show and focus a dock without forcing invalid top-level raises."""
+        if dock_widget is None:
+            return
+        dock_widget.show()
+        parent_tab_widget = dock_widget.parentWidget()
+        if isinstance(parent_tab_widget, QTabWidget):
+            parent_tab_widget.setCurrentWidget(dock_widget)
+        dock_widget.setFocus(Qt.FocusReason.OtherFocusReason)
+        if dock_widget.isFloating():
+            top_level = dock_widget.window()
+            if top_level is not None and top_level.isWindow():
+                top_level.raise_()
+                top_level.activateWindow()
 
     def _animate_dock_hide(
         self, dock_widget, is_left_or_right, original_dimension, duration, curve
@@ -1025,7 +1048,7 @@ class MainWindow(FramelessWindow):
             self,
             f"Import {manufacturer} Catalog",
             self._get_dialog_start_dir("Paths/LastOpenDir", "Paths/LastSaveDir"),
-            "Catalog Files (*.zmx *.json);;Zemax Files (*.zmx);;Normalized Catalog JSON (*.json);;All Files (*)",
+            "Catalog Files (*.zip *.zmx *.zmf *.json);;Catalog Archives (*.zip);;Zemax Files (*.zmx);;Zemax Catalog Files (*.zmf);;Normalized Catalog JSON (*.json);;All Files (*)",
         )
         if not filepaths:
             return
@@ -1047,6 +1070,86 @@ class MainWindow(FramelessWindow):
         self._import_catalog_file_for_manufacturer("Edmund")
 
     @Slot()
+    def download_edmund_catalog_action(self) -> None:
+        """Download Edmund's official online catalog archive and import supported files."""
+        try:
+            result = self.connector.download_edmund_catalog()
+        except Exception as exc:  # noqa: BLE001
+            self._show_edmund_download_help(str(exc))
+            return
+        if self.toast_manager:
+            level = "success" if result.imported_count else "info"
+            self.toast_manager.notify(result.message, level, sub_message=result.archive_path)
+
+    @Slot()
+    def download_thorlabs_catalog_action(self) -> None:
+        """Download Thorlabs' official online catalog package and import supported files."""
+        try:
+            result = self.connector.download_thorlabs_catalog()
+        except Exception as exc:  # noqa: BLE001
+            self._show_thorlabs_download_help(str(exc))
+            return
+        if self.toast_manager:
+            level = "success" if result.imported_count else "info"
+            self.toast_manager.notify(result.message, level, sub_message=result.archive_path)
+
+    def _show_edmund_download_help(self, error_text: str) -> None:
+        """Show a guided fallback dialog when Edmund blocks auto-download."""
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Edmund Catalog Download Failed")
+        dialog.setText("Automatic download was blocked by Edmund.")
+        dialog.setInformativeText(
+            "Open the official Edmund Zemax Catalog page in your browser, download the "
+            "archive manually, and then import the downloaded ZIP, ZMX, or ZMF file."
+        )
+        dialog.setDetailedText(error_text)
+        open_button = dialog.addButton(
+            "Open Download Page",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        import_button = dialog.addButton(
+            "Import Downloaded File...",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        dialog.addButton(QMessageBox.StandardButton.Close)
+        dialog.exec()
+
+        clicked = dialog.clickedButton()
+        if clicked == open_button:
+            QDesktopServices.openUrl(QUrl(EDMUND_ZEMAX_PAGE_URL))
+        elif clicked == import_button:
+            self._import_catalog_file_for_manufacturer("Edmund")
+
+    def _show_thorlabs_download_help(self, error_text: str) -> None:
+        """Show a guided fallback dialog when Thorlabs auto-download fails."""
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Thorlabs Catalog Download Failed")
+        dialog.setText("Automatic download was not available from Thorlabs.")
+        dialog.setInformativeText(
+            "Open the official Thorlabs Zemax page in your browser, download the "
+            "catalog package manually, and then import the downloaded ZIP, ZMX, or ZMF file."
+        )
+        dialog.setDetailedText(error_text)
+        open_button = dialog.addButton(
+            "Open Download Page",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        import_button = dialog.addButton(
+            "Import Downloaded File...",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        dialog.addButton(QMessageBox.StandardButton.Close)
+        dialog.exec()
+
+        clicked = dialog.clickedButton()
+        if clicked == open_button:
+            QDesktopServices.openUrl(QUrl(THORLABS_ZEMAX_PAGE_URL))
+        elif clicked == import_button:
+            self._import_catalog_file_for_manufacturer("Thorlabs")
+
+    @Slot()
     def import_thorlabs_catalog_action(self) -> None:
         """Import a local Thorlabs stock-lens catalog file."""
         self._import_catalog_file_for_manufacturer("Thorlabs")
@@ -1055,8 +1158,7 @@ class MainWindow(FramelessWindow):
     def show_catalog_browser_action(self) -> None:
         """Show and raise the stock lens catalog browser dock."""
         if hasattr(self, "panel_manager") and self.panel_manager.catalog_browser_dock:
-            self.panel_manager.catalog_browser_dock.show()
-            self.panel_manager.catalog_browser_dock.raise_()
+            self.focus_dock_widget(self.panel_manager.catalog_browser_dock)
 
     @Slot()
     def export_zemax_action(self):
@@ -1387,8 +1489,7 @@ class MainWindow(FramelessWindow):
         """Show the analysis panel and run *analysis_name*."""
         pm = self.panel_manager
         if hasattr(pm, "analysis_dock") and pm.analysis_dock:
-            pm.analysis_dock.show()
-            pm.analysis_dock.raise_()
+            self.focus_dock_widget(pm.analysis_dock)
         if hasattr(pm, "analysis_panel") and pm.analysis_panel:
             ap = pm.analysis_panel
             ap.analysisTypeCombo.setCurrentText(analysis_name)

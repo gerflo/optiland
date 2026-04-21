@@ -9,6 +9,8 @@ Manuel Fragata Mendes, june 2025
 
 from __future__ import annotations
 
+import warnings
+
 import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator, ScalarFormatter
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -226,5 +228,7 @@ class SurfaceSagViewer(BaseViewer):
         ax_profile_y.grid(True)
         ax_profile_y.autoscale(enable=True, axis="x", tight=True)
 
-        fig.tight_layout(pad=1.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            fig.tight_layout(pad=1.0)
         return fig, fig.get_axes()

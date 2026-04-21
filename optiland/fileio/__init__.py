@@ -32,6 +32,11 @@ def load_zemax_file(source: str):
     return _NewZTC({}).read(source)
 
 
+def load_zemax_text(text: str):
+    """Load Zemax source text and return an Optic object."""
+    return _NewZTC({}).read_text(text)
+
+
 def load_codev_file(source: str):
     """Load a CODE V Sequential file and return an Optic object.
 
@@ -68,6 +73,7 @@ __all__ = [
     # Zemax
     "save_zemax_file",
     "load_zemax_file",
+    "load_zemax_text",
     # CODE V
     "load_codev_file",
     "save_codev_file",

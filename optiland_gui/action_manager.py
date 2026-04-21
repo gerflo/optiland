@@ -109,6 +109,16 @@ class ActionManager:
             triggered=self.main_window.import_codev_action,
         )
         self._create_action(
+            "download_edmund_catalog",
+            "Download Edmund Catalog...",
+            triggered=self.main_window.download_edmund_catalog_action,
+        )
+        self._create_action(
+            "download_thorlabs_catalog",
+            "Download Thorlabs Catalog...",
+            triggered=self.main_window.download_thorlabs_catalog_action,
+        )
+        self._create_action(
             "import_edmund_catalog",
             "Edmund Catalog...",
             triggered=self.main_window.import_edmund_catalog_action,

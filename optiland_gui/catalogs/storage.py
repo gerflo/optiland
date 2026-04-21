@@ -22,6 +22,13 @@ class CatalogStorage:
     def root(self) -> Path:
         return self._root
 
+    @property
+    def downloads_root(self) -> Path:
+        """Return the directory used for downloaded vendor catalog archives."""
+        path = self._root / "downloads"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def load_all_records(self) -> list[CatalogLensRecord]:
         """Load all cached manufacturer files."""
         records: list[CatalogLensRecord] = []

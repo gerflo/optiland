@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDockWidget, QMainWindow, QWidget
+from PySide6.QtWidgets import QDockWidget, QMainWindow, QTabWidget, QWidget
 
 from .analysis_panel import AnalysisPanel
 from .catalog_browser_panel import CatalogBrowserPanel
@@ -214,11 +214,9 @@ class PanelManager:
             [330, 170],
             Qt.Vertical,
         )
-
-        # Raise panels in reverse order so the first item ends up on top
-        for dock in reversed(self.all_docks):
-            if dock:
-                dock.raise_()
+        optimization_parent = self.optimization_dock.parentWidget()
+        if isinstance(optimization_parent, QTabWidget):
+            optimization_parent.setCurrentWidget(self.optimization_dock)
 
     def get_all_docks(self) -> list[QDockWidget]:
         """Return a list of all managed dock widgets."""
@@ -256,8 +254,7 @@ class PanelManager:
         }
         dock = dock_map.get(button_name)
         if dock:
-            dock.show()
-            dock.raise_()
+            self.main_window.focus_dock_widget(dock)
 
     def update_theme(self, theme_name: str) -> None:
         """Propagate a theme change to all relevant panels.

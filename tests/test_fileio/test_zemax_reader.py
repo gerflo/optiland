@@ -6,12 +6,13 @@ Migrated from tests/test_fileio.py and updated to use new module paths.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from unittest.mock import mock_open, patch
 
 import pytest
 
 import optiland.backend as be
-from optiland.fileio import load_zemax_file
+from optiland.fileio import load_zemax_file, load_zemax_text
 from optiland.fileio.zemax.reader.converter import ZemaxToOpticConverter
 from optiland.fileio.zemax.reader.parser import ZemaxDataParser
 from optiland.fileio.zemax.reader.source import ZemaxFileSourceHandler
@@ -36,6 +37,16 @@ def zemax_file():
 def zemax_dir():
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "zemax_files")
+
+
+def _read_zemax_text(path: str) -> str:
+    data = Path(path).read_bytes()
+    for encoding in ("utf-16", "utf-8", "iso-8859-1"):
+        try:
+            return data.decode(encoding)
+        except UnicodeError:
+            continue
+    raise AssertionError(f"Could not decode test Zemax file: {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +145,14 @@ class TestZemaxDataParser:
         self.parser._read_diameter(["DIAM", "8.5", "1", "0", "0", "1", '""'])
         assert self.parser._current_surf_data["diameter"] == 8.5
 
+    def test_parse_text(self, zemax_file):
+        text = _read_zemax_text(zemax_file)
+
+        data_model = self.parser.parse_text(text)
+
+        assert data_model.aperture
+        assert data_model.surfaces
+
 
 # ---------------------------------------------------------------------------
 # End-to-end reader tests
@@ -142,6 +161,13 @@ class TestZemaxDataParser:
 class TestEndToEnd:
     def test_load_zemax_file(self, zemax_file):
         optic = load_zemax_file(zemax_file)
+        assert isinstance(optic, Optic)
+
+    def test_load_zemax_text(self, zemax_file):
+        text = _read_zemax_text(zemax_file)
+
+        optic = load_zemax_text(text)
+
         assert isinstance(optic, Optic)
 
     def test_load_and_convert_asphere(self, zemax_dir):
