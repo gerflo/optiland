@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
+from pandas.errors import EmptyDataError
 
 from optiland.materials.material import Material
 from optiland.materials.material_file import MaterialFile
@@ -120,7 +121,10 @@ def import_validated_winlens_materials(root_path: str | Path) -> WinLensMaterial
 def _load_existing_rows(csv_path: Path) -> list[dict[str, object]]:
     if not csv_path.is_file():
         return []
-    return pd.read_csv(csv_path).to_dict(orient="records")
+    try:
+        return pd.read_csv(csv_path).to_dict(orient="records")
+    except EmptyDataError:
+        return []
 
 
 def _prune_rows_shadowed_by_base_catalog(

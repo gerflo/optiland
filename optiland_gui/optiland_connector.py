@@ -25,6 +25,10 @@ from optiland_gui.services.file_service import (
     SpecialFloatEncoder,  # re-exported for backward compat
     json_inf_nan_hook,  # re-exported for backward compat
 )
+from optiland_gui.services.material_catalog_service import (
+    MaterialCatalogImportResult,
+    MaterialCatalogService,
+)
 from optiland_gui.services.optimization_service import OptimizationService
 from optiland_gui.services.surface_service import SurfaceService
 from optiland_gui.services.system_service import SystemService
@@ -36,6 +40,7 @@ __all__ = [
     "json_inf_nan_hook",
     "CatalogDownloadResult",
     "CatalogImportResult",
+    "MaterialCatalogImportResult",
 ]
 
 
@@ -60,6 +65,7 @@ class OptilandConnector(QObject):
     redoStackAvailabilityChanged = Signal(bool)
     optimizationVariablesChanged = Signal()
     catalogChanged = Signal()
+    materialsChanged = Signal()
     requestAddOptimizationVariable = Signal(int, str)  # surface_index, suggested_type
 
     # ------------------------------------------------------------------
@@ -96,6 +102,7 @@ class OptilandConnector(QObject):
         self._analysis_runner = AnalysisRunner(self)
         self._optimization_service = OptimizationService(self)
         self._catalog_service = CatalogService(self)
+        self._material_catalog_service = MaterialCatalogService(self)
 
         self._initialize_optic_structure(self._optic, is_specific_new_system=True)
         self._is_modified = False
@@ -614,6 +621,31 @@ class OptilandConnector(QObject):
         result = self._catalog_service.import_winlens_library(root_path)
         self.catalogChanged.emit()
         return result
+
+    def search_materials(self, query: dict | None = None) -> list[dict]:
+        """Return summary dicts matching the supplied material query."""
+        return self._material_catalog_service.search(query)
+
+    def get_material_references(self) -> list[str]:
+        """Return material references currently available in the local database."""
+        return self._material_catalog_service.get_references()
+
+    def get_material_details(self, material_id: str) -> dict | None:
+        """Return a full material record payload by id."""
+        return self._material_catalog_service.get_details(material_id)
+
+    def import_winlens_materials(self, root_path: str) -> MaterialCatalogImportResult:
+        """Import validated WinLens glassplus materials into the local database."""
+        result = self._material_catalog_service.import_winlens_materials(root_path)
+        self.materialsChanged.emit()
+        return result
+
+    def delete_materials(self, material_ids: list[str]) -> int:
+        """Delete local imported materials by id."""
+        count = self._material_catalog_service.delete_materials(material_ids)
+        if count:
+            self.materialsChanged.emit()
+        return count
 
     def insert_catalog_lens(
         self,

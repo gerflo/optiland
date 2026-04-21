@@ -167,6 +167,10 @@ class MainWindow(FramelessWindow):
             """Returns the stock lens catalog browser panel."""
             return self._win.panel_manager.catalog_browser_panel
 
+        def get_material_browser_panel(self):
+            """Returns the material database browser panel."""
+            return self._win.panel_manager.material_browser_panel
+
         def show_lens_editor(self):
             """Brings the Lens Data Editor dock widget to the front."""
             self._win.focus_dock_widget(self._win.panel_manager.lens_editor_dock)
@@ -179,6 +183,11 @@ class MainWindow(FramelessWindow):
         def show_catalog_browser(self):
             """Bring the stock lens catalog dock widget to the front."""
             dock = self._win.panel_manager.catalog_browser_dock
+            self._win.focus_dock_widget(dock)
+
+        def show_material_browser(self):
+            """Bring the material database dock widget to the front."""
+            dock = self._win.panel_manager.material_browser_dock
             self._win.focus_dock_widget(dock)
 
         def refresh_all(self):
@@ -446,6 +455,7 @@ class MainWindow(FramelessWindow):
                 "reset_layout",
                 "toggle_fullscreen",
                 "show_catalog_browser",
+                "show_material_browser",
             )
         )
         view_menu.addSeparator()
@@ -1203,6 +1213,12 @@ class MainWindow(FramelessWindow):
             self.focus_dock_widget(self.panel_manager.catalog_browser_dock)
 
     @Slot()
+    def show_material_browser_action(self) -> None:
+        """Show and raise the material database browser dock."""
+        if hasattr(self, "panel_manager") and self.panel_manager.material_browser_dock:
+            self.focus_dock_widget(self.panel_manager.material_browser_dock)
+
+    @Slot()
     def export_zemax_action(self):
         """Show a file dialog and export the current system as a Zemax .zmx file."""
         filepath, _ = QFileDialog.getSaveFileName(
@@ -1496,6 +1512,16 @@ class MainWindow(FramelessWindow):
                     "Show Stock Lens Catalog",
                     "Open the stock-lens catalog browser",
                     catalog_action.trigger,
+                    category="Panels",
+                )
+            )
+        material_action = am.get_action("show_material_browser")
+        if material_action:
+            reg.register(
+                PaletteCommand(
+                    "Show Material Database",
+                    "Open the material database browser",
+                    material_action.trigger,
                     category="Panels",
                 )
             )

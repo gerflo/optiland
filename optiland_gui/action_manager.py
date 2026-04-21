@@ -182,6 +182,11 @@ class ActionManager:
             "Stock Lens Catalog",
             triggered=self.main_window.show_catalog_browser_action,
         )
+        self._create_action(
+            "show_material_browser",
+            "Material Database",
+            triggered=self.main_window.show_material_browser_action,
+        )
 
     def _create_layout_actions(self) -> None:
         """Create Layout-slot load and save actions."""

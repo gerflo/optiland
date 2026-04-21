@@ -16,6 +16,7 @@ from PySide6.QtWidgets import QDockWidget, QMainWindow, QTabWidget, QWidget
 from .analysis_panel import AnalysisPanel
 from .catalog_browser_panel import CatalogBrowserPanel
 from .lens_editor import LensEditor
+from .material_browser_panel import MaterialBrowserPanel
 from .optimization_panel import OptimizationPanel
 from .system_properties_panel import SystemPropertiesPanel
 from .viewer_panel import ViewerPanel
@@ -97,6 +98,11 @@ class PanelManager:
             self.catalog_browser_panel, "CatalogBrowserDock", "Stock Lens Catalog"
         )
 
+        self.material_browser_panel = MaterialBrowserPanel(self.connector)
+        self.material_browser_dock = self._create_dock(
+            self.material_browser_panel, "MaterialBrowserDock", "Material Database"
+        )
+
         # Scripting terminal — inject connector and iface into the kernel
         self.python_terminal = PythonTerminalWidget(
             parent_for_iface,
@@ -118,6 +124,7 @@ class PanelManager:
             self.analysis_dock,
             self.optimization_dock,
             self.catalog_browser_dock,
+            self.material_browser_dock,
             self.terminal_dock,
         ]
 
@@ -189,6 +196,9 @@ class PanelManager:
         self.main_window.tabifyDockWidget(
             self.optimization_dock, self.catalog_browser_dock
         )
+        self.main_window.tabifyDockWidget(
+            self.catalog_browser_dock, self.material_browser_dock
+        )
         self.main_window.splitDockWidget(
             self.analysis_dock, self.terminal_dock, Qt.Vertical
         )
@@ -249,6 +259,7 @@ class PanelManager:
             "analysis": self.analysis_dock,
             "optimization": self.optimization_dock,
             "catalogs": self.catalog_browser_dock,
+            "materials": self.material_browser_dock,
             "scripts": self.terminal_dock,
             "design": self.lens_editor_dock,
         }
