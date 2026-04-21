@@ -86,6 +86,7 @@ class SidebarWidget(QWidget):
             ("design", "Design", "design.svg"),
             ("analysis", "Analysis", "analysis.svg"),
             ("optimization", "Optimization", "optimization.svg"),
+            ("catalogs", "Catalogs", "materials.svg"),
             ("materials", "Materials", "materials.svg"),
             ("tolerancing", "Tolerancing", "tolerancing.svg"),
             ("scripts", "Scripts", "terminal.svg"),

@@ -153,6 +153,10 @@ class MainWindow(FramelessWindow):
             """
             return self._win.panel_manager.viewer_panel
 
+        def get_catalog_browser_panel(self):
+            """Returns the stock lens catalog browser panel."""
+            return self._win.panel_manager.catalog_browser_panel
+
         def show_lens_editor(self):
             """Brings the Lens Data Editor dock widget to the front."""
             self._win.panel_manager.lens_editor_dock.show()
@@ -167,6 +171,12 @@ class MainWindow(FramelessWindow):
             parent_tab_widget = dock.parentWidget()
             if isinstance(parent_tab_widget, QTabWidget):
                 parent_tab_widget.setCurrentWidget(dock)
+
+        def show_catalog_browser(self):
+            """Bring the stock lens catalog dock widget to the front."""
+            dock = self._win.panel_manager.catalog_browser_dock
+            dock.show()
+            dock.raise_()
 
         def refresh_all(self):
             """Triggers a full refresh of all GUI panels.
@@ -408,6 +418,10 @@ class MainWindow(FramelessWindow):
         file_menu.addSeparator()
         import_menu = file_menu.addMenu("&Import")
         import_menu.addActions(am.get_actions("import_zemax", "import_codev"))
+        catalog_import_menu = import_menu.addMenu("&Catalog")
+        catalog_import_menu.addActions(
+            am.get_actions("import_edmund_catalog", "import_thorlabs_catalog")
+        )
         export_menu = file_menu.addMenu("&Export")
         export_menu.addActions(am.get_actions("export_zemax", "export_codev"))
         file_menu.addSeparator()
@@ -418,7 +432,12 @@ class MainWindow(FramelessWindow):
 
         view_menu = menu_bar.addMenu("&View")
         view_menu.addActions(
-            am.get_actions("dock_all", "reset_layout", "toggle_fullscreen")
+            am.get_actions(
+                "dock_all",
+                "reset_layout",
+                "toggle_fullscreen",
+                "show_catalog_browser",
+            )
         )
         view_menu.addSeparator()
         theme_menu = view_menu.addMenu("&Theme")
@@ -1000,6 +1019,45 @@ class MainWindow(FramelessWindow):
             self.connector.import_codev(filepath)
             self._update_project_name_in_title_bar()
 
+    def _import_catalog_file_for_manufacturer(self, manufacturer: str) -> None:
+        """Show a file dialog and import a local catalog file."""
+        filepaths, _ = QFileDialog.getOpenFileNames(
+            self,
+            f"Import {manufacturer} Catalog",
+            self._get_dialog_start_dir("Paths/LastOpenDir", "Paths/LastSaveDir"),
+            "Catalog Files (*.zmx *.json);;Zemax Files (*.zmx);;Normalized Catalog JSON (*.json);;All Files (*)",
+        )
+        if not filepaths:
+            return
+        try:
+            count = self.connector.import_catalog_file(manufacturer, filepaths)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Catalog Import Failed", str(exc))
+            return
+        self._remember_dialog_path("Paths/LastOpenDir", filepaths[0])
+        if self.toast_manager:
+            self.toast_manager.notify(
+                f"Imported {count} {manufacturer} catalog entries.",
+                "success",
+            )
+
+    @Slot()
+    def import_edmund_catalog_action(self) -> None:
+        """Import a local Edmund stock-lens catalog file."""
+        self._import_catalog_file_for_manufacturer("Edmund")
+
+    @Slot()
+    def import_thorlabs_catalog_action(self) -> None:
+        """Import a local Thorlabs stock-lens catalog file."""
+        self._import_catalog_file_for_manufacturer("Thorlabs")
+
+    @Slot()
+    def show_catalog_browser_action(self) -> None:
+        """Show and raise the stock lens catalog browser dock."""
+        if hasattr(self, "panel_manager") and self.panel_manager.catalog_browser_dock:
+            self.panel_manager.catalog_browser_dock.show()
+            self.panel_manager.catalog_browser_dock.raise_()
+
     @Slot()
     def export_zemax_action(self):
         """Show a file dialog and export the current system as a Zemax .zmx file."""
@@ -1234,6 +1292,20 @@ class MainWindow(FramelessWindow):
             ("Open", "Open an existing system file", "open", "Ctrl+O", "File"),
             ("Save", "Save the current system", "save", "Ctrl+S", "File"),
             ("Save As", "Save to a new file", "save_as", "", "File"),
+            (
+                "Import Edmund Catalog",
+                "Import a local Edmund stock-lens catalog",
+                "import_edmund_catalog",
+                "",
+                "File",
+            ),
+            (
+                "Import Thorlabs Catalog",
+                "Import a local Thorlabs stock-lens catalog",
+                "import_thorlabs_catalog",
+                "",
+                "File",
+            ),
         ]
         for name, desc, action_key, shortcut, cat in _file_cmds:
             action = am.get_action(action_key)
@@ -1270,6 +1342,17 @@ class MainWindow(FramelessWindow):
                     fullscreen_action.trigger,
                     shortcut="F11",
                     category="Settings",
+                )
+            )
+
+        catalog_action = am.get_action("show_catalog_browser")
+        if catalog_action:
+            reg.register(
+                PaletteCommand(
+                    "Show Stock Lens Catalog",
+                    "Open the stock-lens catalog browser",
+                    catalog_action.trigger,
+                    category="Panels",
                 )
             )
 

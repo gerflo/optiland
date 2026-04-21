@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDockWidget, QMainWindow, QWidget
 
 from .analysis_panel import AnalysisPanel
+from .catalog_browser_panel import CatalogBrowserPanel
 from .lens_editor import LensEditor
 from .optimization_panel import OptimizationPanel
 from .system_properties_panel import SystemPropertiesPanel
@@ -91,6 +92,11 @@ class PanelManager:
             self.optimization_panel, "OptimizationDock", "Optimization"
         )
 
+        self.catalog_browser_panel = CatalogBrowserPanel(self.connector)
+        self.catalog_browser_dock = self._create_dock(
+            self.catalog_browser_panel, "CatalogBrowserDock", "Stock Lens Catalog"
+        )
+
         # Scripting terminal — inject connector and iface into the kernel
         self.python_terminal = PythonTerminalWidget(
             parent_for_iface,
@@ -111,6 +117,7 @@ class PanelManager:
             self.system_properties_dock,
             self.analysis_dock,
             self.optimization_dock,
+            self.catalog_browser_dock,
             self.terminal_dock,
         ]
 
@@ -179,6 +186,9 @@ class PanelManager:
         self.main_window.splitDockWidget(
             self.system_properties_dock, self.optimization_dock, Qt.Vertical
         )
+        self.main_window.tabifyDockWidget(
+            self.optimization_dock, self.catalog_browser_dock
+        )
         self.main_window.splitDockWidget(
             self.analysis_dock, self.terminal_dock, Qt.Vertical
         )
@@ -240,6 +250,7 @@ class PanelManager:
         dock_map = {
             "analysis": self.analysis_dock,
             "optimization": self.optimization_dock,
+            "catalogs": self.catalog_browser_dock,
             "scripts": self.terminal_dock,
             "design": self.lens_editor_dock,
         }

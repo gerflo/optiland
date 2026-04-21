@@ -13,7 +13,9 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, Signal
 
 from optiland.optic import Optic
+from optiland_gui.catalogs.insertion import record_to_insert_specs
 from optiland_gui.services.analysis_runner import AnalysisRunner
+from optiland_gui.services.catalog_service import CatalogService
 from optiland_gui.services.file_service import (
     FileService,
     SpecialFloatEncoder,  # re-exported for backward compat
@@ -51,6 +53,7 @@ class OptilandConnector(QObject):
     undoStackAvailabilityChanged = Signal(bool)
     redoStackAvailabilityChanged = Signal(bool)
     optimizationVariablesChanged = Signal()
+    catalogChanged = Signal()
     requestAddOptimizationVariable = Signal(int, str)  # surface_index, suggested_type
 
     # ------------------------------------------------------------------
@@ -86,6 +89,7 @@ class OptilandConnector(QObject):
         self._system_service = SystemService(self)
         self._analysis_runner = AnalysisRunner(self)
         self._optimization_service = OptimizationService(self)
+        self._catalog_service = CatalogService(self)
 
         self._initialize_optic_structure(self._optic, is_specific_new_system=True)
         self._is_modified = False
@@ -418,6 +422,15 @@ class OptilandConnector(QObject):
         """
         self._surface_service.add_surface(index)
 
+    def insert_surface_sequence(
+        self,
+        index: int,
+        surfaces: list[dict],
+        stop_offset: int | None = None,
+    ) -> None:
+        """Insert a sequence of surfaces as one logical design change."""
+        self._surface_service.insert_surface_sequence(index, surfaces, stop_offset)
+
     def remove_surface(self, lde_row_index: int) -> None:
         """Remove a surface by its LDE row index.
 
@@ -518,6 +531,47 @@ class OptilandConnector(QObject):
             A sorted list of geometry type identifier strings.
         """
         return self._surface_service.get_geometry_types()
+
+    # ------------------------------------------------------------------
+    # CatalogService delegation
+    # ------------------------------------------------------------------
+
+    def import_catalog_file(self, manufacturer: str, filepath: str | list[str]) -> int:
+        """Import one or more stock-lens catalog files for *manufacturer*."""
+        count = self._catalog_service.import_catalog_file(manufacturer, filepath)
+        self.catalogChanged.emit()
+        return count
+
+    def get_catalog_manufacturers(self) -> list[str]:
+        """Return the manufacturers currently available in the local cache."""
+        return self._catalog_service.get_manufacturers()
+
+    def search_catalog_lenses(self, query: dict | None = None) -> list[dict]:
+        """Return summary dicts matching the supplied catalog query."""
+        return self._catalog_service.search(query)
+
+    def get_catalog_lens_details(self, catalog_id: str) -> dict | None:
+        """Return a full catalog record payload by id."""
+        return self._catalog_service.get_record_details(catalog_id)
+
+    def insert_catalog_lens(
+        self,
+        catalog_id: str,
+        surface_index: int,
+        mode: str = "after",
+    ) -> None:
+        """Insert a catalog lens relative to an existing surface index."""
+        record = self._catalog_service.get_record(catalog_id)
+        if record is None:
+            raise ValueError(f"Catalog lens not found: {catalog_id}")
+
+        insert_index = surface_index if mode == "before" else surface_index + 1
+        surfaces, stop_offset = record_to_insert_specs(record)
+        self._surface_service.insert_surface_sequence(
+            insert_index,
+            surfaces,
+            stop_offset,
+        )
 
     # ------------------------------------------------------------------
     # OptimizationService delegation

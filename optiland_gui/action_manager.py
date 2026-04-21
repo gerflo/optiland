@@ -109,6 +109,16 @@ class ActionManager:
             triggered=self.main_window.import_codev_action,
         )
         self._create_action(
+            "import_edmund_catalog",
+            "Edmund Catalog...",
+            triggered=self.main_window.import_edmund_catalog_action,
+        )
+        self._create_action(
+            "import_thorlabs_catalog",
+            "Thorlabs Catalog...",
+            triggered=self.main_window.import_thorlabs_catalog_action,
+        )
+        self._create_action(
             "export_zemax",
             "To &Zemax (.zmx)...",
             triggered=self.main_window.export_zemax_action,
@@ -151,6 +161,11 @@ class ActionManager:
             "Toggle Full Screen",
             "F11",
             self.main_window.toggle_fullscreen_action,
+        )
+        self._create_action(
+            "show_catalog_browser",
+            "Stock Lens Catalog",
+            triggered=self.main_window.show_catalog_browser_action,
         )
 
     def _create_layout_actions(self) -> None:

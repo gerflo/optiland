@@ -580,6 +580,78 @@ class SurfaceService:
         except Exception:
             self._connector._restore_optic_state(old_state)
 
+    def insert_surface_sequence(
+        self,
+        index: int,
+        surfaces: list[dict],
+        stop_offset: int | None = None,
+    ) -> None:
+        """Insert a sequence of surfaces as a single undoable operation.
+
+        Args:
+            index: Insertion index in the optic surface list.
+            surfaces: List of dicts describing each surface.
+            stop_offset: Optional offset within *surfaces* to mark as stop.
+        """
+        if not surfaces:
+            return
+
+        old_state = self._connector._capture_optic_state()
+        num_rows = self.get_surface_count()
+        insert_idx = min(max(index, 1), max(num_rows - 1, 1))
+
+        try:
+            for offset, spec in enumerate(surfaces):
+                aperture = None
+                semi_diameter = spec.get("semi_diameter")
+                if semi_diameter not in (None, "", "Auto"):
+                    aperture = configure_aperture(float(semi_diameter) * 2.0)
+
+                geometry_kwargs = {
+                    key: self._normalize_insert_value(value)
+                    for key, value in spec.items()
+                    if key
+                    not in {
+                        "surface_type",
+                        "thickness",
+                        "material",
+                        "comment",
+                        "semi_diameter",
+                    }
+                }
+
+                self._connector._optic.surfaces.add(
+                    index=insert_idx + offset,
+                    surface_type=str(spec.get("surface_type", "standard")),
+                    thickness=float(spec.get("thickness", 0.0)),
+                    material=str(spec.get("material", "Air")),
+                    comment=str(spec.get("comment", "Catalog Surface")),
+                    is_stop=stop_offset == offset,
+                    aperture=aperture,
+                    **geometry_kwargs,
+                )
+
+            self._connector._optic.updater.update()
+            self._connector._undo_redo_manager.add_state(old_state)
+            self._connector.set_modified(True)
+            self._connector.opticChanged.emit()
+        except Exception:
+            self._connector._restore_optic_state(old_state)
+            raise
+
+    def _normalize_insert_value(self, value):  # noqa: ANN001
+        """Convert serialized insertion values into geometry-factory-friendly types."""
+        if isinstance(value, str) and value.strip().lower() == "inf":
+            return float("inf")
+        if isinstance(value, list):
+            return [self._normalize_insert_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: self._normalize_insert_value(item)
+                for key, item in value.items()
+            }
+        return value
+
     def set_stop_surface(self, row: int) -> None:
         """Set the surface at *row* as the aperture stop.
 

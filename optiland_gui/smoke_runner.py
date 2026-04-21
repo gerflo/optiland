@@ -12,6 +12,8 @@ import sys
 from pathlib import Path
 
 SMOKE_TESTS = [
+    "tests/gui/test_catalog_pipeline.py",
+    "tests/test_gui/test_catalog_importers.py",
     "tests/test_fileio/test_zemax_reader.py",
     "tests/gui/test_surface_service.py",
     "tests/analysis/test_spot_reference.py",

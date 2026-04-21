@@ -1,0 +1,74 @@
+{
+  "manufacturer": "Mixed Demo",
+  "records": [
+    {
+      "catalog_id": "edmund:49-847",
+      "manufacturer": "Edmund",
+      "part_number": "49-847",
+      "product_name": "Demo Positive Meniscus Lens",
+      "category": "singlet",
+      "url": "https://www.edmundoptics.com/products/services/zemax-catalog/",
+      "efl_mm": 50.0,
+      "diameter_mm": 25.4,
+      "center_thickness_mm": 7.0,
+      "material_summary": "N-SF11",
+      "coating": "VIS",
+      "tags": ["demo", "meniscus", "edmund"],
+      "surfaces": [
+        {
+          "surface_type": "standard",
+          "radius": 19.93,
+          "thickness": 7.0,
+          "material": "N-SF11",
+          "conic": 0.0,
+          "semi_diameter": 12.7,
+          "comment": "Edmund 49-847 S1"
+        },
+        {
+          "surface_type": "standard",
+          "radius": "inf",
+          "thickness": 21.48,
+          "material": "Air",
+          "conic": 0.0,
+          "semi_diameter": 12.7,
+          "comment": "Edmund 49-847 S2"
+        }
+      ],
+      "stop_surface_offset": 0
+    },
+    {
+      "catalog_id": "thorlabs:la1256-a-demo",
+      "manufacturer": "Thorlabs",
+      "part_number": "LA1256-A-DEMO",
+      "product_name": "Demo Plano-Convex Lens",
+      "category": "plano-convex",
+      "url": "https://www.thorlabs.com/navigation.cfm?guide_id=1",
+      "efl_mm": 75.0,
+      "diameter_mm": 25.4,
+      "center_thickness_mm": 4.0,
+      "material_summary": "N-BK7",
+      "coating": "A",
+      "tags": ["demo", "plano-convex", "thorlabs"],
+      "surfaces": [
+        {
+          "surface_type": "standard",
+          "radius": 38.76,
+          "thickness": 4.0,
+          "material": "N-BK7",
+          "conic": 0.0,
+          "semi_diameter": 12.7,
+          "comment": "Thorlabs Demo S1"
+        },
+        {
+          "surface_type": "standard",
+          "radius": "inf",
+          "thickness": 65.0,
+          "material": "Air",
+          "conic": 0.0,
+          "semi_diameter": 12.7,
+          "comment": "Thorlabs Demo S2"
+        }
+      ]
+    }
+  ]
+}
