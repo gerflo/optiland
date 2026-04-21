@@ -424,6 +424,7 @@ class MainWindow(FramelessWindow):
         catalog_import_menu = import_menu.addMenu("&Catalog")
         catalog_import_menu.addActions(
             am.get_actions(
+                "download_excelitas_catalog",
                 "download_edmund_catalog",
                 "download_thorlabs_catalog",
                 "import_edmund_catalog",
@@ -1082,6 +1083,18 @@ class MainWindow(FramelessWindow):
             self.toast_manager.notify(result.message, level, sub_message=result.archive_path)
 
     @Slot()
+    def download_excelitas_catalog_action(self) -> None:
+        """Download Excelitas / LINOS official shop metadata and linked Zemax files."""
+        try:
+            result = self.connector.download_excelitas_catalog()
+        except Exception as exc:  # noqa: BLE001
+            self._show_excelitas_download_help(str(exc))
+            return
+        if self.toast_manager:
+            level = "success" if result.imported_count else "info"
+            self.toast_manager.notify(result.message, level, sub_message=result.archive_path)
+
+    @Slot()
     def download_thorlabs_catalog_action(self) -> None:
         """Download Thorlabs' official online catalog package and import supported files."""
         try:
@@ -1120,6 +1133,35 @@ class MainWindow(FramelessWindow):
             QDesktopServices.openUrl(QUrl(EDMUND_ZEMAX_PAGE_URL))
         elif clicked == import_button:
             self._import_catalog_file_for_manufacturer("Edmund")
+
+    def _show_excelitas_download_help(self, error_text: str) -> None:
+        """Show a guided fallback dialog when Excelitas auto-download is incomplete."""
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Excelitas / LINOS Catalog Download Failed")
+        dialog.setText("Automatic catalog download could not be completed.")
+        dialog.setInformativeText(
+            "Open the official LINOS / Excelitas product pages in your browser and "
+            "download any available ZEMAX files manually. You can then import the "
+            "downloaded ZIP, ZMX, or ZMF file."
+        )
+        dialog.setDetailedText(error_text)
+        open_button = dialog.addButton(
+            "Open Product Pages",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        import_button = dialog.addButton(
+            "Import Downloaded File...",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        dialog.addButton(QMessageBox.StandardButton.Close)
+        dialog.exec()
+
+        clicked = dialog.clickedButton()
+        if clicked == open_button:
+            QDesktopServices.openUrl(QUrl("https://linosoptics.excelitas.com/en/"))
+        elif clicked == import_button:
+            self._import_catalog_file_for_manufacturer("Excelitas")
 
     def _show_thorlabs_download_help(self, error_text: str) -> None:
         """Show a guided fallback dialog when Thorlabs auto-download fails."""

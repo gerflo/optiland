@@ -29,6 +29,23 @@ class CatalogStorage:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    def load_cache_payload(self, name: str) -> dict:
+        """Load an auxiliary JSON cache payload by *name*."""
+        path = self._root / f"{name}.json"
+        if not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def save_cache_payload(self, name: str, payload: dict) -> Path:
+        """Persist an auxiliary JSON cache payload by *name*."""
+        path = self._root / f"{name}.json"
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return path
+
     def load_all_records(self) -> list[CatalogLensRecord]:
         """Load all cached manufacturer files."""
         records: list[CatalogLensRecord] = []

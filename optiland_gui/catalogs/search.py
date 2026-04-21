@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from .schema import CatalogLensRecord
 
@@ -34,8 +35,10 @@ class CatalogSearchService:
     ) -> list[CatalogLensRecord]:
         """Return matching records sorted by manufacturer and part number."""
         text = query.text.casefold().strip()
+        normalized_text = _normalize_compact_token(text)
         manufacturer = query.manufacturer.casefold().strip()
         part_number = query.part_number.casefold().strip()
+        normalized_part_number = _normalize_compact_token(part_number)
         product_name = query.product_name.casefold().strip()
         category = query.category.casefold().strip()
         material_text = query.material_text.casefold().strip()
@@ -43,12 +46,20 @@ class CatalogSearchService:
         matches: list[CatalogLensRecord] = []
 
         for record in records:
-            if text and text not in record.search_blob:
-                continue
+            search_blob = record.search_blob or record.build_search_blob()
+            if text and text not in search_blob:
+                normalized_blob = _normalize_compact_token(search_blob)
+                if not normalized_text or normalized_text not in normalized_blob:
+                    continue
             if manufacturer and record.manufacturer.casefold() != manufacturer:
                 continue
-            if part_number and part_number not in record.part_number.casefold():
-                continue
+            record_part_number = record.part_number.casefold()
+            if part_number and part_number not in record_part_number:
+                if (
+                    not normalized_part_number
+                    or normalized_part_number not in _normalize_compact_token(record_part_number)
+                ):
+                    continue
             if product_name and product_name not in record.product_name.casefold():
                 continue
             if category and category not in record.category.casefold():
@@ -89,3 +100,8 @@ def _matches_range(
     if max_value is not None and value > max_value:
         return False
     return True
+
+
+def _normalize_compact_token(value: str) -> str:
+    """Return a case-insensitive token with separators removed."""
+    return re.sub(r"[^0-9a-z]+", "", value.casefold())

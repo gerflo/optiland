@@ -555,6 +555,10 @@ class OptilandConnector(QObject):
         """Return a full catalog record payload by id."""
         return self._catalog_service.get_record_details(catalog_id)
 
+    def get_catalog_document_urls(self, catalog_id: str) -> list[str]:
+        """Return cached official vendor-document URLs for a catalog entry."""
+        return self._catalog_service.get_record_document_urls(catalog_id)
+
     def resolve_catalog_product_url(self, catalog_id: str) -> str | None:
         """Resolve a current product webpage URL for a catalog entry."""
         return self._catalog_service.resolve_product_url(catalog_id)
@@ -562,6 +566,15 @@ class OptilandConnector(QObject):
     def download_edmund_catalog(self) -> CatalogDownloadResult:
         """Download Edmund's official Zemax catalog archive and import supported files."""
         result = self._catalog_service.download_edmund_catalog()
+        self.catalogChanged.emit()
+        return result
+
+    def download_excelitas_catalog(
+        self,
+        family_urls: list[str] | None = None,
+    ) -> CatalogDownloadResult:
+        """Download Excelitas / LINOS catalog metadata and linked Zemax files."""
+        result = self._catalog_service.download_excelitas_catalog(family_urls)
         self.catalogChanged.emit()
         return result
 
@@ -584,6 +597,11 @@ class OptilandConnector(QObject):
 
         insert_index = surface_index if mode == "before" else surface_index + 1
         surfaces, stop_offset = record_to_insert_specs(record)
+        if not surfaces:
+            raise ValueError(
+                "This catalog entry has no optical surface data to insert. "
+                "It is currently metadata-only."
+            )
         self._surface_service.insert_surface_sequence(
             insert_index,
             surfaces,

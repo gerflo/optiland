@@ -116,6 +116,11 @@ class CatalogBrowserPanel(QWidget):
         self._busy_timer = QTimer(self)
         self._busy_timer.setInterval(120)
         self._busy_timer.timeout.connect(self._advance_busy_indicator)
+        self._result_batch_size = 250
+        self._result_population_timer = QTimer(self)
+        self._result_population_timer.setSingleShot(True)
+        self._result_population_timer.timeout.connect(self._continue_results_population)
+        self._result_population_index = 0
         self._build_ui()
         self._wire_signals()
         self._restore_table_state()
@@ -250,6 +255,10 @@ class CatalogBrowserPanel(QWidget):
         """Build the online-download dropdown menu."""
         download_menu = QMenu(self.download_catalog_button)
         download_menu.addAction(
+            "Excelitas / LINOS...",
+            self._download_excelitas_catalog,
+        )
+        download_menu.addAction(
             "Edmund Optics...",
             self._download_edmund_catalog,
         )
@@ -278,38 +287,78 @@ class CatalogBrowserPanel(QWidget):
         self._current_results = self.connector.search_catalog_lenses(query)
         self._sort_current_results()
         self._refresh_manufacturer_filter()
+        self._begin_results_population()
+
+    def _begin_results_population(self) -> None:
+        """Populate result rows in small batches so the UI stays responsive."""
+        self._result_population_timer.stop()
+        self._result_population_index = 0
+        self.results_table.clearContents()
+        self.results_table.clearSelection()
+        self.results_table.setCurrentCell(-1, -1)
         self.results_table.setRowCount(len(self._current_results))
-        for row, record in enumerate(self._current_results):
-            values = [
-                record.get("manufacturer", ""),
-                record.get("part_number", ""),
-                record.get("product_name", ""),
-                record.get("category", ""),
-                _fmt_float(record.get("efl_mm")),
-                _fmt_float(record.get("diameter_mm")),
-                record.get("material_summary", "") or "",
-                record.get("coating", "") or "",
-            ]
-            table_row = row
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setData(Qt.UserRole, record.get("catalog_id"))
-                if col in (4, 5):
-                    item.setTextAlignment(
-                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                    )
-                self.results_table.setItem(table_row, col, item)
         self._sync_filter_row_geometry()
 
         count = len(self._current_results)
-        self.status_label.setText(
-            "No catalog entries loaded." if count == 0 else f"{count} catalog entries found."
-        )
         if count == 0:
+            self.status_label.setText("No catalog entries loaded.")
             self.details_text.clear()
-        else:
-            self.results_table.selectRow(0)
-            self._update_details()
+            return
+
+        self.status_label.setText(f"Loading catalog entries... 0/{count}")
+        self._continue_results_population()
+
+    @Slot()
+    def _continue_results_population(self) -> None:
+        """Append the next chunk of search results to the table widget."""
+        count = len(self._current_results)
+        if self._result_population_index >= count:
+            self.status_label.setText(f"{count} catalog entries found.")
+            if count > 0 and self.results_table.currentRow() < 0:
+                self.results_table.selectRow(0)
+                self._update_details()
+            return
+
+        end_index = min(self._result_population_index + self._result_batch_size, count)
+        self.results_table.setUpdatesEnabled(False)
+        try:
+            for row in range(self._result_population_index, end_index):
+                record = self._current_results[row]
+                values = [
+                    record.get("manufacturer", ""),
+                    record.get("part_number", ""),
+                    record.get("product_name", ""),
+                    record.get("category", ""),
+                    _fmt_float(record.get("efl_mm")),
+                    _fmt_float(record.get("diameter_mm")),
+                    record.get("material_summary", "") or "",
+                    record.get("coating", "") or "",
+                ]
+                for col, value in enumerate(values):
+                    item = QTableWidgetItem(value)
+                    item.setData(Qt.UserRole, record.get("catalog_id"))
+                    if col in (4, 5):
+                        item.setTextAlignment(
+                            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                        )
+                    self.results_table.setItem(row, col, item)
+        finally:
+            self.results_table.setUpdatesEnabled(True)
+
+        self._result_population_index = end_index
+        self._sync_filter_row_geometry()
+
+        if self._result_population_index >= count:
+            self.status_label.setText(f"{count} catalog entries found.")
+            if self.results_table.currentRow() < 0:
+                self.results_table.selectRow(0)
+                self._update_details()
+            return
+
+        self.status_label.setText(
+            f"Loading catalog entries... {self._result_population_index}/{count}"
+        )
+        self._result_population_timer.start(0)
 
     def _ensure_filter_row(self) -> None:
         """Create a pinned filter row that stays under the table header."""
@@ -571,6 +620,17 @@ class CatalogBrowserPanel(QWidget):
             error_handler=self._show_edmund_download_help,
         )
 
+    def _download_excelitas_catalog(self) -> None:
+        self._run_catalog_task(
+            self.connector.download_excelitas_catalog,
+            success_handler=lambda result: self._notify(
+                result.message,
+                "success" if result.imported_count else "info",
+            ),
+            error_title="Excelitas / LINOS Catalog Download Failed",
+            error_handler=self._show_excelitas_download_help,
+        )
+
     def _download_thorlabs_catalog(self) -> None:
         self._run_catalog_task(
             self.connector.download_thorlabs_catalog,
@@ -609,6 +669,35 @@ class CatalogBrowserPanel(QWidget):
             QDesktopServices.openUrl(QUrl(EDMUND_ZEMAX_PAGE_URL))
         elif clicked == import_button:
             self._import_catalog_files("Edmund")
+
+    def _show_excelitas_download_help(self, error_text: str) -> None:
+        """Show a guided fallback dialog when Excelitas auto-download is incomplete."""
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Excelitas / LINOS Catalog Download Failed")
+        dialog.setText("Automatic catalog download could not be completed.")
+        dialog.setInformativeText(
+            "Open the official LINOS / Excelitas product pages in your browser, "
+            "download any available ZEMAX files manually, and then import the "
+            "downloaded ZIP, ZMX, or ZMF file."
+        )
+        dialog.setDetailedText(error_text)
+        open_button = dialog.addButton(
+            "Open Product Pages",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        import_button = dialog.addButton(
+            "Import Downloaded File...",
+            QMessageBox.ButtonRole.ActionRole,
+        )
+        dialog.addButton(QMessageBox.StandardButton.Close)
+        dialog.exec()
+
+        clicked = dialog.clickedButton()
+        if clicked == open_button:
+            QDesktopServices.openUrl(QUrl("https://linosoptics.excelitas.com/en/"))
+        elif clicked == import_button:
+            self._import_catalog_files("Excelitas")
 
     def _show_thorlabs_download_help(self, error_text: str) -> None:
         """Show a guided fallback dialog when Thorlabs auto-download fails."""
@@ -706,6 +795,35 @@ class CatalogBrowserPanel(QWidget):
             return
         QDesktopServices.openUrl(QUrl(str(url)))
 
+    def _open_selected_vendor_document(self) -> None:
+        """Open the first cached official vendor document for the selected entry."""
+        catalog_id = self._selected_catalog_id()
+        if not catalog_id:
+            return
+        urls = self.connector.get_catalog_document_urls(catalog_id)
+        if not urls:
+            self._notify("No vendor document available for this catalog entry.", "warning")
+            return
+        QDesktopServices.openUrl(QUrl(urls[0]))
+
+    def _open_vendor_document_url(self, url: str) -> None:
+        """Open a specific vendor-document URL."""
+        if not url:
+            self._notify("No vendor document available for this catalog entry.", "warning")
+            return
+        QDesktopServices.openUrl(QUrl(url))
+
+    def _populate_vendor_document_menu(self, menu: QMenu, document_urls: list[str]) -> None:
+        """Populate *menu* with one action per vendor-document URL."""
+        for index, url in enumerate(document_urls, start=1):
+            label = f"Document {index}"
+            if "/" in url:
+                label = url.rsplit("/", 1)[-1] or label
+            action = menu.addAction(label)
+            action.triggered.connect(
+                lambda _checked=False, value=url: self._open_vendor_document_url(value)
+            )
+
     def _show_results_context_menu(self, pos) -> None:  # noqa: ANN001
         """Show a context menu with copy and product-link actions for the result table."""
         item = self.results_table.itemAt(pos)
@@ -721,9 +839,21 @@ class CatalogBrowserPanel(QWidget):
 
         current_item = self.results_table.currentItem()
         has_item = current_item is not None and current_item.row() >= 0
+        catalog_id = self._selected_catalog_id() if has_item else ""
+        document_urls = self.connector.get_catalog_document_urls(catalog_id) if catalog_id else []
+        has_document = bool(document_urls)
         copy_cell_action.setEnabled(has_item)
         copy_row_action.setEnabled(has_item)
         open_url_action.setEnabled(has_item)
+
+        document_menu = None
+        open_document_action = None
+        if len(document_urls) <= 1:
+            open_document_action = menu.addAction("Open Vendor Document")
+            open_document_action.setEnabled(has_document)
+        else:
+            document_menu = menu.addMenu("Open Vendor Document")
+            self._populate_vendor_document_menu(document_menu, document_urls)
 
         chosen = menu.exec(self.results_table.viewport().mapToGlobal(pos))
         if chosen == copy_cell_action:
@@ -732,6 +862,8 @@ class CatalogBrowserPanel(QWidget):
             self._copy_selected_row_to_clipboard()
         elif chosen == open_url_action:
             self._open_selected_catalog_url()
+        elif chosen == open_document_action:
+            self._open_selected_vendor_document()
 
     def _sync_filter_row_geometry(self, *args) -> None:  # noqa: ANN002
         """Keep the filter row aligned with the table columns."""
@@ -864,6 +996,7 @@ class CatalogBrowserPanel(QWidget):
     def closeEvent(self, event) -> None:  # noqa: ANN001, N802
         """Shut down any running catalog task cleanly before the panel closes."""
         self._set_task_busy(False)
+        self._result_population_timer.stop()
         thread = self._task_thread
         if thread is not None and thread.isRunning() and thread != QThread.currentThread():
             thread.quit()

@@ -7,7 +7,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from optiland_gui.catalogs.insertion import record_to_insert_specs
+from optiland_gui.catalogs.search import CatalogSearchQuery, CatalogSearchService
 from optiland_gui.catalogs.schema import CatalogLensRecord, CatalogSource, LensSurfaceSpec
+from optiland_gui.optiland_connector import OptilandConnector
 from optiland_gui.services.surface_service import SurfaceService
 
 
@@ -126,3 +128,68 @@ class TestCatalogSurfaceInsertion:
         assert surface.geometry.R_rot == float("inf")
         assert list(surface.geometry.coeffs_poly_y) == pytest.approx([0.0, 0.0])
         assert float(surface.aperture.r_max) == pytest.approx(2.0)
+
+    def test_insert_catalog_lens_rejects_metadata_only_records(self) -> None:
+        connector = MagicMock()
+        connector._catalog_service = MagicMock()
+        connector._surface_service = MagicMock()
+        connector._catalog_service.get_record.return_value = CatalogLensRecord(
+            catalog_id="excelitas:g063213000",
+            manufacturer="Excelitas LINOS",
+            part_number="G063213000",
+            product_name="Achr. VIS ARB2; D=25.4; F=80; mounted",
+            category="achromat",
+            efl_mm=80.0,
+            diameter_mm=25.4,
+            source=CatalogSource(
+                manufacturer="Excelitas LINOS",
+                source_type="excelitas_shop_html",
+            ),
+        )
+
+        with pytest.raises(ValueError, match="metadata-only"):
+            OptilandConnector.insert_catalog_lens(connector, "excelitas:g063213000", 1, "after")
+
+        connector._surface_service.insert_surface_sequence.assert_not_called()
+
+
+class TestCatalogSearchNormalization:
+    def test_full_text_search_ignores_part_number_separators(self) -> None:
+        record = CatalogLensRecord(
+            catalog_id="excelitas:g063213000",
+            manufacturer="Excelitas LINOS",
+            part_number="G063213000",
+            product_name="Achr. VIS ARB2; D=25.4; F=80; mounted",
+            category="achromat",
+            source=CatalogSource(
+                manufacturer="Excelitas LINOS",
+                source_type="excelitas_shop_html",
+            ),
+        )
+
+        matches = CatalogSearchService().search(
+            [record],
+            CatalogSearchQuery(text="G063-213-000"),
+        )
+
+        assert [item.part_number for item in matches] == ["G063213000"]
+
+    def test_part_number_filter_ignores_part_number_separators(self) -> None:
+        record = CatalogLensRecord(
+            catalog_id="excelitas:g063-213-000",
+            manufacturer="Excelitas LINOS",
+            part_number="G063-213-000",
+            product_name="Achr. VIS ARB2; D=25.4; F=80; mounted",
+            category="achromat",
+            source=CatalogSource(
+                manufacturer="Excelitas LINOS",
+                source_type="excelitas_shop_html",
+            ),
+        )
+
+        matches = CatalogSearchService().search(
+            [record],
+            CatalogSearchQuery(part_number="G063213000"),
+        )
+
+        assert [item.part_number for item in matches] == ["G063-213-000"]

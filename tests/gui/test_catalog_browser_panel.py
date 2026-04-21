@@ -28,6 +28,9 @@ class _DummyConnector(QObject):
     def get_catalog_lens_details(self, catalog_id: str) -> dict | None:
         return None
 
+    def get_catalog_document_urls(self, catalog_id: str) -> list[str]:
+        return []
+
     def resolve_catalog_product_url(self, catalog_id: str) -> str | None:
         return None
 
@@ -36,6 +39,9 @@ class _DummyConnector(QObject):
         return 3
 
     def download_edmund_catalog(self):  # noqa: ANN202
+        raise AssertionError("Download should not be called in this test")
+
+    def download_excelitas_catalog(self):  # noqa: ANN202
         raise AssertionError("Download should not be called in this test")
 
 
@@ -129,6 +135,66 @@ class _ResultConnector(_DummyConnector):
             return "https://example.com/product/49-847"
         return None
 
+    def get_catalog_document_urls(self, catalog_id: str) -> list[str]:
+        if catalog_id == "edmund:49-847":
+            return ["https://example.com/docs/49-847.pdf"]
+        return []
+
+
+class _MultiDocumentConnector(_ResultConnector):
+    def get_catalog_document_urls(self, catalog_id: str) -> list[str]:
+        if catalog_id == "edmund:49-847":
+            return [
+                "https://example.com/docs/49-847.pdf",
+                "https://example.com/docs/49-847.step",
+            ]
+        return []
+
+
+class _LargeResultConnector(_DummyConnector):
+    """Connector stub with enough rows to exercise batched population."""
+
+    def __init__(self, count: int = 600) -> None:
+        super().__init__()
+        self.count = count
+
+    def search_catalog_lenses(self, query: dict) -> list[dict]:
+        return [
+            {
+                "catalog_id": f"edmund:{index:05d}",
+                "manufacturer": "Edmund",
+                "part_number": f"{index:05d}",
+                "product_name": f"Lens {index}",
+                "category": "achromat",
+                "efl_mm": float(index),
+                "diameter_mm": 25.0,
+                "material_summary": "N-BK7",
+                "coating": "VIS",
+            }
+            for index in range(self.count)
+        ]
+
+    def get_catalog_manufacturers(self) -> list[str]:
+        return ["Edmund"]
+
+    def get_catalog_lens_details(self, catalog_id: str) -> dict | None:
+        return {
+            "catalog_id": catalog_id,
+            "manufacturer": "Edmund",
+            "part_number": catalog_id.split(":", 1)[-1],
+            "product_name": "Lens",
+            "category": "achromat",
+            "efl_mm": 1.0,
+            "diameter_mm": 25.0,
+            "material_summary": "N-BK7",
+            "coating": "VIS",
+            "surfaces": [{}, {}],
+            "source": {
+                "source_type": "json",
+                "imported_at": "2026-04-21T16:00:00",
+            },
+        }
+
 
 class _FakeSettings:
     """Small in-memory stand-in for QSettings used in panel tests."""
@@ -164,7 +230,7 @@ def test_catalog_browser_uses_download_button_and_filter_row(qapp) -> None:
     assert panel.reset_filters_button.toolTip() == "Reset all search filters"
 
     download_actions = [action.text() for action in panel.download_catalog_button.menu().actions()]
-    assert download_actions == ["Edmund Optics...", "Thorlabs..."]
+    assert download_actions == ["Excelitas / LINOS...", "Edmund Optics...", "Thorlabs..."]
 
     assert panel.results_table.columnCount() == 8
     assert panel.results_table.horizontalHeader().sectionsMovable()
@@ -302,6 +368,36 @@ def test_catalog_browser_can_open_selected_product_url(monkeypatch, qapp) -> Non
     assert opened_urls == ["https://example.com/product/49-847"]
 
 
+def test_catalog_browser_can_open_selected_vendor_document(monkeypatch, qapp) -> None:
+    panel = CatalogBrowserPanel(_ResultConnector())
+    panel.results_table.setCurrentCell(0, 0)
+    opened_urls: list[str] = []
+
+    monkeypatch.setattr(
+        "optiland_gui.catalog_browser_panel.QDesktopServices.openUrl",
+        lambda url: opened_urls.append(url.toString()),
+    )
+
+    panel._open_selected_vendor_document()
+
+    assert opened_urls == ["https://example.com/docs/49-847.pdf"]
+
+
+def test_catalog_browser_context_menu_builds_vendor_document_submenu_for_multiple_links(qapp) -> None:
+    panel = CatalogBrowserPanel(_MultiDocumentConnector())
+    menu = type(panel.download_catalog_button.menu())(panel)
+
+    panel._populate_vendor_document_menu(
+        menu,
+        [
+            "https://example.com/docs/49-847.pdf",
+            "https://example.com/docs/49-847.step",
+        ],
+    )
+
+    assert [action.text() for action in menu.actions()] == ["49-847.pdf", "49-847.step"]
+
+
 def test_catalog_browser_filter_row_filters_material_and_part_number(qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
 
@@ -341,3 +437,18 @@ def test_catalog_browser_notify_uses_parent_toast_manager(qapp) -> None:
     panel._notify("Imported 3 Edmund catalog entries.", "success")
 
     assert host.toast_manager.calls == [("Imported 3 Edmund catalog entries.", "success")]
+
+
+def test_catalog_browser_populates_large_result_sets_in_batches(qapp) -> None:
+    panel = CatalogBrowserPanel(_LargeResultConnector())
+
+    assert panel.results_table.rowCount() == 600
+    assert panel.results_table.item(0, 1) is not None
+    assert panel.results_table.item(300, 1) is None
+    assert panel.status_label.text() == "Loading catalog entries... 250/600"
+
+    QTest.qWait(50)
+
+    assert panel.results_table.item(300, 1) is not None
+    assert panel.status_label.text() == "600 catalog entries found."
+    assert panel.results_table.currentRow() != -1

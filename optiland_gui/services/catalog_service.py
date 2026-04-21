@@ -14,8 +14,17 @@ from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 import requests
 
 from optiland_gui.catalogs.importers import (
+    ExcelitasCatalogImporter,
     EdmundCatalogImporter,
     ThorlabsCatalogImporter,
+)
+from optiland_gui.catalogs.importers.excelitas_linos import (
+    EXCELITAS_DISCOVERY_PAGE_URLS,
+    EXCELITAS_DEFAULT_FAMILY_URLS,
+    extract_excelitas_document_urls,
+    extract_excelitas_family_urls,
+    extract_excelitas_zemax_urls,
+    looks_like_excelitas_family_page,
 )
 from optiland_gui.catalogs.search import CatalogSearchQuery, CatalogSearchService
 from optiland_gui.catalogs.storage import CatalogStorage
@@ -25,6 +34,7 @@ EDMUND_ZEMAX_PAGE_URL = "https://www.edmundoptics.com/products/services/zemax-ca
 EDMUND_PRODUCTS_PAGE_URL = "https://www.edmundoptics.com/products/"
 THORLABS_ZEMAX_PAGE_URL = "https://www.thorlabs.com/software_pages/ViewSoftwarePage.cfm?Code=Zemax"
 THORLABS_PRODUCTS_PAGE_URL = "https://www.thorlabs.com/navigation.cfm?guide_id=1"
+EXCELITAS_SHOP_ROOT_URL = "https://linosoptics.excelitas.com/"
 EDMUND_FALLBACK_ARCHIVE_URL = (
     "https://www.edmundoptics.com/media/onujl21f/edmund-optics-2019zmf.zip"
 )
@@ -96,6 +106,8 @@ _COATING_RE = re.compile(
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _HTML_SPACE_RE = re.compile(r"\s+")
 _MAX_ONLINE_ENRICHMENT_RECORDS = 100
+_MAX_EXCELITAS_DISCOVERY_DEPTH = 2
+_MAX_EXCELITAS_DISCOVERY_PAGES = 40
 _EDMUND_PART_RE = re.compile(r"^(?:\d{2}-\d{3}|\d{5})$")
 _THORLABS_PART_RE = re.compile(r"^[A-Z]{1,6}\d{2,}[A-Z0-9-]*$")
 
@@ -124,6 +136,7 @@ class CatalogService:
         self._metadata_page_cache: dict[tuple[str, str], dict[str, object]] = {}
         self._product_url_cache: dict[tuple[str, str], str | None] = {}
         self._importers = {
+            "excelitas": ExcelitasCatalogImporter(),
             "edmund": EdmundCatalogImporter(),
             "thorlabs": ThorlabsCatalogImporter(),
         }
@@ -134,6 +147,222 @@ class CatalogService:
         importer = self._importers.get(key)
         if importer is None:
             raise ValueError(f"Unsupported manufacturer: {manufacturer}")
+        imported_records = self._load_records_from_import_paths(importer, filepath)
+        self._persist_manufacturer_records(importer.manufacturer, imported_records)
+        return len(imported_records)
+
+    def download_excelitas_catalog(
+        self,
+        family_urls: list[str] | None = None,
+    ) -> CatalogDownloadResult:
+        """Download Excelitas / LINOS official family metadata and linked Zemax files."""
+        importer = self._importers["excelitas"]
+        download_dir = self._storage.downloads_root / "excelitas"
+        download_dir.mkdir(parents=True, exist_ok=True)
+
+        prefetched_pages: dict[str, tuple[str, str]] = {}
+        if family_urls is None:
+            source_urls = self._load_excelitas_cached_family_urls()
+            if not source_urls:
+                source_urls, prefetched_pages = self._discover_excelitas_family_pages()
+                self._save_excelitas_cached_family_urls(source_urls)
+        else:
+            source_urls = family_urls
+        metadata_records: list[CatalogLensRecord] = []
+        download_paths: list[str] = []
+        extracted_files: list[str] = []
+        document_manifest: dict[str, list[str]] = {}
+
+        for family_url in source_urls:
+            prefetched = prefetched_pages.get(family_url)
+            if prefetched is None:
+                response = self._session.get(
+                    family_url,
+                    timeout=30,
+                    headers=_BROWSER_HEADERS,
+                )
+                response.raise_for_status()
+                page_url = response.url or family_url
+                page_text = response.text
+            else:
+                page_url, page_text = prefetched
+            metadata_records.extend(importer.import_html_page(page_text, page_url))
+            document_urls = extract_excelitas_document_urls(page_text, page_url)
+            if document_urls:
+                document_manifest[page_url] = document_urls
+
+            for zemax_url in extract_excelitas_zemax_urls(page_text, page_url):
+                file_response = self._session.get(
+                    zemax_url,
+                    timeout=120,
+                    headers={
+                        **_BROWSER_HEADERS,
+                        "Referer": page_url,
+                        "Accept": "application/zip,application/octet-stream,*/*",
+                    },
+                )
+                file_response.raise_for_status()
+                filename = _download_filename_from_url(
+                    zemax_url,
+                    f"excelitas_catalog_{len(download_paths) + 1}.zip",
+                )
+                target_path = download_dir / filename
+                target_path.write_bytes(file_response.content)
+                download_paths.append(str(target_path))
+                if target_path.suffix.lower() == ".zip":
+                    extract_dir = download_dir / target_path.stem
+                    if extract_dir.exists():
+                        for old_path in sorted(extract_dir.rglob("*"), reverse=True):
+                            if old_path.is_file():
+                                old_path.unlink()
+                            elif old_path.is_dir():
+                                old_path.rmdir()
+                    extract_dir.mkdir(parents=True, exist_ok=True)
+                    with zipfile.ZipFile(target_path) as archive:
+                        archive.extractall(extract_dir)
+                        extracted_files.extend(
+                            str(extract_dir / name)
+                            for name in archive.namelist()
+                            if not name.endswith("/")
+                        )
+                else:
+                    extracted_files.append(str(target_path))
+
+        optical_records: list[CatalogLensRecord] = []
+        if download_paths:
+            optical_records = self._load_records_from_import_paths(importer, download_paths)
+
+        combined_records = self._merge_excelitas_records(metadata_records, optical_records)
+        combined_records = self._enrich_imported_records(importer.manufacturer, combined_records)
+        self._persist_manufacturer_records(importer.manufacturer, combined_records)
+        self._save_excelitas_document_manifest(document_manifest)
+
+        if optical_records:
+            message = (
+                "Downloaded Excelitas / LINOS catalog metadata and linked Zemax files, "
+                f"then imported {len(combined_records)} merged catalog entries."
+            )
+        else:
+            message = (
+                "Downloaded Excelitas / LINOS catalog metadata. No linked Zemax files were "
+                f"available, so {len(combined_records)} metadata-only records were cached."
+            )
+        if document_manifest:
+            message += f" Found {sum(len(urls) for urls in document_manifest.values())} official document link(s)."
+
+        return CatalogDownloadResult(
+            manufacturer=importer.manufacturer,
+            archive_path=str(download_dir),
+            source_url=source_urls[0] if source_urls else EXCELITAS_SHOP_ROOT_URL,
+            imported_count=len(combined_records),
+            extracted_files=extracted_files,
+            message=message,
+        )
+
+    def _discover_excelitas_family_pages(self) -> tuple[list[str], dict[str, tuple[str, str]]]:
+        """Discover likely LINOS family pages and reuse already fetched HTML."""
+        discovered: list[str] = []
+        prefetched_pages: dict[str, tuple[str, str]] = {}
+        seen_pages: set[str] = set()
+        queued: set[str] = set()
+        queue: list[tuple[str, int]] = [
+            (url, 0) for url in EXCELITAS_DISCOVERY_PAGE_URLS
+        ]
+        queued.update(EXCELITAS_DISCOVERY_PAGE_URLS)
+
+        while queue and len(seen_pages) < _MAX_EXCELITAS_DISCOVERY_PAGES:
+            discovery_url, depth = queue.pop(0)
+            try:
+                response = self._session.get(
+                    discovery_url,
+                    timeout=30,
+                    headers=_BROWSER_HEADERS,
+                )
+                response.raise_for_status()
+            except requests.RequestException:
+                continue
+
+            page_url = response.url or discovery_url
+            if page_url in seen_pages:
+                continue
+            seen_pages.add(page_url)
+
+            if looks_like_excelitas_family_page(response.text):
+                if page_url not in discovered:
+                    discovered.append(page_url)
+                    prefetched_pages[page_url] = (page_url, response.text)
+                continue
+
+            if depth >= _MAX_EXCELITAS_DISCOVERY_DEPTH:
+                continue
+
+            for family_url in extract_excelitas_family_urls(response.text, page_url):
+                if family_url in queued or family_url in seen_pages:
+                    continue
+                queued.add(family_url)
+                queue.append((family_url, depth + 1))
+
+        if discovered:
+            return discovered, prefetched_pages
+        return list(EXCELITAS_DEFAULT_FAMILY_URLS), {}
+
+    def _load_excelitas_cached_family_urls(self) -> list[str]:
+        """Return cached Excelitas family URLs if available."""
+        payload = self._storage.load_cache_payload("excelitas_family_urls")
+        urls = payload.get("urls", [])
+        if not isinstance(urls, list):
+            return []
+        return [str(url) for url in urls if isinstance(url, str) and url.strip()]
+
+    def _save_excelitas_cached_family_urls(self, urls: list[str]) -> None:
+        """Persist discovered Excelitas family URLs for later reuse."""
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for url in urls:
+            clean = url.strip()
+            if not clean or clean in seen:
+                continue
+            seen.add(clean)
+            normalized.append(clean)
+        self._storage.save_cache_payload(
+            "excelitas_family_urls",
+            {
+                "manufacturer": "Excelitas LINOS",
+                "urls": normalized,
+            },
+        )
+
+    def _save_excelitas_document_manifest(self, manifest: dict[str, list[str]]) -> None:
+        """Persist discovered official document links for Excelitas family pages."""
+        normalized_manifest: dict[str, list[str]] = {}
+        for page_url, urls in manifest.items():
+            clean_page = page_url.strip()
+            if not clean_page:
+                continue
+            seen: set[str] = set()
+            clean_urls: list[str] = []
+            for url in urls:
+                clean = url.strip()
+                if not clean or clean in seen:
+                    continue
+                seen.add(clean)
+                clean_urls.append(clean)
+            if clean_urls:
+                normalized_manifest[clean_page] = clean_urls
+        self._storage.save_cache_payload(
+            "excelitas_document_urls",
+            {
+                "manufacturer": "Excelitas LINOS",
+                "documents": normalized_manifest,
+            },
+        )
+
+    def _load_records_from_import_paths(
+        self,
+        importer,
+        filepath: str | list[str],
+    ) -> list[CatalogLensRecord]:
+        """Load records from files/folders for a concrete importer without persisting yet."""
         input_paths = [filepath] if isinstance(filepath, str) else filepath
         extracted_dirs = self._extract_zip_archives(importer.manufacturer, input_paths)
         search_paths = [*input_paths, *[str(path) for path in extracted_dirs]]
@@ -164,18 +393,24 @@ class CatalogService:
                 "No catalog entries could be imported. "
                 f"Sample failures: {summary}"
             )
-        imported_records = self._enrich_imported_records(importer.manufacturer, imported_records)
+        return self._enrich_imported_records(importer.manufacturer, imported_records)
 
+    def _persist_manufacturer_records(
+        self,
+        manufacturer: str,
+        imported_records: list[CatalogLensRecord],
+    ) -> None:
+        """Merge *imported_records* into local storage for *manufacturer*."""
         merged_records = {
             record.catalog_id: record
             for record in self._records
-            if record.manufacturer.casefold() == importer.manufacturer.casefold()
+            if record.manufacturer.casefold() == manufacturer.casefold()
         }
         for record in imported_records:
             merged_records[record.catalog_id] = record
 
         self._storage.save_records(
-            importer.manufacturer,
+            manufacturer,
             sorted(
                 merged_records.values(),
                 key=lambda item: (
@@ -185,7 +420,21 @@ class CatalogService:
             ),
         )
         self._reload_all()
-        return len(imported_records)
+
+    def _merge_excelitas_records(
+        self,
+        metadata_records: list[CatalogLensRecord],
+        optical_records: list[CatalogLensRecord],
+    ) -> list[CatalogLensRecord]:
+        """Merge Excelitas shop metadata with linked Zemax optical records."""
+        merged = {record.catalog_id: record for record in metadata_records}
+        for optical in optical_records:
+            existing = merged.get(optical.catalog_id)
+            if existing is None:
+                merged[optical.catalog_id] = optical
+                continue
+            merged[optical.catalog_id] = _merge_catalog_record_pair(existing, optical)
+        return list(merged.values())
 
     def download_edmund_catalog(self) -> CatalogDownloadResult:
         """Download Edmund's official Zemax catalog archive and import supported files."""
@@ -428,6 +677,21 @@ class CatalogService:
         """Return a full record payload for GUI detail display."""
         record = self.get_record(catalog_id)
         return None if record is None else record.to_dict()
+
+    def get_record_document_urls(self, catalog_id: str) -> list[str]:
+        """Return cached official vendor-document URLs for *catalog_id*."""
+        record = self.get_record(catalog_id)
+        if record is None:
+            return []
+        payload = self._storage.load_cache_payload("excelitas_document_urls")
+        documents = payload.get("documents", {})
+        if not isinstance(documents, dict):
+            return []
+        source_url = str(record.source.source_url or "").strip()
+        urls = documents.get(source_url, [])
+        if not isinstance(urls, list):
+            return []
+        return [str(url) for url in urls if isinstance(url, str) and url.strip()]
 
     def resolve_product_url(self, catalog_id: str) -> str | None:
         """Resolve a current product webpage URL for *catalog_id*."""
@@ -864,6 +1128,58 @@ def _extract_named_float(pattern: re.Pattern[str], text: str) -> float | None:
         return float(match.group(1))
     except (TypeError, ValueError):
         return None
+
+
+def _merge_catalog_record_pair(
+    metadata_record: CatalogLensRecord,
+    optical_record: CatalogLensRecord,
+) -> CatalogLensRecord:
+    """Merge metadata-rich and optical-rich records for the same catalog id."""
+    product_name = metadata_record.product_name or optical_record.product_name
+    if len(optical_record.product_name or "") > len(product_name or ""):
+        product_name = optical_record.product_name
+    merged = CatalogLensRecord(
+        catalog_id=optical_record.catalog_id or metadata_record.catalog_id,
+        manufacturer=optical_record.manufacturer or metadata_record.manufacturer,
+        part_number=optical_record.part_number or metadata_record.part_number,
+        product_name=product_name,
+        category=metadata_record.category or optical_record.category,
+        url=metadata_record.url or optical_record.url,
+        efl_mm=(
+            metadata_record.efl_mm
+            if metadata_record.efl_mm is not None
+            else optical_record.efl_mm
+        ),
+        bfl_mm=optical_record.bfl_mm or metadata_record.bfl_mm,
+        diameter_mm=(
+            metadata_record.diameter_mm
+            if metadata_record.diameter_mm is not None
+            else optical_record.diameter_mm
+        ),
+        center_thickness_mm=(
+            optical_record.center_thickness_mm or metadata_record.center_thickness_mm
+        ),
+        edge_thickness_mm=optical_record.edge_thickness_mm or metadata_record.edge_thickness_mm,
+        material_summary=metadata_record.material_summary or optical_record.material_summary,
+        coating=metadata_record.coating or optical_record.coating,
+        wavelength_min_um=optical_record.wavelength_min_um or metadata_record.wavelength_min_um,
+        wavelength_max_um=optical_record.wavelength_max_um or metadata_record.wavelength_max_um,
+        surfaces=optical_record.surfaces or metadata_record.surfaces,
+        stop_surface_offset=(
+            optical_record.stop_surface_offset
+            if optical_record.stop_surface_offset is not None
+            else metadata_record.stop_surface_offset
+        ),
+        tags=sorted(
+            {
+                *metadata_record.tags,
+                *optical_record.tags,
+            }
+        ),
+        source=optical_record.source,
+    )
+    merged.search_blob = merged.build_search_blob()
+    return merged
 
 
 def _extract_pair_value(text: str, index: int) -> float | None:
