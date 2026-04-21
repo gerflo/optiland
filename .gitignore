@@ -17,3 +17,6 @@ htmlcov/
 sg_execution_times.rst
 .qlty/
 .claude/
+optiland/database/catalog_nk_winlens.csv
+optiland/database/data-nk/glass/winlens/
+tests/_tmp_live_excelitas_check/
