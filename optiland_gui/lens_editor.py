@@ -489,12 +489,26 @@ class LensEditor(QWidget):
             editor = source.property("lens_parent_editor") or source
             if not isValid(editor):
                 return
+            row, col = self._get_navigation_origin(source)
+            item = self.tableWidget.item(row, col)
+            editor_text = editor.text().strip() if hasattr(editor, "text") else None
+            fallback_text = (
+                (editor_text or "Air")
+                if col == self.connector.COL_MATERIAL
+                else editor_text
+            )
+            if item is not None and editor_text is not None:
+                if not editor.parent() is self.tableWidget.viewport():
+                    item.setText(fallback_text)
+                    return
             try:
                 self.tableWidget.commitData(editor)
                 self.tableWidget.closeEditor(
                     editor, QAbstractItemDelegate.EndEditHint.NoHint
                 )
             except (RuntimeError, TypeError):
+                if item is not None and editor_text is not None:
+                    item.setText(fallback_text)
                 return
         elif hasattr(source, "editingFinished"):
             source.editingFinished.emit()
