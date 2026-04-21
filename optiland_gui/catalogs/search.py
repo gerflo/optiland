@@ -23,6 +23,7 @@ class CatalogSearchQuery:
     diameter_max: float | None = None
     material_text: str = ""
     coating_text: str = ""
+    availability_text: str = ""
 
 
 class CatalogSearchService:
@@ -43,6 +44,7 @@ class CatalogSearchService:
         category = query.category.casefold().strip()
         material_text = query.material_text.casefold().strip()
         coating_text = query.coating_text.casefold().strip()
+        availability_text = query.availability_text.casefold().strip()
         matches: list[CatalogLensRecord] = []
 
         for record in records:
@@ -67,6 +69,8 @@ class CatalogSearchService:
             if material_text and material_text not in (record.material_summary or "").casefold():
                 continue
             if coating_text and coating_text not in (record.coating or "").casefold():
+                continue
+            if availability_text and availability_text not in (record.availability_status or "").casefold():
                 continue
             if not _matches_range(record.efl_mm, query.efl_min, query.efl_max):
                 continue

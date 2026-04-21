@@ -15,7 +15,11 @@ from PySide6.QtCore import QObject, Signal
 from optiland.optic import Optic
 from optiland_gui.catalogs.insertion import record_to_insert_specs
 from optiland_gui.services.analysis_runner import AnalysisRunner
-from optiland_gui.services.catalog_service import CatalogDownloadResult, CatalogService
+from optiland_gui.services.catalog_service import (
+    CatalogDownloadResult,
+    CatalogImportResult,
+    CatalogService,
+)
 from optiland_gui.services.file_service import (
     FileService,
     SpecialFloatEncoder,  # re-exported for backward compat
@@ -31,6 +35,7 @@ __all__ = [
     "SpecialFloatEncoder",
     "json_inf_nan_hook",
     "CatalogDownloadResult",
+    "CatalogImportResult",
 ]
 
 
@@ -559,6 +564,26 @@ class OptilandConnector(QObject):
         """Return cached official vendor-document URLs for a catalog entry."""
         return self._catalog_service.get_record_document_urls(catalog_id)
 
+    def get_catalog_record_links(self, catalog_id: str) -> list[dict[str, object]]:
+        """Return cached candidate links for a catalog entry."""
+        return self._catalog_service.get_record_links(catalog_id)
+
+    def get_winlens_review_candidates(self, min_confidence_percent: int = 76) -> list[dict]:
+        """Return strong WinLens candidate matches for manual review."""
+        return self._catalog_service.get_winlens_review_candidates(min_confidence_percent)
+
+    def confirm_winlens_links(self, selections: list[dict[str, str]]) -> int:
+        """Persist reviewed WinLens mappings as confirmed links."""
+        count = self._catalog_service.confirm_winlens_links(selections)
+        self.catalogChanged.emit()
+        return count
+
+    def delete_catalog_records(self, catalog_ids: list[str]) -> int:
+        """Delete cached catalog entries by id."""
+        count = self._catalog_service.delete_records(catalog_ids)
+        self.catalogChanged.emit()
+        return count
+
     def resolve_catalog_product_url(self, catalog_id: str) -> str | None:
         """Resolve a current product webpage URL for a catalog entry."""
         return self._catalog_service.resolve_product_url(catalog_id)
@@ -581,6 +606,12 @@ class OptilandConnector(QObject):
     def download_thorlabs_catalog(self) -> CatalogDownloadResult:
         """Download Thorlabs' official Zemax catalog package and import supported files."""
         result = self._catalog_service.download_thorlabs_catalog()
+        self.catalogChanged.emit()
+        return result
+
+    def import_winlens_library(self, root_path: str) -> CatalogImportResult:
+        """Import a WinLens SPD library tree and refresh link suggestions."""
+        result = self._catalog_service.import_winlens_library(root_path)
         self.catalogChanged.emit()
         return result
 

@@ -21,6 +21,9 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QHeaderView,
     QGroupBox,
@@ -33,6 +36,8 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
     QComboBox,
@@ -87,6 +92,7 @@ class CatalogBrowserPanel(QWidget):
     _task_finished = Signal(object, object)
 
     RESULT_COLUMNS = [
+        "Mark",
         "Manufacturer",
         "Part No.",
         "Name",
@@ -95,6 +101,8 @@ class CatalogBrowserPanel(QWidget):
         "Diameter",
         "Material",
         "Coating",
+        "Status",
+        "Match",
     ]
     TABLE_SETTINGS_PREFIX = "CatalogBrowser/Table"
 
@@ -109,6 +117,9 @@ class CatalogBrowserPanel(QWidget):
         self._task_success_handler: Callable[[object], None] | None = None
         self._task_error_title = ""
         self._task_error_handler: Callable[[str], None] | None = None
+        self._marked_catalog_ids: set[str] = set()
+        self._updating_mark_column = False
+        self._updating_review_tree_checks = False
         self._busy_frames = ["|", "/", "-", "\\"]
         self._busy_frame_index = 0
         self._filter_widgets_ready = False
@@ -142,6 +153,13 @@ class CatalogBrowserPanel(QWidget):
         self.reset_filters_button.setObjectName("CatalogResetFiltersButton")
         self.reset_filters_button.setFixedWidth(42)
         controls_layout.addWidget(self.reset_filters_button)
+
+        self.mark_filtered_button = QPushButton("Mark Filtered")
+        self.clear_marks_button = QPushButton("Clear Marks")
+        self.delete_marked_button = QPushButton("Delete Marked")
+        controls_layout.addWidget(self.mark_filtered_button)
+        controls_layout.addWidget(self.clear_marks_button)
+        controls_layout.addWidget(self.delete_marked_button)
 
         self.download_catalog_button = QToolButton()
         self.download_catalog_button.setText("Download online catalog...")
@@ -236,6 +254,7 @@ class CatalogBrowserPanel(QWidget):
         self.reset_filters_button.clicked.connect(self._reset_filters)
         self.results_table.itemSelectionChanged.connect(self._update_details)
         self.results_table.customContextMenuRequested.connect(self._show_results_context_menu)
+        self.results_table.itemChanged.connect(self._handle_results_item_changed)
         header = self.results_table.horizontalHeader()
         header.sectionClicked.connect(self._toggle_sort_column)
         header.sectionMoved.connect(self._save_table_state)
@@ -248,6 +267,9 @@ class CatalogBrowserPanel(QWidget):
         self.copy_insert_shortcut.activated.connect(self._copy_current_cell_to_clipboard)
         self.insert_before_button.clicked.connect(lambda: self._insert_selected("before"))
         self.insert_after_button.clicked.connect(lambda: self._insert_selected("after"))
+        self.mark_filtered_button.clicked.connect(self._mark_filtered_results)
+        self.clear_marks_button.clicked.connect(self._clear_marked_results)
+        self.delete_marked_button.clicked.connect(self._delete_marked_results)
         self.connector.catalogChanged.connect(self.refresh)
         self._task_finished.connect(self._handle_task_finished, Qt.ConnectionType.QueuedConnection)
 
@@ -266,6 +288,11 @@ class CatalogBrowserPanel(QWidget):
             "Thorlabs...",
             self._download_thorlabs_catalog,
         )
+        download_menu.addSeparator()
+        download_menu.addAction(
+            "Import WinLens Library...",
+            self._import_winlens_library,
+        )
         self.download_catalog_button.setMenu(download_menu)
 
     @Slot()
@@ -283,6 +310,8 @@ class CatalogBrowserPanel(QWidget):
             "diameter_max": self._numeric_filter_bounds(self.diameter_filter.text())[1],
             "material_text": self.material_filter.text(),
             "coating_text": self.coating_filter.text(),
+            "availability_text": self.status_filter.text(),
+            "match_type_text": self.match_filter.text(),
         }
         self._current_results = self.connector.search_catalog_lenses(query)
         self._sort_current_results()
@@ -322,8 +351,23 @@ class CatalogBrowserPanel(QWidget):
         end_index = min(self._result_population_index + self._result_batch_size, count)
         self.results_table.setUpdatesEnabled(False)
         try:
+            self._updating_mark_column = True
             for row in range(self._result_population_index, end_index):
                 record = self._current_results[row]
+                catalog_id = str(record.get("catalog_id", ""))
+                mark_item = QTableWidgetItem("")
+                mark_item.setData(Qt.UserRole, catalog_id)
+                mark_item.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                )
+                mark_item.setCheckState(
+                    Qt.CheckState.Checked
+                    if catalog_id in self._marked_catalog_ids
+                    else Qt.CheckState.Unchecked
+                )
+                self.results_table.setItem(row, 0, mark_item)
                 values = [
                     record.get("manufacturer", ""),
                     record.get("part_number", ""),
@@ -333,16 +377,19 @@ class CatalogBrowserPanel(QWidget):
                     _fmt_float(record.get("diameter_mm")),
                     record.get("material_summary", "") or "",
                     record.get("coating", "") or "",
+                    record.get("availability_status", "") or "",
+                    record.get("match_type", "") or "",
                 ]
                 for col, value in enumerate(values):
                     item = QTableWidgetItem(value)
-                    item.setData(Qt.UserRole, record.get("catalog_id"))
+                    item.setData(Qt.UserRole, catalog_id)
                     if col in (4, 5):
                         item.setTextAlignment(
                             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                         )
-                    self.results_table.setItem(row, col, item)
+                    self.results_table.setItem(row, col + 1, item)
         finally:
+            self._updating_mark_column = False
             self.results_table.setUpdatesEnabled(True)
 
         self._result_population_index = end_index
@@ -373,6 +420,8 @@ class CatalogBrowserPanel(QWidget):
         self.diameter_filter = QLineEdit(self.filter_row_container)
         self.material_filter = QLineEdit(self.filter_row_container)
         self.coating_filter = QLineEdit(self.filter_row_container)
+        self.status_filter = QLineEdit(self.filter_row_container)
+        self.match_filter = QLineEdit(self.filter_row_container)
 
         self.part_number_filter.setPlaceholderText("filter")
         self.name_filter.setPlaceholderText("filter")
@@ -381,6 +430,8 @@ class CatalogBrowserPanel(QWidget):
         self.diameter_filter.setPlaceholderText("5-25")
         self.material_filter.setPlaceholderText("filter")
         self.coating_filter.setPlaceholderText("filter")
+        self.status_filter.setPlaceholderText("legacy")
+        self.match_filter.setPlaceholderText("confirmed")
 
         self.manufacturer_filter.setMinimumWidth(0)
         for widget in (
@@ -391,6 +442,8 @@ class CatalogBrowserPanel(QWidget):
             self.diameter_filter,
             self.material_filter,
             self.coating_filter,
+            self.status_filter,
+            self.match_filter,
         ):
             widget.setMinimumWidth(0)
 
@@ -402,6 +455,8 @@ class CatalogBrowserPanel(QWidget):
             self.diameter_filter,
             self.material_filter,
             self.coating_filter,
+            self.status_filter,
+            self.match_filter,
         ):
             widget.textChanged.connect(self.refresh)
         self.manufacturer_filter.currentIndexChanged.connect(self.refresh)
@@ -430,14 +485,17 @@ class CatalogBrowserPanel(QWidget):
         column = header.sortIndicatorSection()
         reverse = header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
         key_funcs = {
-            0: lambda record: str(record.get("manufacturer", "")).casefold(),
-            1: lambda record: str(record.get("part_number", "")).casefold(),
-            2: lambda record: str(record.get("product_name", "")).casefold(),
-            3: lambda record: str(record.get("category", "")).casefold(),
-            4: lambda record: _sortable_number(record.get("efl_mm")),
-            5: lambda record: _sortable_number(record.get("diameter_mm")),
-            6: lambda record: str(record.get("material_summary", "") or "").casefold(),
-            7: lambda record: str(record.get("coating", "") or "").casefold(),
+            0: lambda record: str(record.get("catalog_id", "")).casefold(),
+            1: lambda record: str(record.get("manufacturer", "")).casefold(),
+            2: lambda record: str(record.get("part_number", "")).casefold(),
+            3: lambda record: str(record.get("product_name", "")).casefold(),
+            4: lambda record: str(record.get("category", "")).casefold(),
+            5: lambda record: _sortable_number(record.get("efl_mm")),
+            6: lambda record: _sortable_number(record.get("diameter_mm")),
+            7: lambda record: str(record.get("material_summary", "") or "").casefold(),
+            8: lambda record: str(record.get("coating", "") or "").casefold(),
+            9: lambda record: str(record.get("availability_status", "") or "").casefold(),
+            10: lambda record: str(record.get("match_type", "") or "").casefold(),
         }
         key_func = key_funcs.get(column, key_funcs[0])
         self._current_results.sort(key=key_func, reverse=reverse)
@@ -485,6 +543,7 @@ class CatalogBrowserPanel(QWidget):
             return
         source = details.get("source", {}) if isinstance(details.get("source"), dict) else {}
         imported_at = str(source.get("imported_at", "-")).replace("T", " ")
+        links = self.connector.get_catalog_record_links(catalog_id)
         lines = [
             (
                 f"<b>{details.get('manufacturer', '')} {details.get('part_number', '')}</b>"
@@ -499,12 +558,63 @@ class CatalogBrowserPanel(QWidget):
             (
                 f"Mat: {details.get('material_summary') or '-'} | "
                 f"Coating: {details.get('coating') or '-'} | "
+                f"Status: {details.get('availability_status') or '-'} | "
                 f"Source: {source.get('source_type', '-')}"
             ),
             f"<small>Imported: {imported_at}</small>",
         ]
+        if links:
+            top_link = links[0]
+            lines.append(
+                "<small>"
+                f"Top link: {top_link.get('manufacturer', '-')} {top_link.get('part_number', '-')}"
+                f" [{top_link.get('match_type', 'candidate')}]"
+                f" (score {top_link.get('score', 0)})"
+                "</small>"
+            )
+        elif str(source.get("source_type", "")).casefold().startswith("winlens_"):
+            lines.append("<small>Top link: no current catalog match suggestion.</small>")
         self.details_text.setTextFormat(Qt.TextFormat.RichText)
         self.details_text.setText("<br>".join(lines))
+
+    def _handle_results_item_changed(self, item: QTableWidgetItem) -> None:
+        if self._updating_mark_column or item.column() != 0:
+            return
+        catalog_id = str(item.data(Qt.UserRole) or "")
+        if not catalog_id:
+            return
+        if item.checkState() == Qt.CheckState.Checked:
+            self._marked_catalog_ids.add(catalog_id)
+        else:
+            self._marked_catalog_ids.discard(catalog_id)
+
+    def _mark_filtered_results(self) -> None:
+        self._marked_catalog_ids.update(
+            str(record.get("catalog_id", ""))
+            for record in self._current_results
+            if str(record.get("catalog_id", "")).strip()
+        )
+        self.refresh()
+
+    def _clear_marked_results(self) -> None:
+        self._marked_catalog_ids.clear()
+        self.refresh()
+
+    def _delete_marked_results(self) -> None:
+        marked = sorted(self._marked_catalog_ids)
+        if not marked:
+            self._notify("No marked catalog entries to delete.", "info")
+            return
+        answer = QMessageBox.question(
+            self,
+            "Delete Marked Catalog Entries",
+            f"Delete {len(marked)} marked catalog entries from the local cache?",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        removed = self.connector.delete_catalog_records(marked)
+        self._marked_catalog_ids.clear()
+        self._notify(f"Deleted {removed} catalog entries.", "success" if removed else "info")
 
     def _reset_filters(self) -> None:
         """Reset all catalog search filters to their default state."""
@@ -517,6 +627,8 @@ class CatalogBrowserPanel(QWidget):
             self.diameter_filter.clear()
             self.material_filter.clear()
             self.coating_filter.clear()
+            self.status_filter.clear()
+            self.match_filter.clear()
             self.manufacturer_filter.setCurrentIndex(0)
         self.refresh()
 
@@ -534,7 +646,7 @@ class CatalogBrowserPanel(QWidget):
             elif header_state is not None and hasattr(header_state, "data"):
                 header.restoreState(header_state)
             else:
-                default_widths = [130, 110, 260, 120, 90, 90, 140, 140]
+                default_widths = [54, 130, 110, 260, 120, 90, 90, 140, 140, 100, 100]
                 for column, default_width in enumerate(default_widths):
                     self.results_table.setColumnWidth(column, default_width)
 
@@ -608,6 +720,174 @@ class CatalogBrowserPanel(QWidget):
             ),
             error_title="Catalog Import Failed",
         )
+
+    def _import_winlens_library(self) -> None:
+        """Import a local WinLens 2002 SPD library tree."""
+        folder_path = QFileDialog.getExistingDirectory(
+            self,
+            "Import WinLens Library 2002 Folder",
+            "",
+        )
+        if not folder_path:
+            return
+        self._run_catalog_task(
+            lambda: self.connector.import_winlens_library(folder_path),
+            success_handler=self._handle_winlens_import_success,
+            error_title="WinLens Import Failed",
+        )
+
+    def _handle_winlens_import_success(self, result) -> None:  # noqa: ANN001
+        self._notify(
+            result.message,
+            "success" if result.imported_count else "info",
+        )
+        review_rows = self.connector.get_winlens_review_candidates(76)
+        if review_rows:
+            self._show_winlens_review_dialog(review_rows)
+
+    def _show_winlens_review_dialog(self, review_rows: list[dict[str, object]]) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Review Strong WinLens Candidates")
+        dialog.resize(1120, 420)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(
+            QLabel(
+                "These WinLens candidate matches exceed the review threshold. "
+                "Keep 'Apply' checked for links you want to confirm."
+            )
+        )
+        tree = QTreeWidget(dialog)
+        tree.setColumnCount(10)
+        tree.setHeaderLabels(
+            [
+                "Apply",
+                "Family",
+                "WinLens Part",
+                "Name",
+                "Status",
+                "Target",
+                "Confidence",
+                "Score",
+                "Preview",
+                "Reasons",
+            ]
+        )
+        tree.header().setStretchLastSection(True)
+        family_items: dict[str, QTreeWidgetItem] = {}
+        for item in review_rows:
+            family_key = str(item.get("family_key", "")) or "-"
+            parent_item = family_items.get(family_key)
+            if parent_item is None:
+                parent_item = QTreeWidgetItem(tree)
+                parent_item.setFlags(
+                    parent_item.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsSelectable
+                    | Qt.ItemFlag.ItemIsEnabled
+                )
+                parent_item.setCheckState(0, Qt.CheckState.Checked)
+                parent_item.setText(1, family_key)
+                parent_item.setText(3, f"Family {family_key}")
+                parent_item.setText(8, "Apply or clear this whole family")
+                parent_item.setExpanded(True)
+                family_items[family_key] = parent_item
+
+            child = QTreeWidgetItem(parent_item)
+            child.setFlags(
+                child.flags()
+                | Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsSelectable
+                | Qt.ItemFlag.ItemIsEnabled
+            )
+            child.setCheckState(0, Qt.CheckState.Checked)
+            child.setData(0, Qt.ItemDataRole.UserRole, item)
+            child.setText(1, family_key)
+            child.setText(2, str(item.get("winlens_part_number", "")))
+            child.setText(3, str(item.get("winlens_name", "")))
+            child.setText(4, str(item.get("status", "")))
+            child.setText(5, str(item.get("target_part_number", "")))
+            child.setText(6, f"{int(item.get('confidence_percent', 0))}%")
+            child.setText(7, str(item.get("score", "")))
+            child.setText(8, str(item.get("preview", "")))
+            child.setText(9, ", ".join(item.get("reasons", [])))
+        tree.itemChanged.connect(self._handle_review_tree_item_changed)
+        layout.addWidget(tree, 1)
+        select_all = QCheckBox("Apply all shown", dialog)
+        select_all.setChecked(True)
+        select_all.toggled.connect(
+            lambda checked: self._set_review_tree_checked(tree, checked)
+        )
+        layout.addWidget(select_all)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selections: list[dict[str, str]] = []
+        root = tree.invisibleRootItem()
+        for parent_index in range(root.childCount()):
+            parent_item = root.child(parent_index)
+            for child_index in range(parent_item.childCount()):
+                child = parent_item.child(child_index)
+                if child.checkState(0) != Qt.CheckState.Checked:
+                    continue
+                payload = child.data(0, Qt.ItemDataRole.UserRole)
+                if not isinstance(payload, dict):
+                    continue
+                selections.append(
+                    {
+                        "winlens_catalog_id": str(payload.get("winlens_catalog_id", "")),
+                        "target_catalog_id": str(payload.get("target_catalog_id", "")),
+                    }
+                )
+        if not selections:
+            return
+        confirmed = self.connector.confirm_winlens_links(selections)
+        self._notify(f"Confirmed {confirmed} WinLens link(s).", "success" if confirmed else "info")
+
+    def _set_review_tree_checked(self, tree: QTreeWidget, checked: bool) -> None:
+        self._updating_review_tree_checks = True
+        state = Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked
+        root = tree.invisibleRootItem()
+        for parent_index in range(root.childCount()):
+            parent_item = root.child(parent_index)
+            parent_item.setCheckState(0, state)
+            for child_index in range(parent_item.childCount()):
+                parent_item.child(child_index).setCheckState(0, state)
+        self._updating_review_tree_checks = False
+
+    def _handle_review_tree_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        if column != 0 or self._updating_review_tree_checks:
+            return
+        self._updating_review_tree_checks = True
+        try:
+            if item.childCount() > 0:
+                for child_index in range(item.childCount()):
+                    item.child(child_index).setCheckState(0, item.checkState(0))
+            else:
+                parent = item.parent()
+                if parent is not None:
+                    checked = 0
+                    unchecked = 0
+                    for child_index in range(parent.childCount()):
+                        child_state = parent.child(child_index).checkState(0)
+                        if child_state == Qt.CheckState.Checked:
+                            checked += 1
+                        else:
+                            unchecked += 1
+                    if checked and unchecked:
+                        parent.setCheckState(0, Qt.CheckState.PartiallyChecked)
+                    elif checked:
+                        parent.setCheckState(0, Qt.CheckState.Checked)
+                    else:
+                        parent.setCheckState(0, Qt.CheckState.Unchecked)
+        finally:
+            self._updating_review_tree_checks = False
 
     def _download_edmund_catalog(self) -> None:
         self._run_catalog_task(
@@ -879,6 +1159,7 @@ class CatalogBrowserPanel(QWidget):
         self.filter_row_container.setMinimumWidth(content_width)
         self.results_table.setMinimumWidth(content_width)
         widgets = (
+            None,
             self.manufacturer_filter,
             self.part_number_filter,
             self.name_filter,
@@ -887,9 +1168,13 @@ class CatalogBrowserPanel(QWidget):
             self.diameter_filter,
             self.material_filter,
             self.coating_filter,
+            self.status_filter,
+            self.match_filter,
         )
         margin = 2
         for column, widget in enumerate(widgets):
+            if widget is None:
+                continue
             widget.setGeometry(
                 header.sectionViewportPosition(column) + margin,
                 margin,

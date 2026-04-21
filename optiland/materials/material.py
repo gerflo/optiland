@@ -13,10 +13,19 @@ Kramer Harrison, 2024
 from __future__ import annotations
 
 from importlib import resources
+import re
+from pathlib import Path
 
 import pandas as pd
+from pandas.errors import EmptyDataError
 
 from optiland.materials.material_file import MaterialFile
+
+_WINLENS_N_PREFIX_RE = r"^([A-Z]+)N([0-9][A-Z0-9]*)$"
+_WINLENS_ALIAS_ENTRY_RE = re.compile(
+    rb"([A-Z][A-Z0-9-]{2,20})\s{8,}[\x00-\x20\xff\xfe]{0,4}(\[[A-Za-z]+\]|[A-Za-z][A-Za-z ]{2,20})\s{8,}",
+)
+_VERIFIED_WINLENS_ALIAS_MANUFACTURERS = {"schott"}
 
 
 class Material(MaterialFile):
@@ -52,6 +61,7 @@ class Material(MaterialFile):
 
     _df = None
     _filename = str(resources.files("optiland.database").joinpath("catalog_nk.csv"))
+    _winlens_alias_entries: list[tuple[str, str | None]] | None = None
 
     def __init__(
         self,
@@ -76,8 +86,19 @@ class Material(MaterialFile):
     def _load_dataframe(cls):
         """Load the DataFrame if not yet loaded."""
         if cls._df is None:
-            cls._df = pd.read_csv(cls._filename)
+            frames = [pd.read_csv(cls._filename)]
+            for extra_file in cls._extra_catalog_csv_files():
+                try:
+                    frames.append(pd.read_csv(extra_file))
+                except (FileNotFoundError, EmptyDataError):
+                    continue
+            cls._df = pd.concat(frames, ignore_index=True)
         return cls._df
+
+    @classmethod
+    def _extra_catalog_csv_files(cls) -> list[Path]:
+        candidate = Path(cls._filename).with_name("catalog_nk_winlens.csv")
+        return [candidate] if candidate.is_file() else []
 
     @staticmethod
     def _levenshtein_distance(s1, s2):
@@ -127,15 +148,18 @@ class Material(MaterialFile):
             DataFrame if no potential matches are found.
 
         """
-        # Make input name lowercase
-        name = self.name.lower()
+        candidates = self._material_name_candidates(self.name, self.reference)
+        lowered_candidates = [candidate.lower() for candidate in candidates]
 
         # Filter rows where input string is substring of category_name or name
-        dfi = df[
-            df["category_name"].str.lower().str.contains(name)
-            | df["name"].str.lower().str.contains(name)
-            | df["filename_no_ext"].str.lower().str.contains(name)
-        ].copy()
+        mask = pd.Series(False, index=df.index)
+        for name in lowered_candidates:
+            mask = mask | (
+                df["category_name"].str.lower().str.contains(name)
+                | df["name"].str.lower().str.contains(name)
+                | df["filename_no_ext"].str.lower().str.contains(name)
+            )
+        dfi = df[mask].copy()
 
         # If reference given, filter rows non-matching rows
         if self.reference:
@@ -164,12 +188,30 @@ class Material(MaterialFile):
         if dfi.empty:
             return pd.DataFrame()
 
+        exact_mask = pd.Series(False, index=dfi.index)
+        exact_name_values = {
+            candidate.casefold()
+            for candidate in candidates
+            if candidate and candidate.strip()
+        }
+        if exact_name_values:
+            exact_mask = (
+                dfi["category_name"].fillna("").str.casefold().isin(exact_name_values)
+                | dfi["name"].fillna("").str.casefold().isin(exact_name_values)
+                | dfi["filename_no_ext"].fillna("").str.casefold().isin(exact_name_values)
+            )
+        if exact_mask.any():
+            dfi = dfi[exact_mask].copy()
+
         # Calculate similarity scores using Levenshtein distance
         dfi["similarity_score"] = dfi.apply(
             lambda row: min(
-                self._levenshtein_distance(name, row["category_name"].lower()),
-                self._levenshtein_distance(name, row["name"].lower()),
-                self._levenshtein_distance(name, row["filename_no_ext"].lower()),
+                min(
+                    self._levenshtein_distance(name, row["category_name"].lower()),
+                    self._levenshtein_distance(name, row["name"].lower()),
+                    self._levenshtein_distance(name, row["filename_no_ext"].lower()),
+                )
+                for name in lowered_candidates
             ),
             axis=1,
         )
@@ -185,6 +227,279 @@ class Material(MaterialFile):
             )
 
         return dfi
+
+    @classmethod
+    def _material_name_candidates(
+        cls,
+        name: str,
+        reference: str | None = None,
+    ) -> list[str]:
+        """Return ordered search candidates for exact and WinLens-style aliases."""
+        cleaned = str(name or "").strip()
+        if not cleaned:
+            return [cleaned]
+
+        candidates: list[str] = []
+        seen: set[str] = set()
+
+        def add(candidate: str) -> None:
+            normalized = candidate.strip()
+            if not normalized:
+                return
+            key = normalized.casefold()
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(normalized)
+
+        add(cleaned)
+        add(cleaned.replace(" ", ""))
+
+        compact_upper = cleaned.replace(" ", "").upper()
+        add(compact_upper)
+
+        match = re.match(_WINLENS_N_PREFIX_RE, compact_upper)
+        if match and "-" not in compact_upper:
+            add(f"N-{match.group(1)}{match.group(2)}")
+
+        for alias in cls._lookup_winlens_alias_candidates(cleaned, reference):
+            add(alias)
+
+        return candidates
+
+    @classmethod
+    def _lookup_winlens_alias_candidates(
+        cls,
+        name: str,
+        reference: str | None,
+    ) -> list[str]:
+        entries = cls._load_winlens_alias_entries()
+        if not entries:
+            return []
+        name_key = cls._normalize_material_alias_key(name)
+        if not name_key:
+            return []
+
+        reference_key = cls._normalize_reference_key(reference)
+        candidates: list[str] = []
+        seen: set[str] = set()
+        verified_targets = cls._verified_winlens_alias_targets(name, reference)
+        if not verified_targets:
+            return []
+
+        def add(candidate: str) -> None:
+            normalized = candidate.strip()
+            if not normalized:
+                return
+            key = normalized.casefold()
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(normalized)
+
+        for alias_name, alias_reference in entries:
+            if cls._normalize_material_alias_key(alias_name) != name_key:
+                continue
+            if reference_key and cls._normalize_reference_key(alias_reference) != reference_key:
+                continue
+            if alias_name in verified_targets:
+                add(alias_name)
+
+        if reference_key:
+            return candidates
+
+        for alias_name, alias_reference in entries:
+            if cls._normalize_material_alias_key(alias_name) != name_key:
+                continue
+            if alias_name in verified_targets:
+                add(alias_name)
+
+        return candidates
+
+    @classmethod
+    def _load_winlens_alias_entries(cls) -> list[tuple[str, str | None]]:
+        if cls._winlens_alias_entries is None:
+            entries: list[tuple[str, str | None]] = []
+            seen: set[tuple[str, str | None]] = set()
+            for path in cls._find_winlens_glassplus_files():
+                for entry in cls._extract_winlens_alias_entries(path.read_bytes()):
+                    if entry in seen:
+                        continue
+                    seen.add(entry)
+                    entries.append(entry)
+            cls._winlens_alias_entries = entries
+        return cls._winlens_alias_entries
+
+    @staticmethod
+    def _find_winlens_glassplus_files() -> list[Path]:
+        filenames = ("stglassplus.dat", "spglassplus.dat")
+        paths: list[Path] = []
+        seen: set[Path] = set()
+        for base in (Path.cwd(), *Path.cwd().parents):
+            candidate_dir = base / "WinLens Library 2002" / "WinLens3DBasic"
+            for filename in filenames:
+                candidate = candidate_dir / filename
+                if not candidate.is_file():
+                    continue
+                resolved = candidate.resolve()
+                if resolved in seen:
+                    continue
+                seen.add(resolved)
+                paths.append(resolved)
+        return paths
+
+    @classmethod
+    def _extract_winlens_alias_entries(cls, data: bytes) -> list[tuple[str, str | None]]:
+        entries: list[tuple[str, str | None]] = []
+        seen: set[tuple[str, str | None]] = set()
+        for match in _WINLENS_ALIAS_ENTRY_RE.finditer(data):
+            name = match.group(1).decode("latin1", "ignore").strip()
+            reference = match.group(2).decode("latin1", "ignore").strip()
+            normalized_reference = cls._normalize_reference_value(reference)
+            entry = (name, normalized_reference)
+            if entry in seen:
+                continue
+            seen.add(entry)
+            entries.append(entry)
+        return entries
+
+    @staticmethod
+    def _normalize_material_alias_key(name: str | None) -> str:
+        compact = re.sub(r"[^A-Z0-9]", "", str(name or "").upper())
+        match = re.match(_WINLENS_N_PREFIX_RE, compact)
+        if match:
+            return f"N{match.group(1)}{match.group(2)}"
+        return compact
+
+    @staticmethod
+    def _normalize_reference_value(reference: str | None) -> str | None:
+        cleaned = str(reference or "").strip()
+        if not cleaned or cleaned.casefold() == "[generic]":
+            return None
+        return cleaned
+
+    @staticmethod
+    def _normalize_reference_key(reference: str | None) -> str | None:
+        cleaned = str(reference or "").strip()
+        if not cleaned:
+            return None
+        return cleaned.casefold()
+
+    @classmethod
+    def _verified_winlens_alias_targets(
+        cls,
+        name: str,
+        reference: str | None,
+    ) -> set[str]:
+        """Return alias candidates allowed by the strict no-review import policy."""
+        reference_key = cls._normalize_reference_key(reference)
+        if reference_key not in _VERIFIED_WINLENS_ALIAS_MANUFACTURERS:
+            return set()
+
+        compact_upper = re.sub(r"[^A-Z0-9]", "", str(name or "").upper())
+        targets: set[str] = set()
+
+        if reference_key == "schott":
+            match = re.match(_WINLENS_N_PREFIX_RE, compact_upper)
+            if match:
+                targets.add(f"N-{match.group(1)}{match.group(2)}")
+            if compact_upper.startswith("N") and len(compact_upper) > 2:
+                targets.add(f"N-{compact_upper[1:]}")
+
+        return {
+            target
+            for target in targets
+            if cls._catalog_contains_material(target, reference)
+        }
+
+    @classmethod
+    def resolve_winlens_safe_name(
+        cls,
+        name: str,
+        reference: str | None,
+    ) -> str | None:
+        """Return a canonical safe target for WinLens material import.
+
+        Only exact manufacturer/name matches or officially verified alias
+        transforms are accepted here. This intentionally excludes fuzzy
+        matching so non-verifiable WinLens materials stay unresolved.
+        """
+        direct_targets = cls._catalog_exact_targets(name, reference)
+        if len(direct_targets) == 1:
+            return next(iter(direct_targets))
+
+        alias_targets = cls._verified_winlens_alias_targets(name, reference)
+        if len(alias_targets) == 1:
+            return next(iter(alias_targets))
+
+        return None
+
+    @classmethod
+    def _catalog_contains_material(cls, name: str, reference: str | None) -> bool:
+        df = cls._load_dataframe()
+        name_key = cls._normalize_material_alias_key(name)
+        reference_key = cls._normalize_reference_key(reference)
+        if not name_key or not reference_key:
+            return False
+
+        refs = (
+            df["reference"].fillna("").str.casefold() == reference_key
+        ) | (
+            df["category_name"].fillna("").str.casefold() == reference_key
+        ) | (
+            df["category_name_full"].fillna("").str.casefold() == reference_key
+        )
+        names = df["filename_no_ext"].fillna("").apply(cls._normalize_material_alias_key) == name_key
+        return bool((refs & names).any())
+
+    @classmethod
+    def _catalog_exact_targets(cls, name: str, reference: str | None) -> set[str]:
+        df = cls._load_dataframe()
+        raw_name = str(name or "").strip()
+        reference_key = cls._normalize_reference_key(reference)
+        if not raw_name or not reference_key:
+            return set()
+
+        refs = (
+            df["reference"].fillna("").str.casefold() == reference_key
+        ) | (
+            df["category_name"].fillna("").str.casefold() == reference_key
+        ) | (
+            df["category_name_full"].fillna("").str.casefold() == reference_key
+        )
+        exact_name = df["name"].fillna("").str.casefold() == raw_name.casefold()
+        exact_filename = df["filename_no_ext"].fillna("").str.casefold() == raw_name.casefold()
+        matches = df[refs & (exact_name | exact_filename)]
+        return {
+            str(value).strip()
+            for value in matches["filename_no_ext"].dropna().tolist()
+            if str(value).strip()
+        }
+
+    @classmethod
+    def _catalog_has_exact_manufacturer_material(
+        cls,
+        name: str,
+        manufacturer: str | None,
+    ) -> bool:
+        df = cls._load_dataframe()
+        raw_name = str(name or "").strip()
+        manufacturer_key = cls._normalize_reference_key(manufacturer)
+        if not raw_name or not manufacturer_key:
+            return False
+
+        exact_name = (
+            df["name"].fillna("").str.casefold() == raw_name.casefold()
+        ) | (
+            df["filename_no_ext"].fillna("").str.casefold() == raw_name.casefold()
+        )
+        manufacturer_mask = (
+            df["reference"].fillna("").str.casefold().str.contains(manufacturer_key)
+            | df["category_name"].fillna("").str.casefold().str.contains(manufacturer_key)
+            | df["category_name_full"].fillna("").str.casefold().str.contains(manufacturer_key)
+            | df["filename"].fillna("").str.replace("\\", "/", regex=False).str.casefold().str.contains(f"/{manufacturer_key}/")
+        )
+        return bool((exact_name & manufacturer_mask).any())
 
     def _raise_material_error(self, no_matches=False, multiple_matches=False):
         """Raises an error if no matches or multiple matches are found for the

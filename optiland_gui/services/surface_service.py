@@ -607,16 +607,36 @@ class SurfaceService:
                 if semi_diameter not in (None, "", "Auto"):
                     aperture = configure_aperture(float(semi_diameter) * 2.0)
 
+                material_name = str(spec.get("material", "Air"))
+                material_reference = str(spec.get("material_reference", "")).strip()
+                if (
+                    material_reference
+                    and material_name.strip().lower() not in {"air", "mirror"}
+                ):
+                    safe_material_name = OptilandMaterial.resolve_winlens_safe_name(
+                        material_name,
+                        material_reference,
+                    )
+                    resolved_name = safe_material_name or material_name
+                    material_spec = OptilandMaterial(
+                        resolved_name,
+                        reference=material_reference,
+                        robust_search=safe_material_name is not None,
+                    )
+                else:
+                    material_spec = material_name
+
                 geometry_kwargs = {
                     key: self._normalize_insert_value(value)
                     for key, value in spec.items()
                     if key
                     not in {
                         "surface_type",
-                        "thickness",
-                        "material",
-                        "comment",
-                        "semi_diameter",
+                            "thickness",
+                            "material",
+                            "material_reference",
+                            "comment",
+                            "semi_diameter",
                     }
                 }
 
@@ -624,7 +644,7 @@ class SurfaceService:
                     index=insert_idx + offset,
                     surface_type=str(spec.get("surface_type", "standard")),
                     thickness=float(spec.get("thickness", 0.0)),
-                    material=str(spec.get("material", "Air")),
+                    material=material_spec,
                     comment=str(spec.get("comment", "Catalog Surface")),
                     is_stop=stop_offset == offset,
                     aperture=aperture,

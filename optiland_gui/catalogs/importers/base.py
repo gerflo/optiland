@@ -82,6 +82,7 @@ class CatalogImporter(ABC):
 
     manufacturer: str = ""
     catalog_url: str | None = None
+    supported_suffixes = {".json", ".zmx", ".zmf"}
 
     def import_file(self, path: str) -> list[CatalogLensRecord]:
         """Return normalized records from *path*."""

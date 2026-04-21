@@ -18,6 +18,11 @@ def record_to_insert_specs(record: CatalogLensRecord) -> tuple[list[dict], int |
             "semi_diameter": surface.semi_diameter,
             "comment": surface.comment or f"{record.manufacturer} {record.part_number}",
         }
+        material_reference = str(
+            surface.extra_data.get("material_catalog", "")
+        ).strip()
+        if material_reference:
+            spec["material_reference"] = material_reference
         if surface.surface_type == "toroidal":
             spec["radius_y"] = _normalize_value(surface.radius)
             spec["conic"] = surface.conic

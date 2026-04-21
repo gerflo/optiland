@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QMessageBox, QWidget
 
 from optiland_gui.catalog_browser_panel import CatalogBrowserPanel
 
@@ -34,9 +34,33 @@ class _DummyConnector(QObject):
     def resolve_catalog_product_url(self, catalog_id: str) -> str | None:
         return None
 
+    def get_catalog_record_links(self, catalog_id: str) -> list[dict]:
+        return []
+
+    def get_winlens_review_candidates(self, min_confidence_percent: int = 76) -> list[dict]:
+        return []
+
+    def confirm_winlens_links(self, selections: list[dict[str, str]]) -> int:
+        return len(selections)
+
+    def delete_catalog_records(self, catalog_ids: list[str]) -> int:
+        return len(catalog_ids)
+
     def import_catalog_file(self, manufacturer: str, paths: list[str]) -> int:
         self.import_calls.append((manufacturer, paths))
         return 3
+
+    def import_winlens_library(self, root_path: str):  # noqa: ANN202
+        self.import_calls.append(("WinLens Library 2002", [root_path]))
+        return type(
+            "_Result",
+            (),
+            {
+                "imported_count": 3,
+                "linked_count": 2,
+                "message": "Imported 3 WinLens SPD record(s) and built 2 link suggestion(s).",
+            },
+        )()
 
     def download_edmund_catalog(self):  # noqa: ANN202
         raise AssertionError("Download should not be called in this test")
@@ -151,6 +175,59 @@ class _MultiDocumentConnector(_ResultConnector):
         return []
 
 
+class _WinLensResultConnector(_ResultConnector):
+    def search_catalog_lenses(self, query: dict) -> list[dict]:
+        return [
+            {
+                "catalog_id": "winlens library 2002:317703",
+                "manufacturer": "WinLens Library 2002",
+                "part_number": "317703",
+                "product_name": "Asphere demo",
+                "category": "asphere",
+                "efl_mm": 15.0,
+                "diameter_mm": 18.0,
+                "material_summary": "N-BK7",
+                "coating": "",
+            }
+        ]
+
+    def get_catalog_lens_details(self, catalog_id: str) -> dict | None:
+        if catalog_id != "winlens library 2002:317703":
+            return None
+        return {
+            "catalog_id": catalog_id,
+            "manufacturer": "WinLens Library 2002",
+            "part_number": "317703",
+            "product_name": "Asphere demo",
+            "category": "asphere",
+            "efl_mm": 15.0,
+            "diameter_mm": 18.0,
+            "material_summary": "N-BK7",
+            "coating": "",
+            "availability_status": "unknown",
+            "surfaces": [{}, {}],
+            "source": {
+                "source_type": "winlens_spd",
+                "imported_at": "2026-04-21T16:00:00",
+            },
+        }
+
+    def get_catalog_record_links(self, catalog_id: str) -> list[dict]:
+        if catalog_id != "winlens library 2002:317703":
+            return []
+        return [
+            {
+                "catalog_id": "excelitas linos:g317703000",
+                "manufacturer": "Excelitas LINOS",
+                "part_number": "G317703000",
+                "product_name": "Asph. condenser lens",
+                "score": 140,
+                "match_type": "candidate",
+                "reasons": ["numeric part number overlap", "matching efl"],
+            }
+        ]
+
+
 class _LargeResultConnector(_DummyConnector):
     """Connector stub with enough rows to exercise batched population."""
 
@@ -230,13 +307,20 @@ def test_catalog_browser_uses_download_button_and_filter_row(qapp) -> None:
     assert panel.reset_filters_button.toolTip() == "Reset all search filters"
 
     download_actions = [action.text() for action in panel.download_catalog_button.menu().actions()]
-    assert download_actions == ["Excelitas / LINOS...", "Edmund Optics...", "Thorlabs..."]
+    assert download_actions == [
+        "Excelitas / LINOS...",
+        "Edmund Optics...",
+        "Thorlabs...",
+        "",
+        "Import WinLens Library...",
+    ]
 
-    assert panel.results_table.columnCount() == 8
+    assert panel.results_table.columnCount() == 11
     assert panel.results_table.horizontalHeader().sectionsMovable()
     assert panel.manufacturer_filter.parentWidget() is panel.filter_row_container
     assert panel.material_filter.parentWidget() is panel.filter_row_container
     assert panel.coating_filter.parentWidget() is panel.filter_row_container
+    assert panel.match_filter.parentWidget() is panel.filter_row_container
     assert panel.filter_row_container.parentWidget() is panel.table_view_content
     assert panel.results_table.parentWidget() is panel.table_view_content
 
@@ -254,6 +338,21 @@ def test_catalog_browser_import_folder_passes_directory_to_connector(monkeypatch
     QTest.qWait(50)
 
     assert connector.import_calls == [("Edmund", ["C:/catalogs/edmund"])]
+
+
+def test_catalog_browser_import_winlens_library_passes_directory_to_connector(monkeypatch, qapp) -> None:
+    connector = _DummyConnector()
+    panel = CatalogBrowserPanel(connector)
+
+    monkeypatch.setattr(
+        "optiland_gui.catalog_browser_panel.QFileDialog.getExistingDirectory",
+        lambda *args, **kwargs: "C:/catalogs/winlens",
+    )
+
+    panel._import_winlens_library()
+    QTest.qWait(50)
+
+    assert connector.import_calls == [("WinLens Library 2002", ["C:/catalogs/winlens"])]
 
 
 def test_catalog_browser_busy_indicator_toggles_import_ui_state(qapp) -> None:
@@ -281,6 +380,8 @@ def test_catalog_browser_reset_filters_restores_default_values(qapp) -> None:
     panel.diameter_filter.setText("5-20")
     panel.material_filter.setText("N-BK7")
     panel.coating_filter.setText("VIS")
+    panel.status_filter.setText("legacy")
+    panel.match_filter.setText("confirmed")
     panel.manufacturer_filter.setCurrentIndex(1)
 
     panel._reset_filters()
@@ -293,6 +394,8 @@ def test_catalog_browser_reset_filters_restores_default_values(qapp) -> None:
     assert panel.diameter_filter.text() == ""
     assert panel.material_filter.text() == ""
     assert panel.coating_filter.text() == ""
+    assert panel.status_filter.text() == ""
+    assert panel.match_filter.text() == ""
     assert panel.manufacturer_filter.currentData() == ""
 
 
@@ -326,20 +429,20 @@ def test_catalog_browser_restores_saved_column_widths_and_sort(monkeypatch, qapp
 def test_catalog_browser_numeric_columns_are_right_aligned_with_two_decimals(qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
 
-    efl_item = panel.results_table.item(0, 4)
-    diameter_item = panel.results_table.item(0, 5)
+    efl_item = panel.results_table.item(0, 5)
+    diameter_item = panel.results_table.item(0, 6)
 
     assert efl_item.text() == "12.35"
     assert diameter_item.text() == "25.00"
     assert bool(efl_item.textAlignment() & int(Qt.AlignmentFlag.AlignRight))
     assert bool(diameter_item.textAlignment() & int(Qt.AlignmentFlag.AlignRight))
-    assert panel.results_table.item(0, 6).text() == "N-BK7"
-    assert panel.results_table.item(0, 7).text() == "VIS"
+    assert panel.results_table.item(0, 7).text() == "N-BK7"
+    assert panel.results_table.item(0, 8).text() == "VIS"
 
 
 def test_catalog_browser_copy_shortcuts_copy_current_cell_and_row(qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
-    panel.results_table.setCurrentCell(0, 1)
+    panel.results_table.setCurrentCell(0, 2)
 
     panel._copy_current_cell_to_clipboard()
     assert qapp.clipboard().text() == "49-847"
@@ -406,7 +509,7 @@ def test_catalog_browser_filter_row_filters_material_and_part_number(qapp) -> No
     panel.refresh()
 
     assert panel.results_table.rowCount() == 1
-    assert panel.results_table.item(0, 1).text() == "49-847"
+    assert panel.results_table.item(0, 2).text() == "49-847"
 
 
 def test_catalog_browser_filter_row_reduces_results_when_part_number_does_not_match(qapp) -> None:
@@ -439,16 +542,90 @@ def test_catalog_browser_notify_uses_parent_toast_manager(qapp) -> None:
     assert host.toast_manager.calls == [("Imported 3 Edmund catalog entries.", "success")]
 
 
+def test_catalog_browser_details_show_top_match_for_winlens_records(qapp) -> None:
+    panel = CatalogBrowserPanel(_WinLensResultConnector())
+    panel.results_table.setCurrentCell(0, 0)
+    panel._update_details()
+
+    assert "Top link: Excelitas LINOS G317703000" in panel.details_text.text()
+    assert "Status: unknown" in panel.details_text.text()
+    assert "[candidate]" in panel.details_text.text()
+
+
+def test_catalog_browser_match_filter_keeps_confirmed_records(qapp) -> None:
+    class _MatchConnector(_WinLensResultConnector):
+        def search_catalog_lenses(self, query: dict) -> list[dict]:
+            rows = [
+                {
+                    "catalog_id": "winlens library 2002:322307",
+                    "manufacturer": "WinLens Library 2002",
+                    "part_number": "322307",
+                    "product_name": "Achromat demo",
+                    "category": "achromat",
+                    "efl_mm": 80.0,
+                    "diameter_mm": 25.4,
+                    "material_summary": "N-BK7",
+                    "coating": "",
+                    "availability_status": "",
+                    "match_type": "confirmed",
+                },
+                {
+                    "catalog_id": "winlens library 2002:317703",
+                    "manufacturer": "WinLens Library 2002",
+                    "part_number": "317703",
+                    "product_name": "Asphere demo",
+                    "category": "asphere",
+                    "efl_mm": 15.0,
+                    "diameter_mm": 18.0,
+                    "material_summary": "N-BK7",
+                    "coating": "",
+                    "availability_status": "unknown",
+                    "match_type": "candidate",
+                },
+            ]
+            match_filter = str(query.get("match_type_text", "")).casefold()
+            if not match_filter:
+                return rows
+            return [row for row in rows if match_filter in str(row.get("match_type", "")).casefold()]
+
+    panel = CatalogBrowserPanel(_MatchConnector())
+    panel.match_filter.setText("confirmed")
+    panel.refresh()
+
+    assert panel.results_table.rowCount() == 1
+    assert panel.results_table.item(0, 2).text() == "322307"
+
+
+def test_catalog_browser_can_mark_filtered_and_delete_marked(monkeypatch, qapp) -> None:
+    connector = _ResultConnector()
+    deleted: list[str] = []
+    connector.delete_catalog_records = lambda catalog_ids: deleted.extend(catalog_ids) or len(catalog_ids)  # type: ignore[method-assign]
+    panel = CatalogBrowserPanel(connector)
+
+    panel._mark_filtered_results()
+    assert "edmund:49-847" in panel._marked_catalog_ids
+
+    monkeypatch.setattr(
+        "optiland_gui.catalog_browser_panel.QMessageBox.question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+
+    panel._delete_marked_results()
+
+    assert deleted == ["edmund:49-847"]
+    assert panel._marked_catalog_ids == set()
+
+
 def test_catalog_browser_populates_large_result_sets_in_batches(qapp) -> None:
     panel = CatalogBrowserPanel(_LargeResultConnector())
 
     assert panel.results_table.rowCount() == 600
-    assert panel.results_table.item(0, 1) is not None
-    assert panel.results_table.item(300, 1) is None
+    assert panel.results_table.item(0, 2) is not None
+    assert panel.results_table.item(300, 2) is None
     assert panel.status_label.text() == "Loading catalog entries... 250/600"
 
     QTest.qWait(50)
 
-    assert panel.results_table.item(300, 1) is not None
+    assert panel.results_table.item(300, 2) is not None
     assert panel.status_label.text() == "600 catalog entries found."
     assert panel.results_table.currentRow() != -1

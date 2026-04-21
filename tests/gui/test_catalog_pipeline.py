@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
 from unittest.mock import MagicMock
+from pathlib import Path
 
 import pytest
+import yaml
+
+from optiland.materials import Material
+from optiland.materials.material_file import MaterialFile
 
 from optiland_gui.catalogs.insertion import record_to_insert_specs
 from optiland_gui.catalogs.search import CatalogSearchQuery, CatalogSearchService
@@ -23,6 +29,14 @@ def _mock_connector_with_optic(minimal_optic):
     conn.opticChanged = MagicMock()
     conn.opticChanged.emit.return_value = None
     return conn
+
+
+def _tmp_winlens_material_dir() -> Path:
+    path = Path(".tmp_testdata") / "catalog_pipeline_winlens_material"
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 class TestCatalogInsertionSpecs:
@@ -71,6 +85,34 @@ class TestCatalogInsertionSpecs:
         assert surfaces[1]["radius_x"] == float("inf")
         assert surfaces[1]["radius_y"] == float("inf")
         assert surfaces[1]["toroidal_coeffs_poly_y"] == [0.1, 0.2]
+
+    def test_record_to_insert_specs_preserves_material_reference(self) -> None:
+        record = CatalogLensRecord(
+            catalog_id="winlens:wlte007",
+            manufacturer="WinLens Library 2002",
+            part_number="WLTE007",
+            product_name="Tessar demo",
+            surfaces=[
+                LensSurfaceSpec(
+                    surface_type="standard",
+                    radius=12.0,
+                    thickness=4.1,
+                    material="BAFN10",
+                    semi_diameter=8.0,
+                    comment="Space 1",
+                    extra_data={"material_catalog": "Schott"},
+                )
+            ],
+            source=CatalogSource(
+                manufacturer="WinLens Library 2002",
+                source_type="winlens_spd",
+            ),
+        )
+
+        surfaces, _stop_offset = record_to_insert_specs(record)
+
+        assert surfaces[0]["material"] == "BAFN10"
+        assert surfaces[0]["material_reference"] == "Schott"
 
 
 class TestCatalogSurfaceInsertion:
@@ -128,6 +170,133 @@ class TestCatalogSurfaceInsertion:
         assert surface.geometry.R_rot == float("inf")
         assert list(surface.geometry.coeffs_poly_y) == pytest.approx([0.0, 0.0])
         assert float(surface.aperture.r_max) == pytest.approx(2.0)
+
+    def test_insert_surface_sequence_uses_material_reference_for_winlens_glass(self, service):
+        service.insert_surface_sequence(
+            1,
+            [
+                {
+                    "surface_type": "standard",
+                    "radius": 20.0,
+                    "thickness": 4.1,
+                    "material": "BAFN10",
+                    "material_reference": "Schott",
+                    "semi_diameter": 8.0,
+                    "comment": "Inserted WinLens Surface",
+                }
+            ],
+        )
+
+        surface = service._connector._optic.surfaces[1]
+        assert surface.material_post.name in {"N-BAF10", "BAFN10"}
+        assert surface.material_post.material_data["filename_no_ext"] in {"N-BAF10", "BAFN10"}
+        assert surface.material_post.reference == "Schott"
+
+    def test_insert_surface_sequence_rejects_unverified_winlens_material_mapping(self, service):
+        with pytest.raises(ValueError, match="No matches found for material ZZ_UNKNOWN"):
+            service.insert_surface_sequence(
+                1,
+                [
+                    {
+                        "surface_type": "standard",
+                        "radius": 20.0,
+                        "thickness": 4.1,
+                        "material": "ZZ_UNKNOWN",
+                        "material_reference": "Hoya",
+                        "semi_diameter": 8.0,
+                        "comment": "Inserted WinLens Surface",
+                    }
+                ],
+            )
+
+    def test_insert_surface_sequence_uses_imported_winlens_material_catalog(self, service):
+        tmp_dir = _tmp_winlens_material_dir()
+        database_root = Path(Material._filename).parent
+        local_csv = database_root / "catalog_nk_winlens.csv"
+        local_glass_root = database_root / "data-nk" / "glass" / "winlens"
+
+        backup_csv = local_csv.read_bytes() if local_csv.exists() else None
+        backup_glass_root = None
+        if local_glass_root.exists():
+            backup_glass_root = tmp_dir / "glass_winlens_backup"
+            shutil.copytree(local_glass_root, backup_glass_root)
+
+        hoya_dir = local_glass_root / "hoya"
+        hoya_glass = hoya_dir / "ADC1.yml"
+        try:
+            if local_csv.exists():
+                local_csv.unlink()
+            if local_glass_root.exists():
+                shutil.rmtree(local_glass_root)
+
+            hoya_dir.mkdir(parents=True, exist_ok=True)
+            hoya_glass.write_text(
+                yaml.safe_dump(
+                    {
+                        "REFERENCES": "Test-only imported WinLens glass.",
+                        "COMMENTS": "Synthetic direct WinLens import for pipeline coverage.",
+                        "DATA": [
+                            {
+                                "type": "formula 3",
+                                "wavelength_range": "0.36501 1.01398",
+                                "coefficients": (
+                                    "2.36274117 -0.0107297647 2 -0.0004333771 -2 "
+                                    "0.0132729695 -4 -0.000607998162 -6 "
+                                    "5.48245465e-05 -8"
+                                ),
+                            }
+                        ],
+                    },
+                    sort_keys=False,
+                    allow_unicode=False,
+                ),
+                encoding="utf-8",
+            )
+            specs = MaterialFile(str(hoya_glass))
+            local_csv.write_text(
+                (
+                    "group,category_name,category_name_full,reference,name,filename,"
+                    "min_wavelength,max_wavelength,filename_no_ext\n"
+                    "glass,WinLens,WinLens imported Hoya,Hoya,ADC1,"
+                    "glass/winlens/hoya/ADC1.yml,0.36501,1.01398,ADC1\n"
+                ),
+                encoding="utf-8",
+            )
+            Material._df = None
+
+            service.insert_surface_sequence(
+                1,
+                [
+                    {
+                        "surface_type": "standard",
+                        "radius": 20.0,
+                        "thickness": 4.1,
+                        "material": "ADC1",
+                        "material_reference": "Hoya",
+                        "semi_diameter": 8.0,
+                        "comment": "Inserted Imported WinLens Surface",
+                    }
+                ],
+            )
+
+            surface = service._connector._optic.surfaces[1]
+            assert surface.material_post.name == "ADC1"
+            assert surface.material_post.reference == "Hoya"
+            assert surface.material_post.material_data["filename"] == "glass/winlens/hoya/ADC1.yml"
+            imported_index = surface.material_post.n(0.5875618).item()
+            expected_index = specs.n(0.5875618).item()
+            assert imported_index == pytest.approx(expected_index)
+        finally:
+            Material._df = None
+            if local_csv.exists():
+                local_csv.unlink()
+            if local_glass_root.exists():
+                shutil.rmtree(local_glass_root)
+            if backup_csv is not None:
+                local_csv.write_bytes(backup_csv)
+            if backup_glass_root is not None and backup_glass_root.exists():
+                shutil.copytree(backup_glass_root, local_glass_root)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def test_insert_catalog_lens_rejects_metadata_only_records(self) -> None:
         connector = MagicMock()
@@ -193,3 +362,36 @@ class TestCatalogSearchNormalization:
         )
 
         assert [item.part_number for item in matches] == ["G063-213-000"]
+
+    def test_availability_filter_matches_legacy_records(self) -> None:
+        legacy_record = CatalogLensRecord(
+            catalog_id="winlens:322307",
+            manufacturer="WinLens Library 2002",
+            part_number="322307",
+            product_name="Achromat f = 80/25.4 mm",
+            category="achromat",
+            availability_status="legacy",
+            source=CatalogSource(
+                manufacturer="WinLens Library 2002",
+                source_type="winlens_dat",
+            ),
+        )
+        unknown_record = CatalogLensRecord(
+            catalog_id="winlens:317703",
+            manufacturer="WinLens Library 2002",
+            part_number="317703",
+            product_name="Asphere demo",
+            category="asphere",
+            availability_status="unknown",
+            source=CatalogSource(
+                manufacturer="WinLens Library 2002",
+                source_type="winlens_spd",
+            ),
+        )
+
+        matches = CatalogSearchService().search(
+            [legacy_record, unknown_record],
+            CatalogSearchQuery(availability_text="legacy"),
+        )
+
+        assert [item.part_number for item in matches] == ["322307"]

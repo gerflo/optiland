@@ -17,7 +17,9 @@ from optiland_gui.catalogs.importers import (
     ExcelitasCatalogImporter,
     EdmundCatalogImporter,
     ThorlabsCatalogImporter,
+    WinLensCatalogImporter,
 )
+from optiland_gui.catalogs.importers.winlens_spd import load_winlens_alias_groups
 from optiland_gui.catalogs.importers.excelitas_linos import (
     EXCELITAS_DISCOVERY_PAGE_URLS,
     EXCELITAS_DEFAULT_FAMILY_URLS,
@@ -26,6 +28,7 @@ from optiland_gui.catalogs.importers.excelitas_linos import (
     extract_excelitas_zemax_urls,
     looks_like_excelitas_family_page,
 )
+from optiland_gui.catalogs.matching import build_winlens_match_map
 from optiland_gui.catalogs.search import CatalogSearchQuery, CatalogSearchService
 from optiland_gui.catalogs.storage import CatalogStorage
 from optiland_gui.catalogs.schema import CatalogLensRecord
@@ -124,6 +127,16 @@ class CatalogDownloadResult:
     message: str
 
 
+@dataclass(slots=True)
+class CatalogImportResult:
+    """Result payload for local catalog imports."""
+
+    manufacturer: str
+    imported_count: int
+    linked_count: int = 0
+    message: str = ""
+
+
 class CatalogService:
     """Manage locally cached stock-lens records and vendor importers."""
 
@@ -139,6 +152,8 @@ class CatalogService:
             "excelitas": ExcelitasCatalogImporter(),
             "edmund": EdmundCatalogImporter(),
             "thorlabs": ThorlabsCatalogImporter(),
+            "winlens library 2002": WinLensCatalogImporter(),
+            "winlens": WinLensCatalogImporter(),
         }
 
     def import_catalog_file(self, manufacturer: str, filepath: str | list[str]) -> int:
@@ -150,6 +165,21 @@ class CatalogService:
         imported_records = self._load_records_from_import_paths(importer, filepath)
         self._persist_manufacturer_records(importer.manufacturer, imported_records)
         return len(imported_records)
+
+    def import_winlens_library(self, root_path: str) -> CatalogImportResult:
+        """Import a WinLens SPD library tree and refresh link suggestions."""
+        imported_count = self.import_catalog_file("WinLens Library 2002", root_path)
+        links = self._load_winlens_match_links()
+        linked_count = sum(1 for candidates in links.values() if candidates)
+        return CatalogImportResult(
+            manufacturer="WinLens Library 2002",
+            imported_count=imported_count,
+            linked_count=linked_count,
+            message=(
+                f"Imported {imported_count} WinLens SPD record(s) and built "
+                f"{linked_count} link suggestion(s)."
+            ),
+        )
 
     def download_excelitas_catalog(
         self,
@@ -363,16 +393,20 @@ class CatalogService:
         filepath: str | list[str],
     ) -> list[CatalogLensRecord]:
         """Load records from files/folders for a concrete importer without persisting yet."""
+        supported_suffixes = set(getattr(importer, "supported_suffixes", {".json", ".zmx", ".zmf"}))
         input_paths = [filepath] if isinstance(filepath, str) else filepath
         extracted_dirs = self._extract_zip_archives(importer.manufacturer, input_paths)
         search_paths = [*input_paths, *[str(path) for path in extracted_dirs]]
-        zmf_paths = self._find_zmf_paths(search_paths)
-        expanded_paths = self._expand_import_paths(search_paths)
+        zmf_paths = self._find_zmf_paths(search_paths) if ".zmf" in supported_suffixes else []
+        expanded_paths = self._expand_import_paths(
+            search_paths,
+            supported_suffixes - {".zmf"},
+        )
         import_paths = [*expanded_paths, *zmf_paths]
         if not import_paths:
             raise ValueError(
                 "No supported catalog files were selected. "
-                "Choose .zip, .zmx, .zmf, or normalized .json files."
+                "Choose .zip, .zmx, .zmf, .spd, or normalized .json files."
             )
 
         imported_records: list[CatalogLensRecord] = []
@@ -420,6 +454,7 @@ class CatalogService:
             ),
         )
         self._reload_all()
+        self._refresh_winlens_record_links()
 
     def _merge_excelitas_records(
         self,
@@ -651,6 +686,7 @@ class CatalogService:
     def search(self, query_dict: dict | None = None) -> list[dict]:
         """Return GUI summary dicts matching *query_dict*."""
         query_dict = query_dict or {}
+        match_type_text = str(query_dict.get("match_type_text", "")).casefold().strip()
         query = CatalogSearchQuery(
             text=str(query_dict.get("text", "")),
             manufacturer=str(query_dict.get("manufacturer", "")),
@@ -663,8 +699,20 @@ class CatalogService:
             diameter_max=_float_or_none(query_dict.get("diameter_max")),
             material_text=str(query_dict.get("material_text", "")),
             coating_text=str(query_dict.get("coating_text", "")),
+            availability_text=str(query_dict.get("availability_text", "")),
         )
-        return [record.to_summary_dict() for record in self._search_service.search(self._records, query)]
+        summaries: list[dict] = []
+        link_map = self._load_winlens_match_links()
+        for record in self._search_service.search(self._records, query):
+            summary = record.to_summary_dict()
+            top_link = link_map.get(record.catalog_id, [])
+            summary["match_type"] = (
+                str(top_link[0].get("match_type", "")).strip() if top_link else ""
+            )
+            if match_type_text and match_type_text not in summary["match_type"].casefold():
+                continue
+            summaries.append(summary)
+        return summaries
 
     def get_record(self, catalog_id: str) -> CatalogLensRecord | None:
         """Return a full record by id."""
@@ -693,6 +741,128 @@ class CatalogService:
             return []
         return [str(url) for url in urls if isinstance(url, str) and url.strip()]
 
+    def get_record_links(self, catalog_id: str) -> list[dict[str, object]]:
+        """Return cached candidate record links for *catalog_id*."""
+        return list(self._load_winlens_match_links().get(catalog_id, []))
+
+    def get_winlens_review_candidates(self, min_confidence_percent: int = 76) -> list[dict[str, object]]:
+        """Return WinLens candidate matches that are strong enough for manual review."""
+        link_map = self._load_winlens_match_links()
+        review_rows: list[dict[str, object]] = []
+        for record in self._records:
+            if record.manufacturer.casefold() != "winlens library 2002":
+                continue
+            links = link_map.get(record.catalog_id, [])
+            if not links:
+                continue
+            top_link = links[0]
+            if str(top_link.get("match_type", "")).casefold() != "candidate":
+                continue
+            confidence = int(top_link.get("confidence_percent", 0) or 0)
+            if confidence < min_confidence_percent:
+                continue
+            review_rows.append(
+                {
+                    "winlens_catalog_id": record.catalog_id,
+                    "winlens_part_number": record.part_number,
+                    "winlens_name": record.product_name,
+                    "family_key": self._review_family_key(record, top_link),
+                    "status": record.availability_status or "",
+                    "target_catalog_id": str(top_link.get("catalog_id", "")),
+                    "target_part_number": str(top_link.get("part_number", "")),
+                    "target_name": str(top_link.get("product_name", "")),
+                    "match_type": str(top_link.get("match_type", "")),
+                    "score": int(top_link.get("score", 0) or 0),
+                    "confidence_percent": confidence,
+                    "reasons": [str(reason) for reason in top_link.get("reasons", [])],
+                    "preview": self._build_review_preview(record, top_link),
+                }
+            )
+        return sorted(
+            review_rows,
+            key=lambda item: (
+                str(item["family_key"]),
+                -int(item["confidence_percent"]),
+                str(item["winlens_part_number"]),
+            ),
+        )
+
+    def _review_family_key(self, record: CatalogLensRecord, top_link: dict[str, object]) -> str:
+        winlens_digits = re.sub(r"[^0-9]+", "", record.part_number)
+        target_digits = re.sub(r"[^0-9]+", "", str(top_link.get("part_number", "")))
+        if len(target_digits) >= 6:
+            return target_digits[:6]
+        if len(winlens_digits) >= 6:
+            return winlens_digits[:6]
+        return winlens_digits or record.part_number
+
+    def _build_review_preview(self, record: CatalogLensRecord, top_link: dict[str, object]) -> str:
+        target_part = str(top_link.get("part_number", ""))
+        family_key = self._review_family_key(record, top_link)
+        return f"Confirm family {family_key} -> {target_part}"
+
+    def confirm_winlens_links(self, selections: list[dict[str, str]]) -> int:
+        """Persist manually reviewed WinLens links as confirmed mappings."""
+        if not selections:
+            return 0
+        current_map = self._load_winlens_match_links()
+        persisted_payload = self._storage.load_cache_payload("winlens_confirmed_links")
+        persisted_links = persisted_payload.get("links", {}) if isinstance(persisted_payload, dict) else {}
+        if not isinstance(persisted_links, dict):
+            persisted_links = {}
+        applied = 0
+        for selection in selections:
+            winlens_catalog_id = str(selection.get("winlens_catalog_id", ""))
+            target_catalog_id = str(selection.get("target_catalog_id", ""))
+            if not winlens_catalog_id or not target_catalog_id:
+                continue
+            link = next(
+                (
+                    dict(item)
+                    for item in current_map.get(winlens_catalog_id, [])
+                    if str(item.get("catalog_id", "")) == target_catalog_id
+                ),
+                None,
+            )
+            if link is None:
+                continue
+            link["match_type"] = "confirmed"
+            link["confidence_percent"] = 100
+            reasons = [str(reason) for reason in link.get("reasons", [])]
+            if "Manual review apply" not in reasons:
+                reasons.append("Manual review apply")
+            link["reasons"] = reasons
+            persisted_links[winlens_catalog_id] = link
+            applied += 1
+        self._storage.save_cache_payload(
+            "winlens_confirmed_links",
+            {
+                "manufacturer": "WinLens Library 2002",
+                "links": persisted_links,
+            },
+        )
+        self._refresh_winlens_record_links()
+        return applied
+
+    def delete_records(self, catalog_ids: list[str]) -> int:
+        """Delete cached catalog records by id and persist the remaining records."""
+        to_delete = {str(catalog_id) for catalog_id in catalog_ids if str(catalog_id).strip()}
+        if not to_delete:
+            return 0
+        removed = 0
+        seen_manufacturers = {record.manufacturer for record in self._records}
+        manufacturers: dict[str, list[CatalogLensRecord]] = {}
+        for record in self._records:
+            if record.catalog_id in to_delete:
+                removed += 1
+                continue
+            manufacturers.setdefault(record.manufacturer, []).append(record)
+        for manufacturer in seen_manufacturers:
+            self._storage.save_records(manufacturer, manufacturers.get(manufacturer, []))
+        self._reload_all()
+        self._refresh_winlens_record_links()
+        return removed
+
     def resolve_product_url(self, catalog_id: str) -> str | None:
         """Resolve a current product webpage URL for *catalog_id*."""
         record = self.get_record(catalog_id)
@@ -702,6 +872,167 @@ class CatalogService:
 
     def _reload_all(self) -> None:
         self._records = self._storage.load_all_records()
+
+    def _refresh_winlens_record_links(self) -> None:
+        """Rebuild cached WinLens record-link suggestions when possible."""
+        winlens_records = [
+            record
+            for record in self._records
+            if record.manufacturer.casefold() == "winlens library 2002"
+        ]
+        if not winlens_records:
+            self._storage.save_cache_payload(
+                "winlens_record_links",
+                {"manufacturer": "WinLens Library 2002", "links": {}},
+            )
+            return
+        existing_records = [
+            record
+            for record in self._records
+            if record.manufacturer.casefold() != "winlens library 2002"
+        ]
+        alias_groups = self._load_winlens_alias_groups(winlens_records)
+        link_map = build_winlens_match_map(
+            winlens_records,
+            existing_records,
+            alias_groups,
+        )
+        link_map = self._merge_persisted_confirmed_links(link_map, existing_records)
+        self._storage.save_cache_payload(
+            "winlens_record_links",
+            {
+                "manufacturer": "WinLens Library 2002",
+                "links": link_map,
+            },
+        )
+        self._save_persisted_confirmed_links(link_map)
+        updated_records = self._apply_winlens_availability_statuses(
+            winlens_records,
+            link_map,
+            alias_groups,
+        )
+        if any(
+            old.availability_status != new.availability_status
+            for old, new in zip(winlens_records, updated_records, strict=False)
+        ):
+            self._storage.save_records("WinLens Library 2002", updated_records)
+            self._reload_all()
+
+    def _load_winlens_match_links(self) -> dict[str, list[dict[str, object]]]:
+        """Load cached WinLens record-link suggestions."""
+        payload = self._storage.load_cache_payload("winlens_record_links")
+        links = payload.get("links", {})
+        return links if isinstance(links, dict) else {}
+
+    def _load_winlens_alias_groups(self, winlens_records: list[CatalogLensRecord]):
+        """Load auxiliary WinLens alias groups near the imported SPD files."""
+        roots: set[Path] = set()
+        for record in winlens_records:
+            source_path = (record.source.source_path or "").strip()
+            if not source_path:
+                continue
+            path = Path(source_path)
+            for parent in (path.parent, *path.parents):
+                if parent.name.casefold() == "winlens library 2002":
+                    roots.add(parent)
+                    break
+        alias_groups = []
+        for root in sorted(roots):
+            alias_groups.extend(load_winlens_alias_groups(root))
+        return alias_groups
+
+    def _apply_winlens_availability_statuses(
+        self,
+        winlens_records: list[CatalogLensRecord],
+        link_map: dict[str, list[dict[str, object]]],
+        alias_groups: list,
+    ) -> list[CatalogLensRecord]:
+        """Assign `legacy`/`unknown` to WinLens-only records without a confirmed current match."""
+        alias_tokens = self._build_winlens_alias_token_set(alias_groups)
+        updated: list[CatalogLensRecord] = []
+        for record in winlens_records:
+            links = link_map.get(record.catalog_id, [])
+            confirmed_links = [
+                link for link in links if str(link.get("match_type", "")).casefold() == "confirmed"
+            ]
+            if confirmed_links:
+                record.availability_status = None
+            elif links:
+                record.availability_status = "unknown"
+            elif self._record_has_alias_context(record, alias_tokens):
+                record.availability_status = "legacy"
+            else:
+                record.availability_status = "unknown"
+            record.search_blob = record.build_search_blob()
+            updated.append(record)
+        return updated
+
+    def _build_winlens_alias_token_set(self, alias_groups: list) -> set[str]:
+        tokens: set[str] = set()
+        for group in alias_groups:
+            for token in [*getattr(group, "part_numbers", []), *getattr(group, "family_numbers", [])]:
+                clean = re.sub(r"[^0-9]+", "", str(token))
+                if clean:
+                    tokens.add(clean)
+        return tokens
+
+    def _record_has_alias_context(self, record: CatalogLensRecord, alias_tokens: set[str]) -> bool:
+        record_digits = re.sub(r"[^0-9]+", "", record.part_number)
+        if record_digits and record_digits in alias_tokens:
+            return True
+        if len(record_digits) >= 6 and record_digits[:6] in alias_tokens:
+            return True
+        return False
+
+    def _save_persisted_confirmed_links(
+        self,
+        link_map: dict[str, list[dict[str, object]]],
+    ) -> None:
+        payload_links: dict[str, dict[str, object]] = {}
+        for catalog_id, links in link_map.items():
+            confirmed = next(
+                (
+                    link for link in links
+                    if str(link.get("match_type", "")).casefold() == "confirmed"
+                ),
+                None,
+            )
+            if confirmed is None:
+                continue
+            payload_links[catalog_id] = dict(confirmed)
+        self._storage.save_cache_payload(
+            "winlens_confirmed_links",
+            {
+                "manufacturer": "WinLens Library 2002",
+                "links": payload_links,
+            },
+        )
+
+    def _merge_persisted_confirmed_links(
+        self,
+        link_map: dict[str, list[dict[str, object]]],
+        existing_records: list[CatalogLensRecord],
+    ) -> dict[str, list[dict[str, object]]]:
+        payload = self._storage.load_cache_payload("winlens_confirmed_links")
+        persisted = payload.get("links", {})
+        if not isinstance(persisted, dict):
+            return link_map
+        valid_catalog_ids = {record.catalog_id for record in existing_records}
+        merged = {catalog_id: list(links) for catalog_id, links in link_map.items()}
+        for winlens_catalog_id, link in persisted.items():
+            if not isinstance(link, dict):
+                continue
+            target_catalog_id = str(link.get("catalog_id", ""))
+            if not target_catalog_id or target_catalog_id not in valid_catalog_ids:
+                continue
+            current_links = merged.setdefault(winlens_catalog_id, [])
+            current_links = [
+                item for item in current_links
+                if str(item.get("catalog_id", "")) != target_catalog_id
+            ]
+            current_links.insert(0, dict(link))
+            merged[winlens_catalog_id] = current_links[:5]
+        return merged
 
     def _enrich_imported_records(
         self,
@@ -878,9 +1209,13 @@ class CatalogService:
 
         return _build_edmund_search_url(part_number)
 
-    def _expand_import_paths(self, raw_paths: Iterable[str]) -> list[Path]:
+    def _expand_import_paths(
+        self,
+        raw_paths: Iterable[str],
+        suffixes: set[str] | None = None,
+    ) -> list[Path]:
         """Return supported files from *raw_paths*, expanding directories recursively."""
-        return self._collect_paths(raw_paths, {".json", ".zmx"})
+        return self._collect_paths(raw_paths, suffixes or {".json", ".zmx"})
 
     def _find_zmf_paths(self, raw_paths: Iterable[str]) -> list[Path]:
         """Return ZMF files from *raw_paths*, expanding directories recursively."""
@@ -1162,6 +1497,9 @@ def _merge_catalog_record_pair(
         edge_thickness_mm=optical_record.edge_thickness_mm or metadata_record.edge_thickness_mm,
         material_summary=metadata_record.material_summary or optical_record.material_summary,
         coating=metadata_record.coating or optical_record.coating,
+        availability_status=(
+            metadata_record.availability_status or optical_record.availability_status
+        ),
         wavelength_min_um=optical_record.wavelength_min_um or metadata_record.wavelength_min_um,
         wavelength_max_um=optical_record.wavelength_max_um or metadata_record.wavelength_max_um,
         surfaces=optical_record.surfaces or metadata_record.surfaces,

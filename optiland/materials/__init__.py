@@ -18,6 +18,11 @@ from .material_utils import (
     plot_glass_map,
     plot_nk,
 )
+from .winlens_glassplus import WinLensGlassplusRecord, find_glassplus_record, iter_glassplus_records
+from .winlens_material_import import (
+    WinLensMaterialImportResult,
+    import_validated_winlens_materials,
+)
 
 __all__ = [
     # From abbe.py
@@ -38,5 +43,10 @@ __all__ = [
     "glasses_selection",
     "plot_glass_map",
     "plot_nk",
+    "WinLensGlassplusRecord",
+    "find_glassplus_record",
+    "iter_glassplus_records",
+    "WinLensMaterialImportResult",
+    "import_validated_winlens_materials",
     find_closest_glass,
 ]

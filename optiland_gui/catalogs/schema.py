@@ -85,6 +85,7 @@ class CatalogLensRecord:
     edge_thickness_mm: float | None = None
     material_summary: str | None = None
     coating: str | None = None
+    availability_status: str | None = None
     wavelength_min_um: float | None = None
     wavelength_max_um: float | None = None
     surfaces: list[LensSurfaceSpec] = field(default_factory=list)
@@ -119,6 +120,7 @@ class CatalogLensRecord:
             edge_thickness_mm=_float_or_none(data.get("edge_thickness_mm")),
             material_summary=data.get("material_summary"),
             coating=data.get("coating"),
+            availability_status=data.get("availability_status"),
             wavelength_min_um=_float_or_none(data.get("wavelength_min_um")),
             wavelength_max_um=_float_or_none(data.get("wavelength_max_um")),
             surfaces=[
@@ -144,6 +146,7 @@ class CatalogLensRecord:
             self.category,
             self.material_summary or "",
             self.coating or "",
+            self.availability_status or "",
             " ".join(self.tags),
         ]
         return " ".join(token for token in tokens if token).casefold()
@@ -166,6 +169,7 @@ class CatalogLensRecord:
             "diameter_mm": self.diameter_mm,
             "material_summary": self.material_summary,
             "coating": self.coating,
+            "availability_status": self.availability_status,
             "surface_count": len(self.surfaces),
         }
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from importlib import resources
+from pathlib import Path
+import shutil
 import time
 from unittest.mock import MagicMock
 
@@ -13,6 +15,14 @@ from optiland.materials.base import BaseMaterial
 from optiland.optic import Optic
 
 from .utils import assert_allclose
+
+
+def _workspace_tmp_dir(name: str) -> Path:
+    path = Path(".tmp_testdata") / name
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 class TestBaseMaterial:
@@ -634,6 +644,114 @@ class TestMaterial:
         # There are also many materials matches for BK7 with schott reference.
         with pytest.raises(ValueError):
             materials.Material("BK7", reference="schott", robust_search=False)
+
+    def test_winlens_alias_material_name_resolves_to_schott_glass(self, set_test_backend):
+        material = materials.Material("BAFN10", reference="schott")
+        assert material.material_data["filename_no_ext"] == "N-BAF10"
+
+    def test_extract_winlens_alias_entries_parses_glassplus_records(self, set_test_backend):
+        data = (
+            b"BAFN10                        \xff\xffSchott                        \x07;\n\x00"
+            b"N-BAF10                       \x02\x00Schott                        \x07;\n\x00"
+            b"B270                          \x00\x00[generic]                     B\x07\x00"
+        )
+
+        entries = materials.Material._extract_winlens_alias_entries(data)
+
+        assert ("BAFN10", "Schott") in entries
+        assert ("N-BAF10", "Schott") in entries
+        assert ("B270", None) in entries
+
+    def test_lookup_winlens_alias_candidates_returns_manufacturer_peer(self, set_test_backend):
+        materials.Material._winlens_alias_entries = [
+            ("BAFN10", "Schott"),
+            ("N-BAF10", "Schott"),
+            ("BAF10", "Hoya"),
+        ]
+        try:
+            candidates = materials.Material._lookup_winlens_alias_candidates(
+                "BAFN10",
+                "schott",
+            )
+        finally:
+            materials.Material._winlens_alias_entries = None
+
+        assert "N-BAF10" in candidates
+        assert "BAF10" not in candidates
+
+    def test_lookup_winlens_alias_candidates_ignores_unverified_manufacturers(self, set_test_backend):
+        materials.Material._winlens_alias_entries = [
+            ("BAF10", "Hoya"),
+            ("BAF10", "Schott"),
+        ]
+        try:
+            candidates = materials.Material._lookup_winlens_alias_candidates(
+                "BAF10",
+                "hoya",
+            )
+        finally:
+            materials.Material._winlens_alias_entries = None
+
+        assert candidates == []
+
+    def test_resolve_winlens_safe_name_returns_verified_schott_target(self, set_test_backend):
+        resolved = materials.Material.resolve_winlens_safe_name("BAFN10", "Schott")
+        assert resolved in {"N-BAF10", "BAFN10"}
+
+    def test_resolve_winlens_safe_name_accepts_direct_imported_winlens_target(self, set_test_backend):
+        tmp_dir = _workspace_tmp_dir("materials_direct_winlens_target")
+        extra_csv = tmp_dir / "catalog_nk_winlens.csv"
+        extra_csv.write_text(
+            (
+                "group,category_name,category_name_full,reference,name,filename,"
+                "min_wavelength,max_wavelength,filename_no_ext\n"
+                "glass,WinLens,WinLens imported Hoya,Hoya,ADC1,"
+                "glass/winlens/hoya/ADC1.yml,0.36501,1.01398,ADC1\n"
+            ),
+            encoding="utf-8",
+        )
+
+        original_df = materials.Material._df
+        original_extra_catalog_csv_files = materials.Material._extra_catalog_csv_files
+        materials.Material._df = None
+        materials.Material._extra_catalog_csv_files = classmethod(lambda cls: [extra_csv])
+        try:
+            resolved = materials.Material.resolve_winlens_safe_name("ADC1", "Hoya")
+        finally:
+            materials.Material._df = original_df
+            materials.Material._extra_catalog_csv_files = original_extra_catalog_csv_files
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        assert resolved == "ADC1"
+
+    def test_exact_schott_f2_match_is_not_ambiguous(self, set_test_backend):
+        material = materials.Material("F2", reference="Schott", robust_search=False)
+        assert material.material_data["filename_no_ext"] == "F2"
+        assert material.material_data["filename"] == "glass/schott/F2.yml"
+
+    def test_catalog_has_exact_manufacturer_material_detects_existing_schott_glass(
+        self,
+        set_test_backend,
+    ):
+        assert materials.Material._catalog_has_exact_manufacturer_material("F2", "Schott")
+
+    def test_load_dataframe_ignores_empty_extra_catalog_csv(self, set_test_backend):
+        tmp_dir = _workspace_tmp_dir("materials_empty_extra_catalog")
+        empty_csv = tmp_dir / "catalog_nk_winlens.csv"
+        empty_csv.write_text("\n", encoding="utf-8")
+
+        original_df = materials.Material._df
+        original_extra_catalog_csv_files = materials.Material._extra_catalog_csv_files
+        materials.Material._df = None
+        materials.Material._extra_catalog_csv_files = classmethod(lambda cls: [empty_csv])
+        try:
+            df = materials.Material._load_dataframe()
+        finally:
+            materials.Material._df = original_df
+            materials.Material._extra_catalog_csv_files = original_extra_catalog_csv_files
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        assert not df.empty
 
     def test_min_wavelength_filtering(self, set_test_backend):
         material = materials.Material("SF11", min_wavelength=2.0)
