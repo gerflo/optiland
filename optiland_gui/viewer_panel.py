@@ -304,6 +304,14 @@ class ViewerPanel(QWidget):
             "Lock the current zoom and pan level when the system updates."
         )
         toolbar_layout.addWidget(self.preserve_zoom_checkbox)
+        self.preserve_xy_ratio_checkbox = QCheckBox("Preserve X/Y Ratio")
+        self.preserve_xy_ratio_checkbox.setToolTip(
+            "Keep equal scaling between the X and Y axes in the 2D layout."
+        )
+        self.preserve_xy_ratio_checkbox.toggled.connect(
+            self.viewer2D.set_preserve_xy_ratio
+        )
+        toolbar_layout.addWidget(self.preserve_xy_ratio_checkbox)
         toolbar_layout.addStretch()
 
         layout.addLayout(toolbar_layout)
@@ -355,6 +363,7 @@ class MatplotlibViewer(QWidget):
         super().__init__(parent)
         self.connector = connector
         self.current_theme = "dark"
+        self._preserve_xy_ratio = False
 
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -581,6 +590,11 @@ class MatplotlibViewer(QWidget):
         self.settings_toggle_btn.setIcon(QIcon(f":/icons/{theme}/settings.svg"))
         self.toolbar.update_theme()
 
+    def set_preserve_xy_ratio(self, preserve: bool) -> None:
+        """Toggle equal X/Y scaling for the 2D layout plot."""
+        self._preserve_xy_ratio = bool(preserve)
+        self.plot_optic()
+
     def plot_optic(self, preserve_zoom=False):
         """
         Clears the current plot and redraws the optical system.
@@ -633,7 +647,10 @@ class MatplotlibViewer(QWidget):
                     self.ax.set_xlabel("Z-axis (mm)")
                     self.ax.set_ylabel("Y-axis (mm)")
                     self.ax.grid(True, linestyle="--", alpha=0.7)
-                    self.ax.set_aspect("auto")
+                    if self._preserve_xy_ratio:
+                        self.ax.set_aspect("equal", adjustable="box")
+                    else:
+                        self.ax.set_aspect("auto")
 
                     if should_preserve_limits and xlim is not None and ylim is not None:
                         self.ax.set_xlim(xlim)

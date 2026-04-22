@@ -602,6 +602,10 @@ def _load_winlens_lens_family_dat_records(path: Path, manufacturer: str) -> list
     raw_data = path.read_bytes()
     records: list[CatalogLensRecord] = []
     pending_record_indexes: list[int] = []
+    last_group_indexes: list[int] = []
+    last_group_title = ""
+    last_group_efl_mm: float | None = None
+    last_group_diameter_mm: float | None = None
     search_cursor = 0
     printable_entries = _extract_printable_strings(path)
     repeated_anchor_tokens = _find_repeated_family_anchor_tokens(printable_entries)
@@ -680,9 +684,32 @@ def _load_winlens_lens_family_dat_records(path: Path, manufacturer: str) -> list
                 record.search_blob = record.build_search_blob()
                 current_indexes.append(len(records))
                 records.append(record)
+            if (
+                surfaces
+                and last_group_indexes
+                and _should_apply_eco_variant_recipe(
+                    last_group_title,
+                    last_group_efl_mm,
+                    last_group_diameter_mm,
+                    title,
+                    efl_mm,
+                    diameter_mm,
+                    part_numbers,
+                )
+            ):
+                _apply_recipe_to_existing_records(
+                    records,
+                    last_group_indexes,
+                    surfaces,
+                    inline_materials,
+                )
             if recipe is not None:
                 search_cursor = recipe["next_cursor"]
             pending_record_indexes = current_indexes
+            last_group_indexes = current_indexes
+            last_group_title = title
+            last_group_efl_mm = efl_mm
+            last_group_diameter_mm = diameter_mm
             continue
         material_candidates = _extract_material_sequence(normalized)
         if material_candidates and pending_record_indexes:
@@ -698,6 +725,75 @@ def _load_winlens_lens_family_dat_records(path: Path, manufacturer: str) -> list
                 records[index].search_blob = records[index].build_search_blob()
             pending_record_indexes = []
     return records
+
+
+def _should_apply_eco_variant_recipe(
+    previous_title: str,
+    previous_efl_mm: float | None,
+    previous_diameter_mm: float | None,
+    current_title: str,
+    current_efl_mm: float | None,
+    current_diameter_mm: float | None,
+    current_part_numbers: list[str],
+) -> bool:
+    if "eco-vers.-322" not in previous_title.casefold():
+        return False
+    if "eco-vers.-322" in current_title.casefold():
+        return False
+    if not any(part.endswith("322") for part in current_part_numbers):
+        return False
+    if previous_efl_mm is None or current_efl_mm is None:
+        return False
+    if abs(previous_efl_mm - current_efl_mm) > 1e-6:
+        return False
+    if previous_diameter_mm is None or current_diameter_mm is None:
+        return True
+    return abs(previous_diameter_mm - current_diameter_mm) <= 1e-6
+
+
+def _apply_recipe_to_existing_records(
+    records: list[CatalogLensRecord],
+    indexes: list[int],
+    surfaces: list[LensSurfaceSpec],
+    materials: list[str],
+) -> None:
+    copied_surfaces = [
+        LensSurfaceSpec(
+            surface_type=surface.surface_type,
+            radius=surface.radius,
+            thickness=surface.thickness,
+            material=surface.material,
+            conic=surface.conic,
+            semi_diameter=surface.semi_diameter,
+            comment=surface.comment,
+            extra_data=dict(surface.extra_data),
+        )
+        for surface in surfaces
+    ]
+    material_summary = ", ".join(materials) if materials else None
+    for index in indexes:
+        records[index].surfaces = [
+            LensSurfaceSpec(
+                surface_type=surface.surface_type,
+                radius=surface.radius,
+                thickness=surface.thickness,
+                material=surface.material,
+                conic=surface.conic,
+                semi_diameter=surface.semi_diameter,
+                comment=surface.comment,
+                extra_data=dict(surface.extra_data),
+            )
+            for surface in copied_surfaces
+        ]
+        if material_summary:
+            records[index].material_summary = material_summary
+            records[index].tags = _build_table_tags(
+                "winlens",
+                records[index].category,
+                records[index].product_name,
+                *materials,
+            )
+            records[index].search_blob = records[index].build_search_blob()
 
 
 def _find_repeated_family_anchor_tokens(entries: list[str]) -> set[str]:

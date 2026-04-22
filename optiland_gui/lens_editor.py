@@ -12,10 +12,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QIcon, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
+    QApplication,
     QCompleter,
     QFormLayout,
     QHBoxLayout,
@@ -363,6 +364,10 @@ class LensEditor(QWidget):
         self.tableWidget.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.tableWidget.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.tableWidget.setTabKeyNavigation(False)
+        self.copy_cell_shortcut = QShortcut(QKeySequence.Copy, self.tableWidget)
+        self.copy_insert_shortcut = QShortcut(
+            QKeySequence("Ctrl+Insert"), self.tableWidget
+        )
 
         # Accent focus delegate (SPEC §4.1)
         self._focus_delegate = _AccentFocusDelegate(self, self.tableWidget)
@@ -394,6 +399,10 @@ class LensEditor(QWidget):
     def connect_signals(self):
         self.btnAddSurface.clicked.connect(self.add_surface_handler)
         self.btnRemoveSurface.clicked.connect(self.remove_surface_handler)
+        self.copy_cell_shortcut.activated.connect(self._copy_current_cell_to_clipboard)
+        self.copy_insert_shortcut.activated.connect(
+            self._copy_current_cell_to_clipboard
+        )
         self.tableWidget.itemChanged.connect(self.on_item_changed_handler)
         self.tableWidget.customContextMenuRequested.connect(self.show_context_menu)
         self.tableWidget.itemSelectionChanged.connect(self.update_headers_on_selection)
@@ -570,6 +579,41 @@ class LensEditor(QWidget):
         self.tableWidget.setCurrentCell(row, col)
         self.tableWidget.scrollToItem(item, QAbstractItemView.PositionAtCenter)
         self.tableWidget.editItem(item)
+
+    def _cell_display_text(self, row: int, col: int) -> str:
+        """Return the visible text for a table cell, including widget-backed ones."""
+        item = self.tableWidget.item(row, col)
+        if item is not None:
+            return item.text()
+
+        widget = self.tableWidget.cellWidget(row, col)
+        if isinstance(widget, SurfaceTypeWidget):
+            return widget.type_edit.text()
+        if widget is not None and hasattr(widget, "text"):
+            try:
+                return str(widget.text())
+            except TypeError:
+                return ""
+        return ""
+
+    def _copy_current_cell_to_clipboard(self) -> None:
+        """Copy the currently focused cell value to the clipboard."""
+        row = self.tableWidget.currentRow()
+        col = self.tableWidget.currentColumn()
+        if row < 0 or col < 0:
+            return
+        QApplication.clipboard().setText(self._cell_display_text(row, col))
+
+    def _copy_selected_row_to_clipboard(self) -> None:
+        """Copy the current row as a tab-separated line."""
+        row = self.tableWidget.currentRow()
+        if row < 0:
+            return
+        values = [
+            self._cell_display_text(row, col)
+            for col in range(self.tableWidget.columnCount())
+        ]
+        QApplication.clipboard().setText("\t".join(values))
 
     def _request_add_optimization_variable(self) -> None:
         """Emit requestAddOptimizationVariable for the currently focused cell."""
@@ -872,6 +916,15 @@ class LensEditor(QWidget):
         menu.setObjectName("LDEContextMenu")
 
         if not is_prop_widget_row:
+            current_item = self.tableWidget.itemAt(pos)
+            if current_item is not None:
+                self.tableWidget.setCurrentItem(current_item)
+            else:
+                self.tableWidget.setCurrentCell(ui_row, self.tableWidget.columnAt(pos.x()))
+
+            copy_cell_action = menu.addAction("Copy Cell")
+            copy_row_action = menu.addAction("Copy Row")
+            menu.addSeparator()
             add_above = menu.addAction("Add Surface Above")
             add_above.triggered.connect(lambda: self.add_surface_handler(surface_index))
             remove_action = menu.addAction("Remove Current Surface")
@@ -921,5 +974,10 @@ class LensEditor(QWidget):
             )
             if is_obj_or_img:
                 add_var_action.setEnabled(False)
-
-        menu.exec(self.tableWidget.viewport().mapToGlobal(pos))
+            chosen = menu.exec(self.tableWidget.viewport().mapToGlobal(pos))
+            if chosen == copy_cell_action:
+                self._copy_current_cell_to_clipboard()
+            elif chosen == copy_row_action:
+                self._copy_selected_row_to_clipboard()
+        else:
+            menu.exec(self.tableWidget.viewport().mapToGlobal(pos))

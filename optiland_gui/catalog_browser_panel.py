@@ -1177,25 +1177,26 @@ class CatalogBrowserPanel(QWidget):
         copy_cell_action = menu.addAction("Copy Cell")
         copy_row_action = menu.addAction("Copy Row")
         menu.addSeparator()
-        open_url_action = menu.addAction("Open Product Webpage")
 
         current_item = self.results_table.currentItem()
         has_item = current_item is not None and current_item.row() >= 0
         catalog_id = self._selected_catalog_id() if has_item else ""
+        product_url = self.connector.resolve_catalog_product_url(catalog_id) if catalog_id else ""
         document_urls = self.connector.get_catalog_document_urls(catalog_id) if catalog_id else []
-        has_document = bool(document_urls)
         insert_before_action.setEnabled(has_item)
         insert_after_action.setEnabled(has_item)
         copy_cell_action.setEnabled(has_item)
         copy_row_action.setEnabled(has_item)
-        open_url_action.setEnabled(has_item)
 
         document_menu = None
         open_document_action = None
-        if len(document_urls) <= 1:
-            open_document_action = menu.addAction("Open Vendor Document")
-            open_document_action.setEnabled(has_document)
+        if product_url:
+            open_url_action = menu.addAction("Open Product Webpage")
         else:
+            open_url_action = None
+        if len(document_urls) == 1:
+            open_document_action = menu.addAction("Open Vendor Document")
+        elif len(document_urls) > 1:
             document_menu = menu.addMenu("Open Vendor Document")
             self._populate_vendor_document_menu(document_menu, document_urls)
 
@@ -1208,9 +1209,9 @@ class CatalogBrowserPanel(QWidget):
             self._copy_current_cell_to_clipboard()
         elif chosen == copy_row_action:
             self._copy_selected_row_to_clipboard()
-        elif chosen == open_url_action:
+        elif open_url_action is not None and chosen == open_url_action:
             self._open_selected_catalog_url()
-        elif chosen == open_document_action:
+        elif open_document_action is not None and chosen == open_document_action:
             self._open_selected_vendor_document()
 
     def _sync_filter_row_geometry(self, *args) -> None:  # noqa: ANN002

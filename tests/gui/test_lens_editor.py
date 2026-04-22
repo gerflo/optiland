@@ -117,3 +117,65 @@ class TestLensEditorVariableHighlighting:
         assert isinstance(widget, SurfaceTypeWidget)
         # isHidden() checks the widget's own flag — no need for parent to be shown
         assert not widget._var_badge.isHidden()
+
+
+def test_lens_editor_copy_shortcuts_copy_widget_cell_and_row(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_surface_data.side_effect = (
+        lambda row, col: {
+            mock_connector.COL_COMMENT: f"Comment {row}",
+            mock_connector.COL_RADIUS: f"{row}.0",
+            mock_connector.COL_THICKNESS: f"{row + 1}.0",
+            mock_connector.COL_MATERIAL: "BK7",
+            mock_connector.COL_CONIC: "0.0",
+            mock_connector.COL_SEMI_DIAMETER: "12.7",
+        }.get(col, "")
+    )
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+
+    editor.tableWidget.setCurrentCell(1, mock_connector.COL_TYPE)
+    editor._copy_current_cell_to_clipboard()
+    assert qapp.clipboard().text() == "Standard"
+
+    editor._copy_selected_row_to_clipboard()
+    assert qapp.clipboard().text() == "\t".join(
+        ["Standard", "Comment 1", "1.0", "2.0", "BK7", "0.0", "12.7"]
+    )
+
+
+def test_lens_editor_context_menu_contains_copy_actions(qapp, mock_connector, monkeypatch):
+    from optiland_gui.lens_editor import LensEditor
+
+    editor = LensEditor(mock_connector)
+    action_texts: list[str] = []
+
+    class _FakeMenu:
+        def __init__(self, *_args, **_kwargs):
+            self._actions = []
+
+        def setObjectName(self, *_args, **_kwargs):
+            return None
+
+        def addAction(self, text):  # noqa: ANN001
+            action = MagicMock()
+            action.text.return_value = text
+            self._actions.append(action)
+            return action
+
+        def addSeparator(self):
+            return None
+
+        def exec(self, *_args, **_kwargs):  # noqa: ANN201
+            action_texts.extend(action.text() for action in self._actions)
+            return None
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QMenu", _FakeMenu)
+
+    target_item = editor.tableWidget.item(1, mock_connector.COL_COMMENT)
+    assert target_item is not None
+
+    editor.show_context_menu(editor.tableWidget.visualItemRect(target_item).center())
+
+    assert action_texts[:2] == ["Copy Cell", "Copy Row"]

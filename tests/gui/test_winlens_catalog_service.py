@@ -931,12 +931,18 @@ def test_load_winlens_dat_records_parses_063213_achromat_family_without_binary_g
         assert "ECO-Vers.-322" in record_map["063213000"].product_name
         assert record_map["063213000"].efl_mm == 80.0
         assert record_map["063213000"].diameter_mm == 25.4
-        assert record_map["063213000"].material_summary in {"N-SSK8, N-SF56", "N-BK7, N-SF5"}
+        assert record_map["063213000"].material_summary == "N-BK7, N-SF5"
         assert len(record_map["063213000"].surfaces) == 3
         assert record_map["063213000"].surfaces[0].surface_type == "standard"
+        assert record_map["063213000"].surfaces[0].radius == pytest.approx(50.480999, abs=1e-3)
+        assert record_map["063213000"].surfaces[0].thickness == pytest.approx(5.0)
+        assert record_map["063213000"].surfaces[0].material == "N-BK7"
+        assert record_map["063213000"].surfaces[1].radius == pytest.approx(-35.480999, abs=1e-3)
         assert record_map["063213000"].surfaces[1].thickness == pytest.approx(2.0)
+        assert record_map["063213000"].surfaces[1].material == "N-SF5"
         assert record_map["063213000"].surfaces[2].material == "Air"
         assert record_map["063213000"].surfaces[2].semi_diameter == pytest.approx(12.7)
+        assert record_map["063213000"].surfaces[2].radius == pytest.approx(-100.0)
         assert record_map["322307000"].material_summary in {"N-SSK8, N-SF56", "N-BK7, N-SF5"}
         assert len(record_map["322307000"].surfaces) == 3
         assert record_map["322307322"].efl_mm == 80.0

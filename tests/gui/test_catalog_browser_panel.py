@@ -516,6 +516,64 @@ def test_catalog_browser_context_menu_prioritizes_insert_actions(monkeypatch, qa
     assert panel.results_table.item(0, 8).text() == "VIS"
 
 
+def test_catalog_browser_context_menu_hides_missing_product_and_vendor_links(
+    monkeypatch, qapp
+) -> None:
+    class _NoUrlConnector(_ResultConnector):
+        def resolve_catalog_product_url(self, catalog_id: str) -> str | None:
+            return None
+
+        def get_catalog_document_urls(self, catalog_id: str) -> list[str]:
+            return []
+
+    panel = CatalogBrowserPanel(_NoUrlConnector())
+    action_texts: list[str] = []
+
+    class _FakeAction:
+        def __init__(self, text: str) -> None:
+            self._text = text
+            self.enabled = True
+
+        def text(self) -> str:
+            return self._text
+
+        def setEnabled(self, enabled: bool) -> None:  # noqa: N802
+            self.enabled = enabled
+
+    class _FakeMenu:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._actions: list[_FakeAction] = []
+
+        def addAction(self, text: str) -> _FakeAction:  # noqa: N802
+            action = _FakeAction(text)
+            self._actions.append(action)
+            return action
+
+        def addSeparator(self):  # noqa: ANN201
+            action = _FakeAction("")
+            self._actions.append(action)
+            return action
+
+        def addMenu(self, text: str):  # noqa: ANN201, N802
+            action = _FakeAction(text)
+            self._actions.append(action)
+            return self
+
+        def exec(self, *_args, **_kwargs):  # noqa: ANN201
+            action_texts.extend(action.text() for action in self._actions)
+            return None
+
+    monkeypatch.setattr("optiland_gui.catalog_browser_panel.QMenu", _FakeMenu)
+
+    target_item = panel.results_table.item(0, 2)
+    assert target_item is not None
+
+    panel._show_results_context_menu(panel.results_table.visualItemRect(target_item).center())
+
+    assert "Open Product Webpage" not in action_texts
+    assert "Open Vendor Document" not in action_texts
+
+
 def test_catalog_browser_copy_shortcuts_copy_current_cell_and_row(qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
     panel.results_table.setCurrentCell(0, 2)
