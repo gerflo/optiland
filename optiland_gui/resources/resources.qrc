@@ -24,6 +24,9 @@
     <file alias="dark/add_quick_action.svg">icons/dark/add_quick_action.svg</file>
     <file alias="dark/tool.svg">icons/dark/tool.svg</file>
     <file alias="dark/minimize.svg">icons/dark/minimize.svg</file>
+    <file alias="dark/mark_all.svg">icons/dark/mark_all.svg</file>
+    <file alias="dark/clear_marks.svg">icons/dark/clear_marks.svg</file>
+    <file alias="dark/delete_marks.svg">icons/dark/delete_marks.svg</file>
     <file alias="optiland_icon.png">icons/optiland_icon.png</file>
 
 
@@ -51,6 +54,9 @@
     <file alias="light/add_quick_action.svg">icons/light/add_quick_action.svg</file>
     <file alias="light/tool.svg">icons/light/tool.svg</file>
     <file alias="light/minimize.svg">icons/light/minimize.svg</file>
+    <file alias="light/mark_all.svg">icons/light/mark_all.svg</file>
+    <file alias="light/clear_marks.svg">icons/light/clear_marks.svg</file>
+    <file alias="light/delete_marks.svg">icons/light/delete_marks.svg</file>
 
 </qresource>
 

@@ -28,6 +28,7 @@ from PySide6.QtCore import (
     QEasingCurve,
     QPropertyAnimation,
     QRegularExpression,
+    QSize,
     Qt,
     QTimer,
     Slot,
@@ -103,6 +104,7 @@ class CustomMatplotlibToolbar(NavigationToolbar):
                 button_widget = self.widgetForAction(action)
                 if button_widget:
                     button_widget.setObjectName(f"MPL{action_id}Button")
+                    button_widget.setIconSize(QSize(18, 18))
             self._original_icons[action] = QIcon(action.icon())
 
         self.update_theme()
@@ -240,14 +242,11 @@ class AnalysisPanel(QWidget):
         self.btnRun = QPushButton()
         self.btnRun.setObjectName("RunAnalysisButton")
         self.btnRun.setToolTip("Run Selected Analysis")
-        self.btnRun.setFixedSize(25, 25)
         self.btnRunAll = QPushButton()
         self.btnRunAll.setObjectName("RunAllAnalysisButton")
-        self.btnRunAll.setFixedSize(25, 25)
         self.btnStop = QPushButton()
         self.btnStop.setObjectName("StopAnalysisButton")
         self.btnStop.setToolTip("Stop Analysis")
-        self.btnStop.setFixedSize(25, 25)
 
         top_bar_layout.addWidget(self.btnRun)
         top_bar_layout.addWidget(self.btnRunAll)
@@ -367,12 +366,10 @@ class AnalysisPanel(QWidget):
 
         self.btnRefreshPlot = QPushButton()
         self.btnRefreshPlot.setObjectName("RefreshPlotButton")
-        self.btnRefreshPlot.setFixedSize(25, 25)
         self.plot_area_title_bar_layout.addWidget(self.btnRefreshPlot)
 
         self.toggleSettingsButton = QPushButton()
         self.toggleSettingsButton.setObjectName("ToggleSettingsButton")
-        self.toggleSettingsButton.setFixedSize(25, 25)
         self.plot_area_title_bar_layout.addWidget(self.toggleSettingsButton)
 
         parent_layout.addLayout(self.plot_area_title_bar_layout)

@@ -681,7 +681,18 @@ class NumpyBackend(AbstractBackend):
         Returns:
             NDArray: Maximum value ignoring NaN.
         """
-        return np.nanmax(x, axis=axis, keepdims=keepdim)
+        arr = np.asarray(x)
+        nan_mask = np.isnan(arr)
+
+        if axis is None:
+            if nan_mask.all():
+                return np.asarray(np.nan)
+            return np.nanmax(arr)
+
+        safe = np.where(nan_mask, -np.inf, arr)
+        result = np.max(safe, axis=axis, keepdims=keepdim)
+        all_nan = np.all(nan_mask, axis=axis, keepdims=keepdim)
+        return np.where(all_nan, np.nan, result)
 
     def sort(self, x: ArrayLike, axis: int = -1) -> NDArray:
         """Return a sorted copy of x.

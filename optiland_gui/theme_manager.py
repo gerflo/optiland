@@ -343,6 +343,12 @@ def get_theme_ids(mode: str | None = None) -> list[str]:
     return [theme.theme_id for theme in THEMES if theme.mode == mode]
 
 
+def get_icon_theme_id(theme_id: str) -> str:
+    """Return the bundled icon theme id for a registered application theme."""
+    theme = get_theme(theme_id)
+    return "dark" if theme.mode == "dark" else "light"
+
+
 def build_palette_override(theme: ThemeDefinition) -> str:
     """Build a final stylesheet override block for a palette-based theme."""
     p = theme.palette

@@ -18,7 +18,7 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -42,7 +42,6 @@ from PySide6.QtWidgets import (
     QWidget,
     QComboBox,
     QMenu,
-    QToolButton,
 )
 
 if TYPE_CHECKING:
@@ -51,6 +50,8 @@ if TYPE_CHECKING:
 
 from .config import APPLICATION_NAME, ORGANIZATION_NAME
 from .services.catalog_service import EDMUND_ZEMAX_PAGE_URL, THORLABS_ZEMAX_PAGE_URL
+from .theme_manager import get_icon_theme_id
+from .utils.table_copy import TableCopySupport
 
 
 class _CatalogTaskWorker(QObject):
@@ -169,26 +170,37 @@ class CatalogBrowserPanel(QWidget):
         self.reset_filters_button.setFixedWidth(42)
         controls_layout.addWidget(self.reset_filters_button)
 
-        self.mark_filtered_button = QPushButton("Mark Filtered")
-        self.clear_marks_button = QPushButton("Clear Marks")
-        self.delete_marked_button = QPushButton("Delete Marked")
+        self.mark_filtered_button = QPushButton("")
+        self.clear_marks_button = QPushButton("")
+        self.delete_marked_button = QPushButton("")
+        self._configure_toolbar_action_button(
+            self.mark_filtered_button, "mark_all.svg", "Mark Filtered"
+        )
+        self._configure_toolbar_action_button(
+            self.clear_marks_button, "clear_marks.svg", "Clear Marks"
+        )
+        self._configure_toolbar_action_button(
+            self.delete_marked_button, "delete_marks.svg", "Delete Marked"
+        )
         controls_layout.addWidget(self.mark_filtered_button)
         controls_layout.addWidget(self.clear_marks_button)
         controls_layout.addWidget(self.delete_marked_button)
 
-        self.download_catalog_button = QToolButton()
+        self.download_catalog_button = QPushButton("Download online catalog...")
         self.download_catalog_button.setText("Download online catalog...")
-        self.download_catalog_button.setPopupMode(
-            QToolButton.ToolButtonPopupMode.InstantPopup
-        )
-        self.download_catalog_button.setToolButtonStyle(
-            Qt.ToolButtonStyle.ToolButtonTextOnly
+        self.download_catalog_button.setObjectName("CatalogDownloadButton")
+        self.download_catalog_button.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Fixed,
         )
         self.import_busy_indicator = QLabel("")
         self.import_busy_indicator.setVisible(False)
         self.import_busy_indicator.setFixedWidth(16)
         self.import_busy_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._build_catalog_menus()
+        self.download_catalog_button.setMinimumWidth(
+            self.download_catalog_button.sizeHint().width() + 8
+        )
         controls_layout.addWidget(self.download_catalog_button)
         controls_layout.addWidget(self.import_busy_indicator)
         layout.addWidget(controls_box)
@@ -235,8 +247,17 @@ class CatalogBrowserPanel(QWidget):
         self.results_table.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
+        self._results_table_copy = TableCopySupport(
+            self.results_table, enable_context_menu=False
+        )
         self.copy_cell_shortcut = QShortcut(QKeySequence("Ctrl+C"), self.results_table)
         self.copy_insert_shortcut = QShortcut(QKeySequence("Ctrl+Insert"), self.results_table)
+        self.copy_cell_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.copy_insert_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
         self.table_view_layout.addWidget(self.results_table, 1)
         self.table_view_scroll.setWidget(self.table_view_content)
         layout.addWidget(self.table_view_scroll, 1)
@@ -263,6 +284,19 @@ class CatalogBrowserPanel(QWidget):
         insert_row.addWidget(self.insert_after_button)
         details_layout.addLayout(insert_row)
         layout.addWidget(details_box)
+
+    def _configure_toolbar_action_button(
+        self, button: QPushButton, icon_name: str, tooltip: str
+    ) -> None:
+        """Apply compact icon-only styling for catalog action buttons."""
+        theme = self.settings.value("Appearance/ThemeId", "dark", type=str) or "dark"
+        icon_theme = get_icon_theme_id(theme)
+        button.setIcon(QIcon(f":/icons/{icon_theme}/{icon_name}"))
+        button.setIconSize(QSize(16, 16))
+        button.setText("")
+        button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        button.setFixedWidth(32)
 
     def _wire_signals(self) -> None:
         self.search_edit.textChanged.connect(self.refresh)
@@ -621,9 +655,9 @@ class CatalogBrowserPanel(QWidget):
     def _update_mark_button_label(self) -> None:
         """Reflect whether the current table state has an active row selection."""
         has_selection = self.results_table.currentRow() >= 0
-        self.mark_filtered_button.setText(
-            "Mark Filtered" if has_selection else "Mark All"
-        )
+        label = "Mark Filtered" if has_selection else "Mark All"
+        self.mark_filtered_button.setToolTip(label)
+        self.mark_filtered_button.setAccessibleName(label)
 
     def _handle_results_item_changed(self, item: QTableWidgetItem) -> None:
         if self._updating_mark_column or item.column() != 0:
@@ -1103,7 +1137,17 @@ class CatalogBrowserPanel(QWidget):
 
     def _copy_current_cell_to_clipboard(self) -> None:
         """Copy the currently focused result cell to the clipboard."""
-        item = self.results_table.currentItem()
+        row, col = self._results_table_copy.current_cell()
+        if row < 0 or col < 0:
+            return
+        item = self.results_table.item(row, col)
+        current_item = self.results_table.currentItem()
+        if (
+            (item is None or item.text() == "")
+            and current_item is not None
+            and current_item.text() != ""
+        ):
+            item = current_item
         if item is None:
             return
         QApplication.clipboard().setText(item.text())
@@ -1111,7 +1155,7 @@ class CatalogBrowserPanel(QWidget):
 
     def _copy_selected_row_to_clipboard(self) -> None:
         """Copy the selected result row as a tab-separated line."""
-        row = self.results_table.currentRow()
+        row, _col = self._results_table_copy.current_cell()
         if row < 0:
             return
         values = []

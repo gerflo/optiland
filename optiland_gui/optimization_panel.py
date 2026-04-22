@@ -40,6 +40,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .utils.table_copy import TableCopySupport
+
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
 
@@ -745,6 +747,7 @@ class OptimizationPanel(QWidget):
             QTableWidget.SelectionBehavior.SelectRows
         )
         self.tblVariables.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._tbl_variables_copy = TableCopySupport(self.tblVariables)
         layout.addWidget(self.tblVariables)
 
         btn_layout = QHBoxLayout()
@@ -752,7 +755,6 @@ class OptimizationPanel(QWidget):
         self.btnRemoveVariable = QPushButton("- Remove Selected")
         self.btnRefreshVariables = QPushButton()
         self.btnRefreshVariables.setToolTip("Refresh current values")
-        self.btnRefreshVariables.setFixedSize(25, 25)
         self.btnRefreshVariables.setIcon(QIcon(":/icons/dark/refresh.svg"))
 
         btn_layout.addWidget(self.btnAddVariable)
@@ -778,6 +780,7 @@ class OptimizationPanel(QWidget):
         self.tblOperands.horizontalHeader().setStretchLastSection(True)
         self.tblOperands.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tblOperands.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._tbl_operands_copy = TableCopySupport(self.tblOperands)
         layout.addWidget(self.tblOperands)
 
         btn_layout = QHBoxLayout()
@@ -786,7 +789,6 @@ class OptimizationPanel(QWidget):
         self.btnRemoveOperand = QPushButton("- Remove Selected")
         self.btnRefreshOperands = QPushButton()
         self.btnRefreshOperands.setToolTip("Refresh current values")
-        self.btnRefreshOperands.setFixedSize(25, 25)
         self.btnRefreshOperands.setIcon(QIcon(":/icons/dark/refresh.svg"))
 
         btn_layout.addWidget(self.btnAddOperand)

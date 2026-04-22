@@ -4,8 +4,17 @@ from __future__ import annotations
 
 from typing import Callable, TYPE_CHECKING
 
-from PySide6.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import (
+    QObject,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    Signal,
+    Slot,
+)
+from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
@@ -24,6 +33,10 @@ from PySide6.QtWidgets import (
     QComboBox,
 )
 from PySide6.QtCore import QUrl
+
+from .config import APPLICATION_NAME, ORGANIZATION_NAME
+from .theme_manager import get_icon_theme_id
+from .utils.table_copy import TableCopySupport
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -89,6 +102,7 @@ class MaterialBrowserPanel(QWidget):
     def __init__(self, connector: OptilandConnector, parent=None) -> None:
         super().__init__(parent)
         self.connector = connector
+        self.settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
         self._current_results: list[dict] = []
         self._sort_column: int | None = None
         self._sort_order = Qt.SortOrder.AscendingOrder
@@ -125,9 +139,18 @@ class MaterialBrowserPanel(QWidget):
         self.reset_filters_button.setFixedWidth(42)
         controls_layout.addWidget(self.reset_filters_button)
 
-        self.mark_filtered_button = QPushButton("Mark Filtered")
-        self.clear_marks_button = QPushButton("Clear Marks")
-        self.delete_marked_button = QPushButton("Delete Marked")
+        self.mark_filtered_button = QPushButton("")
+        self.clear_marks_button = QPushButton("")
+        self.delete_marked_button = QPushButton("")
+        self._configure_toolbar_action_button(
+            self.mark_filtered_button, "mark_all.svg", "Mark Filtered"
+        )
+        self._configure_toolbar_action_button(
+            self.clear_marks_button, "clear_marks.svg", "Clear Marks"
+        )
+        self._configure_toolbar_action_button(
+            self.delete_marked_button, "delete_marks.svg", "Delete Marked"
+        )
         controls_layout.addWidget(self.mark_filtered_button)
         controls_layout.addWidget(self.clear_marks_button)
         controls_layout.addWidget(self.delete_marked_button)
@@ -171,6 +194,7 @@ class MaterialBrowserPanel(QWidget):
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.results_table.setSelectionMode(QTableWidget.SingleSelection)
         self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._results_table_copy = TableCopySupport(self.results_table)
         self.results_table.itemChanged.connect(self._handle_results_item_changed)
         self.results_table.verticalHeader().setVisible(False)
         header = self.results_table.horizontalHeader()
@@ -204,6 +228,19 @@ class MaterialBrowserPanel(QWidget):
         details_actions.addStretch(1)
         details_layout.addLayout(details_actions)
         layout.addWidget(details_box)
+
+    def _configure_toolbar_action_button(
+        self, button: QPushButton, icon_name: str, tooltip: str
+    ) -> None:
+        """Apply compact icon-only styling for material action buttons."""
+        theme = self.settings.value("Appearance/ThemeId", "dark", type=str) or "dark"
+        icon_theme = get_icon_theme_id(theme)
+        button.setIcon(QIcon(f":/icons/{icon_theme}/{icon_name}"))
+        button.setIconSize(QSize(16, 16))
+        button.setText("")
+        button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        button.setFixedWidth(32)
 
     def _wire_signals(self) -> None:
         self.search_edit.textChanged.connect(self.refresh)

@@ -13,7 +13,7 @@ from __future__ import annotations
 import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import QSettings, Qt, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -49,6 +49,7 @@ from optiland.visualization.system.system import (
 
 from . import gui_plot_utils
 from .analysis_panel import CustomMatplotlibToolbar
+from .config import APPLICATION_NAME, ORGANIZATION_NAME
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -266,6 +267,7 @@ class ViewerPanel(QWidget):
         """
         super().__init__(parent)
         self.connector = connector
+        self.settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -291,6 +293,10 @@ class ViewerPanel(QWidget):
         self.connector.opticLoaded.connect(self.update_viewers)
         self.connector.opticChanged.connect(self.update_viewers)
 
+    def _settings_key(self, name: str) -> str:
+        """Return the persistent-settings key for a 2D viewer panel option."""
+        return f"Viewer2D/{name}"
+
     def _create_2d_viewer_tab(self):
         """Creates the container widget for the 2D viewer, including its toolbar."""
         container = QWidget()
@@ -303,6 +309,14 @@ class ViewerPanel(QWidget):
         self.preserve_zoom_checkbox.setToolTip(
             "Lock the current zoom and pan level when the system updates."
         )
+        self.preserve_zoom_checkbox.setChecked(
+            self.settings.value(self._settings_key("PreserveZoom"), False, type=bool)
+        )
+        self.preserve_zoom_checkbox.toggled.connect(
+            lambda checked: self.settings.setValue(
+                self._settings_key("PreserveZoom"), checked
+            )
+        )
         toolbar_layout.addWidget(self.preserve_zoom_checkbox)
         self.preserve_xy_ratio_checkbox = QCheckBox("Preserve X/Y Ratio")
         self.preserve_xy_ratio_checkbox.setToolTip(
@@ -310,6 +324,16 @@ class ViewerPanel(QWidget):
         )
         self.preserve_xy_ratio_checkbox.toggled.connect(
             self.viewer2D.set_preserve_xy_ratio
+        )
+        self.preserve_xy_ratio_checkbox.toggled.connect(
+            lambda checked: self.settings.setValue(
+                self._settings_key("PreserveXYRatio"), checked
+            )
+        )
+        self.preserve_xy_ratio_checkbox.setChecked(
+            self.settings.value(
+                self._settings_key("PreserveXYRatio"), False, type=bool
+            )
         )
         toolbar_layout.addWidget(self.preserve_xy_ratio_checkbox)
         toolbar_layout.addStretch()
@@ -362,6 +386,7 @@ class MatplotlibViewer(QWidget):
         """
         super().__init__(parent)
         self.connector = connector
+        self.settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
         self.current_theme = "dark"
         self._preserve_xy_ratio = False
 
@@ -391,6 +416,9 @@ class MatplotlibViewer(QWidget):
 
         self.figure = Figure(figsize=(5, 4), dpi=100)
         self.canvas = FigureCanvas(self.figure)
+        self.canvas.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         plot_layout.addWidget(self.canvas)
         self.ax = self.figure.add_subplot(111)
 
@@ -418,7 +446,12 @@ class MatplotlibViewer(QWidget):
 
         self.num_rays_spinbox = QSpinBox()
         self.num_rays_spinbox.setRange(1, 100)
-        self.num_rays_spinbox.setValue(3)
+        self.num_rays_spinbox.setValue(
+            self.settings.value("Viewer2D/NumRays", 3, type=int)
+        )
+        self.num_rays_spinbox.valueChanged.connect(
+            lambda value: self.settings.setValue("Viewer2D/NumRays", int(value))
+        )
         self.settings_form_layout.addRow("Num Rays:", self.num_rays_spinbox)
 
         self.dist_combo = QComboBox()
@@ -477,6 +510,10 @@ class MatplotlibViewer(QWidget):
         self._user_initiated_view_change = False
         self.plot_optic(preserve_zoom=False)
 
+    def _toolbar_navigation_mode_active(self) -> bool:
+        """Return whether Matplotlib's own pan/zoom tool currently owns drag input."""
+        return bool(getattr(self.toolbar, "mode", ""))
+
     def on_mouse_button_press(self, event):
         """
         Handles mouse button press events to initiate panning.
@@ -484,6 +521,9 @@ class MatplotlibViewer(QWidget):
         Args:
             event: The Matplotlib mouse button press event.
         """
+        if self._toolbar_navigation_mode_active():
+            return
+
         if event.button == 1 and event.inaxes:  # Left mouse button
             self._pan_start_x = event.xdata
             self._pan_start_y = event.ydata
@@ -595,6 +635,34 @@ class MatplotlibViewer(QWidget):
         self._preserve_xy_ratio = bool(preserve)
         self.plot_optic()
 
+    def _apply_equal_xy_limits(
+        self, xlim: tuple[float, float], ylim: tuple[float, float]
+    ) -> None:
+        """Expand the narrower axis span so one X unit matches one Y unit on screen."""
+        bbox = self.ax.get_position()
+        figure_width = max(float(self.figure.get_figwidth()), 1.0)
+        figure_height = max(float(self.figure.get_figheight()), 1.0)
+        box_ratio = max((bbox.width * figure_width) / (bbox.height * figure_height), 1e-6)
+
+        x0, x1 = xlim
+        y0, y1 = ylim
+        x_span = max(abs(x1 - x0), 1e-9)
+        y_span = max(abs(y1 - y0), 1e-9)
+        target_x_span = y_span * box_ratio
+
+        if target_x_span >= x_span:
+            x_center = (x0 + x1) / 2.0
+            x_half = target_x_span / 2.0
+            self.ax.set_xlim(x_center - x_half, x_center + x_half)
+            self.ax.set_ylim(y0, y1)
+            return
+
+        target_y_span = x_span / box_ratio
+        y_center = (y0 + y1) / 2.0
+        y_half = target_y_span / 2.0
+        self.ax.set_xlim(x0, x1)
+        self.ax.set_ylim(y_center - y_half, y_center + y_half)
+
     def plot_optic(self, preserve_zoom=False):
         """
         Clears the current plot and redraws the optical system.
@@ -647,10 +715,7 @@ class MatplotlibViewer(QWidget):
                     self.ax.set_xlabel("Z-axis (mm)")
                     self.ax.set_ylabel("Y-axis (mm)")
                     self.ax.grid(True, linestyle="--", alpha=0.7)
-                    if self._preserve_xy_ratio:
-                        self.ax.set_aspect("equal", adjustable="box")
-                    else:
-                        self.ax.set_aspect("auto")
+                    self.ax.set_aspect("auto")
 
                     if should_preserve_limits and xlim is not None and ylim is not None:
                         self.ax.set_xlim(xlim)
@@ -660,12 +725,21 @@ class MatplotlibViewer(QWidget):
                         self.ax.autoscale_view()
                         self.ax.margins(x=0.03, y=0.08)
 
+                    self.figure.subplots_adjust(
+                        left=0.06, right=0.995, top=0.92, bottom=0.12
+                    )
+                    if self._preserve_xy_ratio:
+                        self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
+
                 except Exception:
                     self.ax.text(
                         0.5, 0.5, "Error plotting system", ha="center", va="center"
                     )
             else:
                 self.ax.text(0.5, 0.5, "No system loaded", ha="center", va="center")
+                self.figure.subplots_adjust(
+                    left=0.06, right=0.995, top=0.92, bottom=0.12
+                )
 
             self.canvas.draw()
         finally:

@@ -40,6 +40,8 @@ from optiland.fields import (
     RealImageHeightField,
 )
 
+from .utils.table_copy import TableCopySupport
+
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
 
@@ -291,6 +293,7 @@ class FieldsEditor(PropertyEditorBase):
         self.tableFields.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
+        self._table_fields_copy = TableCopySupport(self.tableFields)
         parent_layout.addWidget(self.tableFields)
 
     def _create_control_buttons(self, parent_layout):
@@ -459,6 +462,7 @@ class WavelengthsEditor(PropertyEditorBase):
         self.tableWavelengths.setSelectionMode(
             QAbstractItemView.SelectionMode.SingleSelection
         )
+        self._table_wavelengths_copy = TableCopySupport(self.tableWavelengths)
         parent_layout.addWidget(self.tableWavelengths)
 
     def _create_control_buttons(self, parent_layout):

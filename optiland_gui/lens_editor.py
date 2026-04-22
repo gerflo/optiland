@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QSettings, QSize, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QBrush, QColor, QIcon, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from optiland.materials.material import Material
+from .config import APPLICATION_NAME, ORGANIZATION_NAME
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -132,23 +133,50 @@ class SurfaceTypeWidget(QWidget):
         self.row = row
         self.connector = connector
         self.layout = QHBoxLayout(self)
-        self.layout.setContentsMargins(2, 0, 2, 0)
-        self.layout.setSpacing(4)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(2)
+        self.setObjectName("SurfaceTypeCell")
+        self.setStyleSheet(
+            "QWidget#SurfaceTypeCell {"
+            "  border: 1px solid transparent;"
+            "  border-radius: 3px;"
+            "  background: transparent;"
+            "}"
+            "QWidget#SurfaceTypeCell[currentCell='true'] {"
+            "  border: 2px solid #FFD166;"
+            "  background: rgba(255, 209, 102, 0.22);"
+            "}"
+            "QLineEdit#SurfaceTypeLineEdit {"
+            "  border: none;"
+            "  margin: 0px;"
+            "  padding: 0px 4px;"
+            "  background: transparent;"
+            "}"
+            "QToolButton#SurfaceTypeButton {"
+            "  border: none;"
+            "  margin: 0px;"
+            "  padding: 0px;"
+            "}"
+            "QToolButton#SurfaceTypeButton::menu-indicator {"
+            "  image: none;"
+            "  width: 0px;"
+            "}"
+        )
         self.type_button = QToolButton()
         self.type_button.setObjectName("SurfaceTypeButton")
         self.type_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.type_button.setFixedSize(18, 18)
         self.type_button.setAutoRaise(True)
         self.type_button.setArrowType(Qt.DownArrow)
+        self.type_button.setContextMenuPolicy(Qt.PreventContextMenu)
 
         # properties button
         self.props_button = QToolButton()
         self.props_button.setObjectName("PropertiesButton")
         self.props_button.setIcon(QIcon(":/icons/dark/tool.svg"))
-        self.props_button.setFixedSize(20, 20)
         self.props_button.setIconSize(QSize(16, 16))
         self.props_button.setToolTip("Show/Hide Surface Properties")
         self.props_button.clicked.connect(self.propertiesIconClicked.emit)
+        self.props_button.setContextMenuPolicy(Qt.PreventContextMenu)
         self.layout.addWidget(self.props_button)
 
         # hide the button if there are no properties to show
@@ -157,6 +185,8 @@ class SurfaceTypeWidget(QWidget):
 
         self.type_edit = QLineEdit(current_type_info["display_text"])
         self.type_edit.setObjectName("SurfaceTypeLineEdit")
+        self.type_edit.setFrame(False)
+        self.type_edit.setTextMargins(0, 0, 0, 0)
         self.type_edit.editingFinished.connect(self.text_changed)
         self.layout.addWidget(self.type_edit, 1)
         self.layout.addWidget(self.type_button)
@@ -203,6 +233,13 @@ class SurfaceTypeWidget(QWidget):
         else:
             self._var_badge.setVisible(False)
 
+    def setCurrentCellState(self, active: bool) -> None:
+        """Highlight this embedded widget when it is the active table cell."""
+        self.setProperty("currentCell", active)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
     def type_selected(self, new_type):
         self.type_edit.setText(new_type.title())
         self.surfaceTypeChanged.emit(new_type)
@@ -223,7 +260,8 @@ class _AccentFocusDelegate(QStyledItemDelegate):
     border so the active cell is clearly visible without visual noise.
     """
 
-    _ACCENT = QColor("#007ACC")
+    _ACCENT = QColor("#FFD166")
+    _FILL = QColor(255, 209, 102, 80)
 
     def __init__(self, owner, parent=None):
         super().__init__(parent)
@@ -235,15 +273,18 @@ class _AccentFocusDelegate(QStyledItemDelegate):
         option: QStyleOptionViewItem,
         index,
     ) -> None:
-        super().paint(painter, option, index)
-        from PySide6.QtWidgets import QStyle
-
-        if option.state & QStyle.State_HasFocus:
+        active_row, active_col = self._owner._active_cell
+        if active_row == index.row() and active_col == index.column():
+            active_option = QStyleOptionViewItem(option)
+            active_option.backgroundBrush = self._FILL
+            super().paint(painter, active_option, index)
             painter.save()
-            pen = QPen(self._ACCENT, 1.5)
+            pen = QPen(self._ACCENT, 2)
             painter.setPen(pen)
-            painter.drawRect(option.rect.adjusted(1, 1, -1, -1))
+            painter.drawRect(option.rect.adjusted(1, 1, -2, -2))
             painter.restore()
+            return
+        super().paint(painter, option, index)
 
     def createEditor(self, parent, option, index):  # noqa: ANN001
         """Install custom tab navigation on transient table editors."""
@@ -252,8 +293,17 @@ class _AccentFocusDelegate(QStyledItemDelegate):
             editor.setProperty("lens_row", index.row())
             editor.setProperty("lens_col", index.column())
             editor.setProperty("lens_table_editor", True)
+            if hasattr(editor, "setFrame"):
+                editor.setFrame(False)
+            if hasattr(editor, "setTextMargins"):
+                editor.setTextMargins(0, 0, 0, 0)
             editor.installEventFilter(self._owner)
         return editor
+
+    def updateEditorGeometry(self, editor, option, index) -> None:  # noqa: ANN001
+        """Make inline editors fill the cell instead of sitting inset inside it."""
+        del index
+        editor.setGeometry(option.rect.adjusted(1, 1, -1, -1))
 
 
 class _MaterialSearchDelegate(_AccentFocusDelegate):
@@ -325,17 +375,22 @@ class LensEditor(QWidget):
     """A widget for editing the properties of an optical system's surfaces."""
 
     _material_names_cache: list[str] | None = None
+    TABLE_SETTINGS_PREFIX = "LensEditor/Table"
 
     def __init__(self, connector: OptilandConnector, parent=None):
         super().__init__(parent)
         self.connector = connector
+        self.settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
         self.setWindowTitle("Lens Editor")
         self.open_prop_source_row = -1
         self._pending_insert_surface_index: int | None = None
         self._pending_insert_ui_row: int | None = None
+        self._active_cell: tuple[int, int] = (-1, -1)
+        self._restoring_table_state = False
 
         self._init_ui()
         self.setup_table()
+        self._restore_table_state()
         self.load_data()
         self.connect_signals()
 
@@ -358,6 +413,7 @@ class LensEditor(QWidget):
         self.layout = QVBoxLayout(self)
         self.tableWidget = QTableWidget()
         self.tableWidget.installEventFilter(self)
+        self.tableWidget.viewport().installEventFilter(self)
         self.tableWidget.setContextMenuPolicy(Qt.CustomContextMenu)
 
         # ScrollPerPixel for smooth scrolling (SPEC §4.6)
@@ -367,6 +423,38 @@ class LensEditor(QWidget):
         self.copy_cell_shortcut = QShortcut(QKeySequence.Copy, self.tableWidget)
         self.copy_insert_shortcut = QShortcut(
             QKeySequence("Ctrl+Insert"), self.tableWidget
+        )
+        self.copy_insert_viewport_shortcut = QShortcut(
+            QKeySequence("Ctrl+Insert"), self.tableWidget.viewport()
+        )
+        self.cut_shortcut = QShortcut(QKeySequence.Cut, self.tableWidget)
+        self.paste_shortcut = QShortcut(QKeySequence.Paste, self.tableWidget)
+        self.paste_insert_shortcut = QShortcut(
+            QKeySequence("Shift+Insert"), self.tableWidget
+        )
+        self.paste_insert_viewport_shortcut = QShortcut(
+            QKeySequence("Shift+Insert"), self.tableWidget.viewport()
+        )
+        self.copy_cell_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.copy_insert_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.copy_insert_viewport_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.cut_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.paste_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.paste_insert_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
+        )
+        self.paste_insert_viewport_shortcut.setContext(
+            Qt.ShortcutContext.WidgetWithChildrenShortcut
         )
 
         # Accent focus delegate (SPEC §4.1)
@@ -403,9 +491,28 @@ class LensEditor(QWidget):
         self.copy_insert_shortcut.activated.connect(
             self._copy_current_cell_to_clipboard
         )
+        self.copy_insert_viewport_shortcut.activated.connect(
+            self._copy_current_cell_to_clipboard
+        )
+        self.cut_shortcut.activated.connect(self._cut_current_cell_to_clipboard)
+        self.paste_shortcut.activated.connect(self._paste_clipboard_into_current_cell)
+        self.paste_insert_shortcut.activated.connect(
+            self._paste_clipboard_into_current_cell
+        )
+        self.paste_insert_viewport_shortcut.activated.connect(
+            self._paste_clipboard_into_current_cell
+        )
         self.tableWidget.itemChanged.connect(self.on_item_changed_handler)
+        self.tableWidget.cellPressed.connect(self._remember_active_cell)
+        self.tableWidget.cellClicked.connect(self._remember_active_cell)
         self.tableWidget.customContextMenuRequested.connect(self.show_context_menu)
         self.tableWidget.itemSelectionChanged.connect(self.update_headers_on_selection)
+        self.tableWidget.currentCellChanged.connect(self._sync_current_cell_highlight)
+        self.tableWidget.horizontalHeader().sectionResized.connect(self._save_table_state)
+        self.tableWidget.horizontalHeader().sectionMoved.connect(self._save_table_state)
+        app = QApplication.instance()
+        if app is not None:
+            app.focusChanged.connect(self._handle_application_focus_changed)
         self.connector.opticLoaded.connect(self.full_refresh_from_optic)
         self.connector.opticChanged.connect(self.full_refresh_from_optic)
         self.connector.optimizationVariablesChanged.connect(
@@ -434,56 +541,246 @@ class LensEditor(QWidget):
         self.tableWidget.verticalHeader().setDefaultSectionSize(30)
         self.tableWidget.blockSignals(False)
 
+    def _settings_key(self, suffix: str) -> str:
+        """Build a stable settings key for persisted lens-editor table state."""
+        return f"{self.TABLE_SETTINGS_PREFIX}/{suffix}"
+
+    def _restore_table_state(self) -> None:
+        """Restore saved lens-editor header widths/order when available."""
+        self._restoring_table_state = True
+        try:
+            header = self.tableWidget.horizontalHeader()
+            header_state = self.settings.value(self._settings_key("HeaderState"))
+            if isinstance(header_state, bytes):
+                header.restoreState(header_state)
+            elif header_state is not None and hasattr(header_state, "data"):
+                header.restoreState(header_state)
+        finally:
+            self._restoring_table_state = False
+
+    def _save_table_state(self, *args) -> None:  # noqa: ANN002
+        """Persist current lens-editor header widths/order."""
+        if self._restoring_table_state:
+            return
+        header = self.tableWidget.horizontalHeader()
+        self.settings.setValue(self._settings_key("HeaderState"), header.saveState())
+
     def eventFilter(self, source, event):
-        if event.type() == QEvent.KeyPress:
+        if source is self.tableWidget.viewport() and event.type() == QEvent.MouseButtonPress:
+            pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+            item = self.tableWidget.itemAt(pos)
+            if item is not None:
+                self.tableWidget.setCurrentItem(item)
+                self._remember_active_cell(item.row(), item.column())
+            return False
+        if event.type() == QEvent.ContextMenu and hasattr(source, "property"):
+            row = source.property("lens_row")
+            col = source.property("lens_col")
+            if isinstance(row, int) and isinstance(col, int):
+                self.tableWidget.setCurrentCell(row, col)
+                global_pos = event.globalPos()
+                local_pos = self.tableWidget.viewport().mapFromGlobal(global_pos)
+                self.show_context_menu(local_pos)
+                return True
+        if event.type() in (QEvent.KeyPress, QEvent.ShortcutOverride):
+            is_key_press = event.type() == QEvent.KeyPress
             is_shift_tab = event.key() == Qt.Key_Tab and bool(
                 event.modifiers() & Qt.ShiftModifier
             )
+            has_ctrl = bool(event.modifiers() & Qt.ControlModifier)
+            has_shift = bool(event.modifiers() & Qt.ShiftModifier)
+            is_table_focus_target = self._is_within_table(source)
             is_table_editor = bool(
                 hasattr(source, "property")
                 and source.property("lens_table_editor")
             )
-            if source is self.tableWidget and event.key() == Qt.Key_Insert:
+            is_text_input = isinstance(source, QLineEdit)
+            if (
+                is_text_input
+                and (
+                    (has_ctrl and event.key() in (Qt.Key_C, Qt.Key_V, Qt.Key_X, Qt.Key_Insert))
+                    or (has_shift and event.key() == Qt.Key_Insert)
+                )
+            ):
+                return False
+            if (
+                has_ctrl
+                and event.key() in (Qt.Key_C, Qt.Key_Insert)
+                and (
+                    is_table_focus_target
+                    or (is_table_editor and not is_text_input)
+                    or isinstance(source, SurfaceTypeWidget)
+                )
+            ):
+                self._copy_current_cell_to_clipboard()
+                return True
+            if (
+                has_ctrl
+                and event.key() == Qt.Key_X
+                and (
+                    is_table_focus_target
+                    or (is_table_editor and not is_text_input)
+                    or isinstance(source, SurfaceTypeWidget)
+                )
+            ):
+                self._cut_current_cell_to_clipboard()
+                return True
+            if (
+                (
+                    event.key() == Qt.Key_V
+                    and has_ctrl
+                )
+                or (
+                    event.key() == Qt.Key_Insert
+                    and has_shift
+                )
+            ) and (
+                is_table_focus_target
+                or (is_table_editor and not is_text_input)
+                or isinstance(source, SurfaceTypeWidget)
+            ):
+                self._paste_clipboard_into_current_cell()
+                return True
+            if is_key_press and is_table_focus_target and event.key() == Qt.Key_Insert:
                 self.add_surface_handler()
                 return True
-            if source is self.tableWidget and event.key() == Qt.Key_Delete:
+            if is_key_press and is_table_focus_target and event.key() == Qt.Key_Delete:
                 self.remove_surface_handler()
                 return True
-            if source is self.tableWidget and event.key() == Qt.Key_V and event.modifiers() == (
+            if is_key_press and is_table_focus_target and event.key() == Qt.Key_V and event.modifiers() == (
                 Qt.ControlModifier | Qt.ShiftModifier
             ):
                 self._request_add_optimization_variable()
                 return True
-            if is_table_editor and event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if is_key_press and is_table_editor and event.key() in (Qt.Key_Return, Qt.Key_Enter):
                 if self._handle_tab_navigation(source, backwards=False):
                     return True
-            if event.key() == Qt.Key_Backtab or event.key() == Qt.Key_Tab:
+            if (
+                is_key_press
+                and
+                not is_table_editor
+                and event.key()
+                in (
+                    Qt.Key_Left,
+                    Qt.Key_Right,
+                    Qt.Key_Up,
+                    Qt.Key_Down,
+                    Qt.Key_Home,
+                    Qt.Key_End,
+                    Qt.Key_PageUp,
+                    Qt.Key_PageDown,
+                )
+            ):
+                if self._handle_directional_navigation(source, event.key()):
+                    return True
+            if is_key_press and (event.key() == Qt.Key_Backtab or event.key() == Qt.Key_Tab):
                 backwards = event.key() == Qt.Key_Backtab or is_shift_tab
                 if self._handle_tab_navigation(source, backwards):
                     return True
         return super().eventFilter(source, event)
 
+    @Slot(int, int, int, int)
+    def _sync_current_cell_highlight(
+        self,
+        current_row: int,
+        current_col: int,
+        previous_row: int,
+        previous_col: int,
+    ) -> None:
+        """Keep widget-backed cells visually highlighted when they are current."""
+        active_row, active_col = self._active_cell
+        if active_row < 0 or active_col < 0:
+            active_row, active_col = current_row, current_col
+        for row, col in (
+            (previous_row, previous_col),
+            (current_row, current_col),
+            (active_row, active_col),
+        ):
+            if row < 0 or col < 0:
+                continue
+            widget = self.tableWidget.cellWidget(row, col)
+            if isinstance(widget, SurfaceTypeWidget):
+                widget.setCurrentCellState(row == active_row and col == active_col)
+        self.tableWidget.viewport().update()
+
+    @Slot(int, int)
+    def _remember_active_cell(self, row: int, col: int) -> None:
+        """Remember the exact cell the user interacted with most recently."""
+        if row >= 0 and col >= 0:
+            self._active_cell = (row, col)
+            self.tableWidget.viewport().update()
+
+    def _is_within_table(self, widget) -> bool:  # noqa: ANN001
+        """Return whether *widget* belongs to the lens table or one of its children."""
+        current = widget
+        while current is not None:
+            if current is self.tableWidget:
+                return True
+            parent_getter = getattr(current, "parent", None)
+            if not callable(parent_getter):
+                break
+            current = parent_getter()
+        return False
+
+    def _clear_active_cell_highlight(self) -> None:
+        """Drop the persistent active-cell state and repaint affected widgets."""
+        previous_row, previous_col = self._active_cell
+        self._active_cell = (-1, -1)
+        self._sync_current_cell_highlight(-1, -1, previous_row, previous_col)
+
+    def _handle_application_focus_changed(self, old, new) -> None:  # noqa: ANN001
+        """Keep the current-cell highlight until focus truly leaves the table."""
+        if self._is_within_table(new):
+            return
+        if self._is_within_table(old):
+            self._clear_active_cell_highlight()
+
     def _handle_tab_navigation(self, source, backwards: bool) -> bool:
-        """Move through editable cells in a predictable row-major order."""
+        """Move through table cells in a predictable row-major order."""
         if self.tableWidget.rowCount() == 0:
             return False
 
         if self._pending_insert_ui_row is not None and not backwards:
-            target = self._first_editable_in_row(self._pending_insert_ui_row)
+            target = self._first_navigable_in_row(self._pending_insert_ui_row)
             self._pending_insert_ui_row = None
             if target is not None:
                 self._commit_editor_if_needed(source)
-                self._focus_cell_for_editing(*target)
+                self._focus_cell(*target, edit=isinstance(source, QLineEdit))
                 return True
 
         row, col = self._get_navigation_origin(source)
-        target = self._next_editable_cell(row, col, backwards=backwards)
+        target = self._next_navigable_cell(row, col, backwards=backwards)
         if target is None:
             return False
 
         self._commit_editor_if_needed(source)
-        self._focus_cell_for_editing(*target)
+        self._focus_cell(*target, edit=isinstance(source, QLineEdit))
         return True
+
+    def _handle_directional_navigation(self, source, key: int) -> bool:
+        """Move the active-cell highlight with non-text navigation keys."""
+        if self.tableWidget.rowCount() == 0 or self.tableWidget.columnCount() == 0:
+            return False
+        row, col = self._get_navigation_origin(source)
+        if row < 0 or col < 0:
+            return self._focus_cell(0, 0, edit=False)
+        if key == Qt.Key_Left:
+            return self._focus_relative(row, col, 0, -1)
+        if key == Qt.Key_Right:
+            return self._focus_relative(row, col, 0, 1)
+        if key == Qt.Key_Up:
+            return self._focus_relative(row, col, -1, 0)
+        if key == Qt.Key_Down:
+            return self._focus_relative(row, col, 1, 0)
+        if key == Qt.Key_Home:
+            return self._focus_cell(row, 0, edit=False)
+        if key == Qt.Key_End:
+            return self._focus_cell(row, self.tableWidget.columnCount() - 1, edit=False)
+        if key == Qt.Key_PageUp:
+            return self._focus_relative(row, col, -self._page_step(), 0)
+        if key == Qt.Key_PageDown:
+            return self._focus_relative(row, col, self._page_step(), 0)
+        return False
 
     def _accept_material_completion(self, editor, text: str) -> None:  # noqa: ANN001
         """Accept a material completer choice and continue like a confirmed edit."""
@@ -506,16 +803,8 @@ class LensEditor(QWidget):
                 if col == self.connector.COL_MATERIAL
                 else editor_text
             )
-            belongs_to_view = editor.parent() is self.tableWidget.viewport()
             if item is not None and fallback_text is not None and item.text() != fallback_text:
                 item.setText(fallback_text)
-            if belongs_to_view:
-                try:
-                    self.tableWidget.closeEditor(
-                        editor, QAbstractItemDelegate.EndEditHint.NoHint
-                    )
-                except (RuntimeError, TypeError):
-                    pass
             self.tableWidget.setFocus(Qt.FocusReason.OtherFocusReason)
         elif hasattr(source, "editingFinished"):
             source.editingFinished.emit()
@@ -527,36 +816,41 @@ class LensEditor(QWidget):
             col = source.property("lens_col")
             if isinstance(row, int) and isinstance(col, int):
                 return row, col
+        active_row, active_col = self._active_cell
+        if active_row >= 0 and active_col >= 0:
+            return active_row, active_col
         return self.tableWidget.currentRow(), self.tableWidget.currentColumn()
 
     def _is_properties_row(self, row: int) -> bool:
         return self.open_prop_source_row != -1 and row == self.open_prop_source_row + 1
 
-    def _iter_editable_positions(self) -> list[tuple[int, int]]:
-        """Return editable cells from Comment onward, skipping properties rows."""
+    def _iter_navigable_positions(self) -> list[tuple[int, int]]:
+        """Return all regular table cells in row-major order."""
         positions: list[tuple[int, int]] = []
         for row in range(self.tableWidget.rowCount()):
             if self._is_properties_row(row):
                 continue
-            for col in range(self.connector.COL_COMMENT, self.tableWidget.columnCount()):
+            for col in range(self.tableWidget.columnCount()):
                 item = self.tableWidget.item(row, col)
-                if item and item.flags() & Qt.ItemFlag.ItemIsEditable:
+                widget = self.tableWidget.cellWidget(row, col)
+                if item is not None or widget is not None:
                     positions.append((row, col))
         return positions
 
-    def _first_editable_in_row(self, row: int) -> tuple[int, int] | None:
-        """Return the first editable cell in *row*, preferring Comment."""
-        for col in range(self.connector.COL_COMMENT, self.tableWidget.columnCount()):
+    def _first_navigable_in_row(self, row: int) -> tuple[int, int] | None:
+        """Return the first visible cell in *row*."""
+        for col in range(self.tableWidget.columnCount()):
             item = self.tableWidget.item(row, col)
-            if item and item.flags() & Qt.ItemFlag.ItemIsEditable:
+            widget = self.tableWidget.cellWidget(row, col)
+            if item is not None or widget is not None:
                 return row, col
         return None
 
-    def _next_editable_cell(
+    def _next_navigable_cell(
         self, row: int, col: int, backwards: bool = False
     ) -> tuple[int, int] | None:
-        """Return the next editable cell and wrap across the whole table."""
-        positions = self._iter_editable_positions()
+        """Return the next visible cell and wrap across the whole table."""
+        positions = self._iter_navigable_positions()
         if not positions:
             return None
         if backwards:
@@ -570,15 +864,35 @@ class LensEditor(QWidget):
                 return position
         return positions[0]
 
-    def _focus_cell_for_editing(self, row: int, col: int) -> None:
-        """Focus and open a table cell for editing."""
+    def _focus_cell(self, row: int, col: int, *, edit: bool) -> bool:
+        """Focus a table cell and optionally open it for editing."""
+        if row < 0 or col < 0 or self._is_properties_row(row):
+            return False
         item = self.tableWidget.item(row, col)
-        if item is None:
-            return
+        widget = self.tableWidget.cellWidget(row, col)
+        if item is None and widget is None:
+            return False
         self.tableWidget.setFocus()
-        self.tableWidget.setCurrentCell(row, col)
-        self.tableWidget.scrollToItem(item, QAbstractItemView.PositionAtCenter)
-        self.tableWidget.editItem(item)
+        if item is not None:
+            self.tableWidget.setCurrentItem(item)
+            self.tableWidget.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+        else:
+            self.tableWidget.setCurrentCell(row, col)
+        self._remember_active_cell(row, col)
+        if edit and item is not None and item.flags() & Qt.ItemFlag.ItemIsEditable:
+            self.tableWidget.editItem(item)
+        return True
+
+    def _focus_relative(self, row: int, col: int, row_delta: int, col_delta: int) -> bool:
+        """Move to a nearby visible cell while clamping to the table bounds."""
+        target_row = min(max(0, row + row_delta), self.tableWidget.rowCount() - 1)
+        target_col = min(max(0, col + col_delta), self.tableWidget.columnCount() - 1)
+        return self._focus_cell(target_row, target_col, edit=False)
+
+    def _page_step(self) -> int:
+        row_height = max(1, self.tableWidget.verticalHeader().defaultSectionSize())
+        viewport_height = max(1, self.tableWidget.viewport().height())
+        return max(1, viewport_height // row_height)
 
     def _cell_display_text(self, row: int, col: int) -> str:
         """Return the visible text for a table cell, including widget-backed ones."""
@@ -598,11 +912,70 @@ class LensEditor(QWidget):
 
     def _copy_current_cell_to_clipboard(self) -> None:
         """Copy the currently focused cell value to the clipboard."""
-        row = self.tableWidget.currentRow()
-        col = self.tableWidget.currentColumn()
+        row, col = self._active_cell
+        if row < 0 or col < 0:
+            row = self.tableWidget.currentRow()
+            col = self.tableWidget.currentColumn()
         if row < 0 or col < 0:
             return
         QApplication.clipboard().setText(self._cell_display_text(row, col))
+
+    def _cut_replacement_text(self, row: int, col: int) -> str | None:
+        """Return a valid replacement value for Cut on a given cell.
+
+        Table cells in the Lens Editor often represent required numeric fields,
+        so writing an empty string can be invalid. This method maps Cut to a
+        sensible default per column.
+        """
+        del row
+        defaults = {
+            self.connector.COL_COMMENT: "",
+            self.connector.COL_RADIUS: "inf",
+            self.connector.COL_THICKNESS: "0.0000",
+            self.connector.COL_MATERIAL: "Air",
+            self.connector.COL_CONIC: "0.0000",
+            self.connector.COL_SEMI_DIAMETER: "0.0000",
+        }
+        return defaults.get(col)
+
+    def _cut_current_cell_to_clipboard(self) -> None:
+        """Cut the current cell when editable and copy its prior value."""
+        row, col = self._active_cell
+        if row < 0 or col < 0:
+            row = self.tableWidget.currentRow()
+            col = self.tableWidget.currentColumn()
+        if row < 0 or col < 0:
+            return
+
+        text = self._cell_display_text(row, col)
+        if text == "":
+            return
+        QApplication.clipboard().setText(text)
+
+        widget = self.tableWidget.cellWidget(row, col)
+        if isinstance(widget, SurfaceTypeWidget):
+            if widget.type_edit.isReadOnly():
+                return
+            replacement = self._cut_replacement_text(row, col)
+            if replacement is None:
+                return
+            widget.type_edit.setText(replacement)
+            widget.text_changed()
+            self._remember_active_cell(row, col)
+            return
+
+        item = self.tableWidget.item(row, col)
+        if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEditable):
+            return
+        replacement = self._cut_replacement_text(row, col)
+        if replacement is None:
+            return
+
+        self.tableWidget.blockSignals(True)
+        item.setText(replacement)
+        self.tableWidget.blockSignals(False)
+        self.on_item_changed_handler(item)
+        self._remember_active_cell(row, col)
 
     def _copy_selected_row_to_clipboard(self) -> None:
         """Copy the current row as a tab-separated line."""
@@ -614,6 +987,41 @@ class LensEditor(QWidget):
             for col in range(self.tableWidget.columnCount())
         ]
         QApplication.clipboard().setText("\t".join(values))
+
+    def _paste_clipboard_into_current_cell(self) -> None:
+        """Paste clipboard text into the active editable cell."""
+        text = QApplication.clipboard().text()
+        if text == "":
+            return
+        row, col = self._active_cell
+        if row < 0 or col < 0:
+            row = self.tableWidget.currentRow()
+            col = self.tableWidget.currentColumn()
+        if row < 0 or col < 0:
+            return
+
+        widget = self.tableWidget.cellWidget(row, col)
+        if isinstance(widget, SurfaceTypeWidget):
+            if widget.type_edit.isReadOnly():
+                return
+            pasted_type = text.strip().lower()
+            if pasted_type in widget.connector.get_available_surface_types():
+                widget.type_selected(pasted_type)
+            else:
+                widget.type_edit.setText(text)
+                widget.text_changed()
+            self._remember_active_cell(row, col)
+            return
+
+        item = self.tableWidget.item(row, col)
+        if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEditable):
+            return
+
+        self.tableWidget.blockSignals(True)
+        item.setText(text)
+        self.tableWidget.blockSignals(False)
+        self.on_item_changed_handler(item)
+        self._remember_active_cell(row, col)
 
     def _request_add_optimization_variable(self) -> None:
         """Emit requestAddOptimizationVariable for the currently focused cell."""
@@ -658,7 +1066,7 @@ class LensEditor(QWidget):
             self.tableWidget.setCurrentCell(
                 self._pending_insert_ui_row, self.connector.COL_TYPE
             )
-            target = self._first_editable_in_row(self._pending_insert_ui_row)
+            target = self._first_navigable_in_row(self._pending_insert_ui_row)
             if target is not None:
                 item = self.tableWidget.item(*target)
                 if item is not None:
@@ -681,8 +1089,16 @@ class LensEditor(QWidget):
             widget.propertiesIconClicked.connect(
                 lambda r=row: self.toggle_properties_widget(r)
             )
+            widget.installEventFilter(self)
+            widget.type_button.setProperty("lens_row", row)
+            widget.type_button.setProperty("lens_col", col_idx)
+            widget.type_button.installEventFilter(self)
+            widget.props_button.setProperty("lens_row", row)
+            widget.props_button.setProperty("lens_col", col_idx)
+            widget.props_button.installEventFilter(self)
             widget.type_edit.setProperty("lens_row", row)
             widget.type_edit.setProperty("lens_col", col_idx)
+            widget.type_edit.setProperty("lens_table_editor", True)
             widget.type_edit.installEventFilter(self)
             self.tableWidget.setCellWidget(row, col_idx, widget)
 
@@ -755,6 +1171,12 @@ class LensEditor(QWidget):
             self._insert_properties_widget(self.open_prop_source_row)
 
         self.tableWidget.blockSignals(False)
+        self._sync_current_cell_highlight(
+            self.tableWidget.currentRow(),
+            self.tableWidget.currentColumn(),
+            -1,
+            -1,
+        )
 
     def _insert_properties_widget(self, source_row):
         prop_row_index = source_row + 1
@@ -799,8 +1221,11 @@ class LensEditor(QWidget):
         original_bg = item.background()
 
         def set_bg(color):
+            current_item = self.tableWidget.item(row, col)
+            if current_item is None:
+                return
             self.tableWidget.blockSignals(True)
-            item.setBackground(QBrush(color))
+            current_item.setBackground(QBrush(color))
             self.tableWidget.blockSignals(False)
 
         set_bg(flash_color)
@@ -923,7 +1348,9 @@ class LensEditor(QWidget):
                 self.tableWidget.setCurrentCell(ui_row, self.tableWidget.columnAt(pos.x()))
 
             copy_cell_action = menu.addAction("Copy Cell")
+            cut_cell_action = menu.addAction("Cut Cell")
             copy_row_action = menu.addAction("Copy Row")
+            paste_cell_action = menu.addAction("Paste Cell")
             menu.addSeparator()
             add_above = menu.addAction("Add Surface Above")
             add_above.triggered.connect(lambda: self.add_surface_handler(surface_index))
@@ -977,7 +1404,11 @@ class LensEditor(QWidget):
             chosen = menu.exec(self.tableWidget.viewport().mapToGlobal(pos))
             if chosen == copy_cell_action:
                 self._copy_current_cell_to_clipboard()
+            elif chosen == cut_cell_action:
+                self._cut_current_cell_to_clipboard()
             elif chosen == copy_row_action:
                 self._copy_selected_row_to_clipboard()
+            elif chosen == paste_cell_action:
+                self._paste_clipboard_into_current_cell()
         else:
             menu.exec(self.tableWidget.viewport().mapToGlobal(pos))

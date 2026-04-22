@@ -217,3 +217,13 @@ def test_material_browser_warns_when_marking_builtin_material(qapp) -> None:
             "warning",
         )
     ]
+
+
+def test_material_browser_copy_uses_active_table_cell(qapp) -> None:
+    panel = MaterialBrowserPanel(_DummyConnector())
+
+    panel.results_table.setCurrentCell(1, 2)
+    panel._results_table_copy._remember_cell(1, 2)
+    panel._results_table_copy.copy_current_cell_to_clipboard()
+
+    assert qapp.clipboard().text() == "ADC1"

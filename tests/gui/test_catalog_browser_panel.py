@@ -590,6 +590,17 @@ def test_catalog_browser_copy_shortcuts_copy_current_cell_and_row(qapp) -> None:
     assert qapp.clipboard().text() == "\t".join(expected)
 
 
+def test_catalog_browser_copy_prefers_last_active_cell_over_current_item(qapp) -> None:
+    panel = CatalogBrowserPanel(_ResultConnector())
+
+    panel._results_table_copy._remember_cell(0, 5)
+    panel.results_table.setCurrentCell(0, 1)
+
+    panel._copy_current_cell_to_clipboard()
+
+    assert qapp.clipboard().text() == panel.results_table.item(0, 5).text()
+
+
 def test_catalog_browser_can_open_selected_product_url(monkeypatch, qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
     panel.results_table.setCurrentCell(0, 0)
@@ -813,13 +824,15 @@ def test_catalog_browser_can_mark_filtered_and_delete_marked(monkeypatch, qapp) 
 def test_catalog_browser_mark_button_switches_to_mark_all_without_selection(qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
 
-    assert panel.mark_filtered_button.text() == "Mark Filtered"
+    assert panel.mark_filtered_button.text() == ""
+    assert panel.mark_filtered_button.toolTip() == "Mark Filtered"
 
     panel.results_table.clearSelection()
     panel.results_table.setCurrentCell(-1, -1)
     panel._update_details()
 
-    assert panel.mark_filtered_button.text() == "Mark All"
+    assert panel.mark_filtered_button.text() == ""
+    assert panel.mark_filtered_button.toolTip() == "Mark All"
 
 
 def test_catalog_browser_populates_large_result_sets_in_batches(qapp) -> None:

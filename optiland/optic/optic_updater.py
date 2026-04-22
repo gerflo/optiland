@@ -88,6 +88,12 @@ class OpticUpdater:
         if hasattr(positions, "detach"):
             positions = positions.detach()
         delta_t = value - positions[surface_number + 1] + positions[surface_number]
+        if not be.all(be.isfinite(be.asarray(delta_t))):
+            # During interactive editing the system can be transiently invalid.
+            # Avoid propagating NaN position shifts through the whole optic.
+            if surface_number < len(self.optic.surfaces):
+                self.optic.surfaces[surface_number].thickness = value
+            return
         positions = be.copy(positions)  # required to avoid in-place modification
         positions[surface_number + 1 :] = positions[surface_number + 1 :] + delta_t
         positions = positions - positions[1]  # force surface 1 to be at zero

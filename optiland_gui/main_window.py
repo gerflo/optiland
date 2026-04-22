@@ -37,14 +37,17 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QDialog,
+    QDialogButtonBox,
     QDockWidget,
     QFileDialog,
-    QInputDialog,
+    QFormLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenuBar,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTabWidget,
     QToolBar,
     QVBoxLayout,
@@ -61,6 +64,7 @@ from .config import (
     OPTILAND_ICON_PATH,
     ORGANIZATION_NAME,
     SIDEBAR_QSS_PATH,
+    build_control_size_override,
 )
 from .optiland_connector import OptilandConnector
 from .panel_manager import PanelManager
@@ -332,6 +336,7 @@ class MainWindow(FramelessWindow):
         self._apply_window_chrome(False)
         self._restore_window_placement()
         self._restore_current_layout_state()
+        self._update_layout_slot_actions()
 
     def _apply_revised_default_dock_layout(self):
         """Applies the default docking layout to the main window.
@@ -704,6 +709,7 @@ class MainWindow(FramelessWindow):
                 print(f"Error loading sidebar stylesheet {SIDEBAR_QSS_PATH}: {e}")
 
         style_str += "\n" + build_palette_override(theme)
+        style_str += "\n" + build_control_size_override()
         self.setStyleSheet(style_str)
 
         is_dark = theme.mode == "dark"
@@ -1298,31 +1304,80 @@ class MainWindow(FramelessWindow):
 
     @Slot()
     def save_layout_slot(self):
-        target_slot, ok = QInputDialog.getInt(
-            self,
-            "Save Layout",
-            "Save current layout to slot:",
-            value=self.next_save_slot_index,
-            minValue=1,
-            maxValue=self.MAX_LAYOUT_SLOTS,
+        save_dialog = QDialog(self)
+        save_dialog.setWindowTitle("Save Layout")
+        dialog_layout = QVBoxLayout(save_dialog)
+        form_layout = QFormLayout()
+
+        slot_spinbox = QSpinBox(save_dialog)
+        slot_spinbox.setRange(1, self.MAX_LAYOUT_SLOTS)
+        slot_spinbox.setValue(self.next_save_slot_index)
+        form_layout.addRow("Slot:", slot_spinbox)
+
+        name_edit = QLineEdit(save_dialog)
+        name_edit.setMaxLength(20)
+        name_edit.setText(
+            self._layout_slot_display_name(slot_spinbox.value(), include_slot=False)
         )
-        if not ok:
+        name_edit.selectAll()
+        form_layout.addRow("Name:", name_edit)
+
+        slot_spinbox.valueChanged.connect(
+            lambda slot: (
+                not name_edit.text().strip()
+                and name_edit.setText(
+                    self._layout_slot_display_name(slot, include_slot=False)
+                )
+            )
+        )
+
+        dialog_layout.addLayout(form_layout)
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel,
+            parent=save_dialog,
+        )
+        button_box.accepted.connect(save_dialog.accept)
+        button_box.rejected.connect(save_dialog.reject)
+        dialog_layout.addWidget(button_box)
+
+        if save_dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
+        target_slot = slot_spinbox.value()
+        layout_name = name_edit.text().strip()[:20] or f"Layout {target_slot}"
+
+        self._save_layout_to_slot(target_slot, layout_name)
+
+    def _layout_slot_display_name(
+        self, slot: int, include_slot: bool = True
+    ) -> str:
+        """Return the user-facing label for a saved layout slot."""
+        name = self.settings.value(f"Layouts/Config{slot}Name", "", type=str).strip()
+        if not name:
+            return str(slot) if include_slot else f"Layout {slot}"
+        return f"{slot}: {name}" if include_slot else name
+
+    def _save_layout_to_slot(self, target_slot: int, layout_name: str) -> None:
+        """Persist the current layout into a numbered slot with a user label."""
+        layout_name = layout_name.strip()[:20] or f"Layout {target_slot}"
         window_geometry = self.saveGeometry()
         dock_toolbar_state = self.saveState()
         self.settings.setValue(f"Layouts/Config{target_slot}Geometry", window_geometry)
         self.settings.setValue(f"Layouts/Config{target_slot}State", dock_toolbar_state)
+        self.settings.setValue(f"Layouts/Config{target_slot}Name", layout_name)
         if self.toast_manager:
             self.toast_manager.notify(
-                f"Layout saved to configuration — {target_slot}", "success"
+                f"Layout saved to {self._layout_slot_display_name(target_slot)}",
+                "success",
             )
         self.next_save_slot_index = target_slot
         self.settings.setValue("Layouts/NextSaveSlot", self.next_save_slot_index)
         self._update_layout_slot_actions()
         logger.debug(
-            "Layout saved to slot %d. Next save dialog will default to slot %d.",
+            "Layout saved to slot %d as '%s'. Next save dialog will default to slot %d.",
             target_slot,
+            layout_name,
             self.next_save_slot_index,
         )
 
@@ -1331,8 +1386,11 @@ class MainWindow(FramelessWindow):
         for slot in range(1, self.MAX_LAYOUT_SLOTS + 1):
             load_action = self.action_manager.get_action(f"load_layout_{slot}")
             if load_action:
-                load_action.setEnabled(
-                    self.settings.contains(f"Layouts/Config{slot}Geometry")
+                has_layout = self.settings.contains(f"Layouts/Config{slot}Geometry")
+                load_action.setEnabled(has_layout)
+                load_action.setText(self._layout_slot_display_name(slot))
+                load_action.setToolTip(
+                    f"Load Layout {self._layout_slot_display_name(slot)} (Alt+{slot})"
                 )
 
     def _load_layout_from_slot(self, slot_number):
@@ -1357,18 +1415,20 @@ class MainWindow(FramelessWindow):
                 self._normalize_all_docks()
                 if self.toast_manager:
                     self.toast_manager.notify(
-                        f"Layout from configuration — {slot_number} loaded.", "success"
+                        f"Layout {self._layout_slot_display_name(slot_number)} loaded.",
+                        "success",
                     )
             else:
                 if self.toast_manager:
                     self.toast_manager.notify(
-                        f"Invalid layout data in configuration — {slot_number}.",
+                        f"Invalid layout data in {self._layout_slot_display_name(slot_number)}.",
                         "warning",
                     )
         else:
             if self.toast_manager:
                 self.toast_manager.notify(
-                    f"No layout saved in configuration — {slot_number}.", "info"
+                    f"No layout saved in {self._layout_slot_display_name(slot_number)}.",
+                    "info",
                 )
 
     @Slot()

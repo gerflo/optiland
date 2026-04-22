@@ -1029,3 +1029,127 @@ QToolTip {
     border: 1px solid #C8D2DE;
     padding: 5px 8px;
 }
+
+/* === Final control polish overrides (Light) === */
+QPushButton:disabled {
+    background-color: #E2E8F0;
+    border-color: #C4CEDA;
+    color: #667686;
+}
+
+QSpinBox,
+QDoubleSpinBox,
+QComboBox {
+    background-color: #FFFFFF;
+    color: #16202B;
+    border: 1px solid #B9C7D6;
+}
+
+QSpinBox:hover,
+QDoubleSpinBox:hover,
+QComboBox:hover {
+    border: 1px solid #8EA7C2;
+    background-color: #FBFDFF;
+}
+
+QSpinBox:focus,
+QDoubleSpinBox:focus,
+QComboBox:focus {
+    border: 1px solid #0B6BCB;
+    background-color: #FFFFFF;
+}
+
+QAbstractSpinBox::up-button,
+QAbstractSpinBox::down-button {
+    background-color: #EDF3F8;
+    border-left: 1px solid #C8D2DE;
+}
+
+QAbstractSpinBox::up-button {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    border-top-right-radius: 5px;
+}
+
+QAbstractSpinBox::down-button {
+    subcontrol-origin: padding;
+    subcontrol-position: bottom right;
+    border-top: 1px solid #C8D2DE;
+    border-bottom-right-radius: 5px;
+}
+
+QAbstractSpinBox::up-button:hover,
+QAbstractSpinBox::down-button:hover,
+QComboBox::drop-down:hover {
+    background-color: #DCE9F7;
+}
+
+QAbstractSpinBox::up-button:pressed,
+QAbstractSpinBox::down-button:pressed,
+QComboBox::drop-down:pressed {
+    background-color: #C8DCF2;
+}
+
+QAbstractSpinBox::up-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 7px solid #3A4A5C;
+}
+
+QAbstractSpinBox::down-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid #3A4A5C;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    background-color: #EDF3F8;
+    border-left: 1px solid #C8D2DE;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+}
+
+QComboBox::down-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid #3A4A5C;
+    margin-right: 1px;
+}
+
+#ViewerToolbarContainer QToolButton,
+QToolBar#QuickActionsToolbar QToolButton {
+    border: 1px solid #C8D2DE;
+    background-color: #F7FAFD;
+    color: #1F2D3A;
+}
+
+#ViewerToolbarContainer QToolButton:hover,
+QToolBar#QuickActionsToolbar QToolButton:hover {
+    background-color: #E4EFFB;
+    border: 1px solid #97B5D3;
+    color: #12263A;
+}
+
+#ViewerToolbarContainer QToolButton:pressed,
+#ViewerToolbarContainer QToolButton:checked,
+QToolBar#QuickActionsToolbar QToolButton:pressed,
+QToolBar#QuickActionsToolbar QToolButton:checked {
+    background-color: #D4E5F9;
+    border: 1px solid #4E87C6;
+    color: #0B4F8A;
+}
+
+#ViewerToolbarContainer QToolButton:disabled,
+QToolBar#QuickActionsToolbar QToolButton:disabled {
+    background-color: #EEF2F6;
+    border: 1px solid #D3DCE6;
+    color: #93A1AF;
+}
