@@ -36,10 +36,14 @@ class CatalogSearchService:
     ) -> list[CatalogLensRecord]:
         """Return matching records sorted by manufacturer and part number."""
         text = query.text.casefold().strip()
-        normalized_text = _normalize_compact_token(text)
+        text_variants = _part_number_search_variants(text)
+        normalized_text_variants = {_normalize_compact_token(value) for value in text_variants}
         manufacturer = query.manufacturer.casefold().strip()
         part_number = query.part_number.casefold().strip()
-        normalized_part_number = _normalize_compact_token(part_number)
+        part_number_variants = _part_number_search_variants(part_number)
+        normalized_part_number_variants = {
+            _normalize_compact_token(value) for value in part_number_variants
+        }
         product_name = query.product_name.casefold().strip()
         category = query.category.casefold().strip()
         material_text = query.material_text.casefold().strip()
@@ -51,15 +55,19 @@ class CatalogSearchService:
             search_blob = record.search_blob or record.build_search_blob()
             if text and text not in search_blob:
                 normalized_blob = _normalize_compact_token(search_blob)
-                if not normalized_text or normalized_text not in normalized_blob:
+                if not normalized_text_variants or not any(
+                    variant and variant in normalized_blob
+                    for variant in normalized_text_variants
+                ):
                     continue
             if manufacturer and record.manufacturer.casefold() != manufacturer:
                 continue
             record_part_number = record.part_number.casefold()
             if part_number and part_number not in record_part_number:
-                if (
-                    not normalized_part_number
-                    or normalized_part_number not in _normalize_compact_token(record_part_number)
+                normalized_record_part_number = _normalize_compact_token(record_part_number)
+                if not normalized_part_number_variants or not any(
+                    variant and variant in normalized_record_part_number
+                    for variant in normalized_part_number_variants
                 ):
                     continue
             if product_name and product_name not in record.product_name.casefold():
@@ -109,3 +117,14 @@ def _matches_range(
 def _normalize_compact_token(value: str) -> str:
     """Return a case-insensitive token with separators removed."""
     return re.sub(r"[^0-9a-z]+", "", value.casefold())
+
+
+def _part_number_search_variants(value: str) -> set[str]:
+    """Return normalized query variants for common vendor part-number prefixes."""
+    variants = {value}
+    compact = _normalize_compact_token(value)
+    if re.fullmatch(r"g\d{5,}", compact):
+        variants.add(compact[1:])
+    elif re.fullmatch(r"\d{5,}", compact):
+        variants.add(f"g{compact}")
+    return {variant for variant in variants if variant}

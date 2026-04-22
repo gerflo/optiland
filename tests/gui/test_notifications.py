@@ -96,3 +96,12 @@ class TestSidebarNoQMessageBox:
 
         assert len(messages) == 1
         assert "development" in messages[0].lower()
+
+    def test_sidebar_no_longer_contains_materials_button(self, qapp):
+        from optiland_gui.widgets.sidebar import SidebarWidget
+
+        widget = SidebarWidget()
+        button_names = [item["name"] for item in widget._buttons_list]
+
+        assert "catalogs" in button_names
+        assert "materials" not in button_names

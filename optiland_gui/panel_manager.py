@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QDockWidget, QMainWindow, QTabWidget, QWidget
 
 from .analysis_panel import AnalysisPanel
 from .catalog_browser_panel import CatalogBrowserPanel
+from .catalogs_panel import CatalogsPanel
 from .lens_editor import LensEditor
 from .material_browser_panel import MaterialBrowserPanel
 from .optimization_panel import OptimizationPanel
@@ -94,13 +95,13 @@ class PanelManager:
         )
 
         self.catalog_browser_panel = CatalogBrowserPanel(self.connector)
-        self.catalog_browser_dock = self._create_dock(
-            self.catalog_browser_panel, "CatalogBrowserDock", "Stock Lens Catalog"
-        )
-
         self.material_browser_panel = MaterialBrowserPanel(self.connector)
-        self.material_browser_dock = self._create_dock(
-            self.material_browser_panel, "MaterialBrowserDock", "Material Database"
+        self.catalogs_panel = CatalogsPanel(
+            self.catalog_browser_panel,
+            self.material_browser_panel,
+        )
+        self.catalog_browser_dock = self._create_dock(
+            self.catalogs_panel, "CatalogBrowserDock", "Catalogs"
         )
 
         # Scripting terminal — inject connector and iface into the kernel
@@ -124,7 +125,6 @@ class PanelManager:
             self.analysis_dock,
             self.optimization_dock,
             self.catalog_browser_dock,
-            self.material_browser_dock,
             self.terminal_dock,
         ]
 
@@ -196,9 +196,6 @@ class PanelManager:
         self.main_window.tabifyDockWidget(
             self.optimization_dock, self.catalog_browser_dock
         )
-        self.main_window.tabifyDockWidget(
-            self.catalog_browser_dock, self.material_browser_dock
-        )
         self.main_window.splitDockWidget(
             self.analysis_dock, self.terminal_dock, Qt.Vertical
         )
@@ -227,6 +224,7 @@ class PanelManager:
         optimization_parent = self.optimization_dock.parentWidget()
         if isinstance(optimization_parent, QTabWidget):
             optimization_parent.setCurrentWidget(self.optimization_dock)
+        self.catalogs_panel.show_catalog_tab()
 
     def get_all_docks(self) -> list[QDockWidget]:
         """Return a list of all managed dock widgets."""
@@ -259,13 +257,22 @@ class PanelManager:
             "analysis": self.analysis_dock,
             "optimization": self.optimization_dock,
             "catalogs": self.catalog_browser_dock,
-            "materials": self.material_browser_dock,
             "scripts": self.terminal_dock,
             "design": self.lens_editor_dock,
         }
         dock = dock_map.get(button_name)
         if dock:
             self.main_window.focus_dock_widget(dock)
+
+    def focus_catalog_browser(self) -> None:
+        """Focus the shared catalogs dock and select the stock-lens tab."""
+        self.catalogs_panel.show_catalog_tab()
+        self.main_window.focus_dock_widget(self.catalog_browser_dock)
+
+    def focus_material_browser(self) -> None:
+        """Focus the shared catalogs dock and select the material tab."""
+        self.catalogs_panel.show_material_tab()
+        self.main_window.focus_dock_widget(self.catalog_browser_dock)
 
     def update_theme(self, theme_name: str) -> None:
         """Propagate a theme change to all relevant panels.

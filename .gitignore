@@ -20,3 +20,8 @@ sg_execution_times.rst
 optiland/database/catalog_nk_winlens.csv
 optiland/database/data-nk/glass/winlens/
 tests/_tmp_live_excelitas_check/
+.uv-cache/
+.tmp/
+.tmp*/
+.pytest_cache/
+tests/_tmp_*/

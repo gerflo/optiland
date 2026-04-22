@@ -114,6 +114,41 @@ class TestCatalogInsertionSpecs:
         assert surfaces[0]["material"] == "BAFN10"
         assert surfaces[0]["material_reference"] == "Schott"
 
+    def test_record_to_insert_specs_formats_catalog_surface_comments_with_part_number(self) -> None:
+        record = CatalogLensRecord(
+            catalog_id="winlens:063823000",
+            manufacturer="WinLens Library 2002",
+            part_number="063823000",
+            product_name="Plano-convex demo",
+            surfaces=[
+                LensSurfaceSpec(
+                    surface_type="standard",
+                    radius=51.212,
+                    thickness=4.0,
+                    material="N-BK7",
+                    semi_diameter=12.7,
+                    comment="Surf  1",
+                ),
+                LensSurfaceSpec(
+                    surface_type="standard",
+                    radius="inf",
+                    thickness=0.0,
+                    material="Air",
+                    semi_diameter=12.7,
+                    comment="Surface 2",
+                ),
+            ],
+            source=CatalogSource(
+                manufacturer="WinLens Library 2002",
+                source_type="winlens_dat",
+            ),
+        )
+
+        surfaces, _stop_offset = record_to_insert_specs(record)
+
+        assert surfaces[0]["comment"] == "063823000 (S1)"
+        assert surfaces[1]["comment"] == "063823000 (S2)"
+
 
 class TestCatalogSurfaceInsertion:
     @pytest.fixture()
@@ -315,11 +350,132 @@ class TestCatalogSurfaceInsertion:
                 source_type="excelitas_shop_html",
             ),
         )
+        connector._catalog_service.resolve_insertable_record.return_value = None
 
         with pytest.raises(ValueError, match="metadata-only"):
             OptilandConnector.insert_catalog_lens(connector, "excelitas:g063213000", 1, "after")
 
         connector._surface_service.insert_surface_sequence.assert_not_called()
+
+    def test_insert_catalog_lens_uses_insertable_winlens_fallback_record(self) -> None:
+        connector = MagicMock()
+        connector._catalog_service = MagicMock()
+        connector._surface_service = MagicMock()
+        metadata_record = CatalogLensRecord(
+            catalog_id="winlens:063213000",
+            manufacturer="WinLens Library 2002",
+            part_number="063213000",
+            product_name="Achromat 80/25.4 ECO-Vers.-322 Achromat",
+            category="achromat",
+            efl_mm=80.0,
+            diameter_mm=25.4,
+            source=CatalogSource(
+                manufacturer="WinLens Library 2002",
+                source_type="winlens_dat",
+            ),
+        )
+        optical_record = CatalogLensRecord(
+            catalog_id="winlens:322307",
+            manufacturer="WinLens Library 2002",
+            part_number="322307",
+            product_name="Achromat demo",
+            category="achromat",
+            surfaces=[
+                LensSurfaceSpec(
+                    surface_type="standard",
+                    radius=25.0,
+                    thickness=4.0,
+                    material="N-BK7",
+                    semi_diameter=12.7,
+                    comment="Surface 1",
+                )
+            ],
+            source=CatalogSource(
+                manufacturer="WinLens Library 2002",
+                source_type="winlens_spd",
+            ),
+        )
+        connector._catalog_service.get_record.return_value = metadata_record
+        connector._catalog_service.resolve_insertable_record.return_value = optical_record
+
+        OptilandConnector.insert_catalog_lens(connector, "winlens:063213000", 1, "after")
+
+        connector._surface_service.insert_surface_sequence.assert_called_once()
+
+    def test_insert_catalog_lens_reports_missing_winlens_surface_model_clearly(self) -> None:
+        connector = MagicMock()
+        connector._catalog_service = MagicMock()
+        connector._surface_service = MagicMock()
+        connector._catalog_service.get_record.return_value = CatalogLensRecord(
+            catalog_id="winlens:063213000",
+            manufacturer="WinLens Library 2002",
+            part_number="063213000",
+            product_name="Achromat 80/25.4 ECO-Vers.-322 Achromat",
+            category="achromat",
+            efl_mm=80.0,
+            diameter_mm=25.4,
+            source=CatalogSource(
+                manufacturer="WinLens Library 2002",
+                source_type="winlens_dat",
+            ),
+        )
+        connector._catalog_service.resolve_insertable_record.return_value = None
+
+        with pytest.raises(ValueError, match="No optical surface model was found"):
+            OptilandConnector.insert_catalog_lens(connector, "winlens:063213000", 1, "after")
+
+        connector._surface_service.insert_surface_sequence.assert_not_called()
+
+    def test_insert_catalog_lens_uses_paraxial_surrogate_for_winlens_family_metadata(self) -> None:
+        connector = MagicMock()
+        connector._catalog_service = MagicMock()
+        connector._surface_service = MagicMock()
+        metadata_record = CatalogLensRecord(
+            catalog_id="excelitas linos:g063213000",
+            manufacturer="Excelitas LINOS",
+            part_number="G063213000",
+            product_name="Achr. VIS ARB2; D=25.4; F=80; mounted",
+            category="achromat",
+            efl_mm=80.0,
+            diameter_mm=25.4,
+            source=CatalogSource(
+                manufacturer="Excelitas LINOS",
+                source_type="excelitas_shop_html",
+            ),
+        )
+        surrogate_record = CatalogLensRecord(
+            catalog_id="winlens library 2002:063213000",
+            manufacturer="WinLens Library 2002",
+            part_number="063213000",
+            product_name="Achromat 80/25.4 ECO-Vers.-322 Achromat",
+            category="achromat",
+            efl_mm=80.0,
+            diameter_mm=25.4,
+            surfaces=[
+                LensSurfaceSpec(
+                    surface_type="paraxial",
+                    thickness=0.0,
+                    material="Air",
+                    semi_diameter=12.7,
+                    comment="WinLens surrogate",
+                    extra_data={"f": 80.0},
+                )
+            ],
+            source=CatalogSource(
+                manufacturer="WinLens Library 2002",
+                source_type="winlens_dat",
+            ),
+        )
+        connector._catalog_service.get_record.return_value = metadata_record
+        connector._catalog_service.resolve_insertable_record.return_value = surrogate_record
+
+        OptilandConnector.insert_catalog_lens(connector, "excelitas linos:g063213000", 1, "after")
+
+        connector._surface_service.insert_surface_sequence.assert_called_once()
+        inserted_surfaces = connector._surface_service.insert_surface_sequence.call_args.args[1]
+        assert inserted_surfaces[0]["surface_type"] == "paraxial"
+        assert inserted_surfaces[0]["f"] == 80.0
+        assert inserted_surfaces[0]["semi_diameter"] == 12.7
 
 
 class TestCatalogSearchNormalization:
@@ -362,6 +518,26 @@ class TestCatalogSearchNormalization:
         )
 
         assert [item.part_number for item in matches] == ["G063-213-000"]
+
+    def test_part_number_filter_treats_leading_g_prefix_as_optional(self) -> None:
+        record = CatalogLensRecord(
+            catalog_id="winlens:063213000",
+            manufacturer="WinLens Library 2002",
+            part_number="063213000",
+            product_name="Achromat f = 80/25.4 mm",
+            category="achromat",
+            source=CatalogSource(
+                manufacturer="WinLens Library 2002",
+                source_type="winlens_dat",
+            ),
+        )
+
+        matches = CatalogSearchService().search(
+            [record],
+            CatalogSearchQuery(part_number="G063213000"),
+        )
+
+        assert [item.part_number for item in matches] == ["063213000"]
 
     def test_availability_filter_matches_legacy_records(self) -> None:
         legacy_record = CatalogLensRecord(

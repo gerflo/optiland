@@ -104,6 +104,21 @@ class CatalogBrowserPanel(QWidget):
         "Status",
         "Match",
     ]
+    HEADER_LABELS = [
+        "☑",
+        "Manufacturer",
+        "Part No.",
+        "Name",
+        "Category",
+        "EFL",
+        "Diameter",
+        "Material",
+        "Coating",
+        "Status",
+        "Match",
+    ]
+    _SORT_ASC_ARROW = "↑"
+    _SORT_DESC_ARROW = "↓"
     TABLE_SETTINGS_PREFIX = "CatalogBrowser/Table"
 
     def __init__(self, connector: OptilandConnector, parent=None) -> None:
@@ -205,7 +220,7 @@ class CatalogBrowserPanel(QWidget):
         self.table_view_layout.addWidget(self.filter_row_container)
 
         self.results_table = QTableWidget(0, len(self.RESULT_COLUMNS))
-        self.results_table.setHorizontalHeaderLabels(self.RESULT_COLUMNS)
+        self.results_table.setHorizontalHeaderLabels(self.HEADER_LABELS)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.results_table.setSelectionMode(QTableWidget.SingleSelection)
         self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -261,6 +276,7 @@ class CatalogBrowserPanel(QWidget):
         header.sectionResized.connect(self._sync_filter_row_geometry)
         header.sectionMoved.connect(self._sync_filter_row_geometry)
         header.sortIndicatorChanged.connect(self._save_table_state)
+        header.sortIndicatorChanged.connect(self._update_sort_header_labels)
         header.sortIndicatorChanged.connect(lambda *_args: self.refresh())
         self.results_table.installEventFilter(self)
         self.copy_cell_shortcut.activated.connect(self._copy_current_cell_to_clipboard)
@@ -317,6 +333,7 @@ class CatalogBrowserPanel(QWidget):
         self._sort_current_results()
         self._refresh_manufacturer_filter()
         self._begin_results_population()
+        self._update_mark_button_label()
 
     def _begin_results_population(self) -> None:
         """Populate result rows in small batches so the UI stays responsive."""
@@ -484,8 +501,13 @@ class CatalogBrowserPanel(QWidget):
         header = self.results_table.horizontalHeader()
         column = header.sortIndicatorSection()
         reverse = header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+        default_priority = lambda record: (
+            -int(record.get("insertable_surface_count", 0) or 0),
+            -int(record.get("surface_count", 0) or 0),
+            str(record.get("catalog_id", "")).casefold(),
+        )
         key_funcs = {
-            0: lambda record: str(record.get("catalog_id", "")).casefold(),
+            0: default_priority,
             1: lambda record: str(record.get("manufacturer", "")).casefold(),
             2: lambda record: str(record.get("part_number", "")).casefold(),
             3: lambda record: str(record.get("product_name", "")).casefold(),
@@ -499,6 +521,24 @@ class CatalogBrowserPanel(QWidget):
         }
         key_func = key_funcs.get(column, key_funcs[0])
         self._current_results.sort(key=key_func, reverse=reverse)
+
+    @Slot(int, Qt.SortOrder)
+    def _update_sort_header_labels(self, column: int, order: Qt.SortOrder) -> None:
+        """Append a small arrow to the actively sorted column label."""
+        for index, base_label in enumerate(self.RESULT_COLUMNS):
+            label = self.HEADER_LABELS[index]
+            if index == column:
+                arrow = (
+                    self._SORT_DESC_ARROW
+                    if order == Qt.SortOrder.DescendingOrder
+                    else self._SORT_ASC_ARROW
+                )
+                label = f"{label} {arrow}"
+            item = self.results_table.horizontalHeaderItem(index)
+            if item is None:
+                self.results_table.setHorizontalHeaderItem(index, QTableWidgetItem(label))
+            else:
+                item.setText(label)
 
     def _toggle_sort_column(self, column: int) -> None:
         """Toggle the active sort column/order when the user clicks a header."""
@@ -534,6 +574,7 @@ class CatalogBrowserPanel(QWidget):
 
     def _update_details(self) -> None:
         catalog_id = self._selected_catalog_id()
+        self._update_mark_button_label()
         if not catalog_id:
             self.details_text.clear()
             return
@@ -576,6 +617,13 @@ class CatalogBrowserPanel(QWidget):
             lines.append("<small>Top link: no current catalog match suggestion.</small>")
         self.details_text.setTextFormat(Qt.TextFormat.RichText)
         self.details_text.setText("<br>".join(lines))
+
+    def _update_mark_button_label(self) -> None:
+        """Reflect whether the current table state has an active row selection."""
+        has_selection = self.results_table.currentRow() >= 0
+        self.mark_filtered_button.setText(
+            "Mark Filtered" if has_selection else "Mark All"
+        )
 
     def _handle_results_item_changed(self, item: QTableWidgetItem) -> None:
         if self._updating_mark_column or item.column() != 0:
@@ -664,6 +712,7 @@ class CatalogBrowserPanel(QWidget):
                 sort_column,
                 Qt.SortOrder(sort_order),
             )
+            self._update_sort_header_labels(sort_column, Qt.SortOrder(sort_order))
         finally:
             self._restoring_table_state = False
 
@@ -671,6 +720,10 @@ class CatalogBrowserPanel(QWidget):
         """Apply the persisted sort order to the current result table."""
         header = self.results_table.horizontalHeader()
         header.setSortIndicator(header.sortIndicatorSection(), header.sortIndicatorOrder())
+        self._update_sort_header_labels(
+            header.sortIndicatorSection(),
+            header.sortIndicatorOrder(),
+        )
 
     def _save_table_state(self, *args) -> None:  # noqa: ANN002
         """Persist current column widths and sort state."""
@@ -1019,9 +1072,15 @@ class CatalogBrowserPanel(QWidget):
         lens_editor = main_window.panel_manager.lens_editor
         ui_row = lens_editor.tableWidget.currentRow()
         if ui_row < 0:
-            self._notify("Select a target surface in the Lens Data Editor first.", "info")
-            return
-        surface_index = lens_editor.map_ui_row_to_surface_index(ui_row)
+            if mode == "before":
+                surface_index = lens_editor.connector.get_surface_count() - 1
+            else:
+                self._notify(
+                    "Select a target surface in the Lens Data Editor first.", "info"
+                )
+                return
+        else:
+            surface_index = lens_editor.map_ui_row_to_surface_index(ui_row)
         try:
             self.connector.insert_catalog_lens(catalog_id, surface_index, mode)
         except Exception as exc:  # noqa: BLE001
@@ -1112,6 +1171,9 @@ class CatalogBrowserPanel(QWidget):
             self.results_table.selectRow(item.row())
 
         menu = QMenu(self.results_table)
+        insert_before_action = menu.addAction("Insert Before Selected Surface")
+        insert_after_action = menu.addAction("Insert After Selected Surface")
+        menu.addSeparator()
         copy_cell_action = menu.addAction("Copy Cell")
         copy_row_action = menu.addAction("Copy Row")
         menu.addSeparator()
@@ -1122,6 +1184,8 @@ class CatalogBrowserPanel(QWidget):
         catalog_id = self._selected_catalog_id() if has_item else ""
         document_urls = self.connector.get_catalog_document_urls(catalog_id) if catalog_id else []
         has_document = bool(document_urls)
+        insert_before_action.setEnabled(has_item)
+        insert_after_action.setEnabled(has_item)
         copy_cell_action.setEnabled(has_item)
         copy_row_action.setEnabled(has_item)
         open_url_action.setEnabled(has_item)
@@ -1136,7 +1200,11 @@ class CatalogBrowserPanel(QWidget):
             self._populate_vendor_document_menu(document_menu, document_urls)
 
         chosen = menu.exec(self.results_table.viewport().mapToGlobal(pos))
-        if chosen == copy_cell_action:
+        if chosen == insert_before_action:
+            self._insert_selected("before")
+        elif chosen == insert_after_action:
+            self._insert_selected("after")
+        elif chosen == copy_cell_action:
             self._copy_current_cell_to_clipboard()
         elif chosen == copy_row_action:
             self._copy_selected_row_to_clipboard()

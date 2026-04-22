@@ -19,7 +19,10 @@ from optiland_gui.catalogs.importers import (
     ThorlabsCatalogImporter,
     WinLensCatalogImporter,
 )
-from optiland_gui.catalogs.importers.winlens_spd import load_winlens_alias_groups
+from optiland_gui.catalogs.importers.winlens_spd import (
+    is_winlens_catalog_path,
+    load_winlens_alias_groups,
+)
 from optiland_gui.catalogs.importers.excelitas_linos import (
     EXCELITAS_DISCOVERY_PAGE_URLS,
     EXCELITAS_DEFAULT_FAMILY_URLS,
@@ -31,7 +34,7 @@ from optiland_gui.catalogs.importers.excelitas_linos import (
 from optiland_gui.catalogs.matching import build_winlens_match_map
 from optiland_gui.catalogs.search import CatalogSearchQuery, CatalogSearchService
 from optiland_gui.catalogs.storage import CatalogStorage
-from optiland_gui.catalogs.schema import CatalogLensRecord
+from optiland_gui.catalogs.schema import CatalogLensRecord, LensSurfaceSpec
 
 EDMUND_ZEMAX_PAGE_URL = "https://www.edmundoptics.com/products/services/zemax-catalog/"
 EDMUND_PRODUCTS_PAGE_URL = "https://www.edmundoptics.com/products/"
@@ -148,6 +151,13 @@ class CatalogService:
         self._records: list[CatalogLensRecord] = self._storage.load_all_records()
         self._metadata_page_cache: dict[tuple[str, str], dict[str, object]] = {}
         self._product_url_cache: dict[tuple[str, str], str | None] = {}
+        self._record_by_id: dict[str, CatalogLensRecord] = {}
+        self._surface_records: list[CatalogLensRecord] = []
+        self._surface_records_by_part: dict[str, list[CatalogLensRecord]] = {}
+        self._winlens_records: list[CatalogLensRecord] = []
+        self._winlens_match_links_cache: dict[str, list[dict[str, object]]] | None = None
+        self._winlens_alias_groups_cache: list | None = None
+        self._insertable_record_cache: dict[str, CatalogLensRecord | None] = {}
         self._importers = {
             "excelitas": ExcelitasCatalogImporter(),
             "edmund": EdmundCatalogImporter(),
@@ -155,6 +165,7 @@ class CatalogService:
             "winlens library 2002": WinLensCatalogImporter(),
             "winlens": WinLensCatalogImporter(),
         }
+        self._rebuild_record_indexes()
 
     def import_catalog_file(self, manufacturer: str, filepath: str | list[str]) -> int:
         """Import one or more manufacturer catalog files and persist them locally."""
@@ -403,6 +414,8 @@ class CatalogService:
             supported_suffixes - {".zmf"},
         )
         import_paths = [*expanded_paths, *zmf_paths]
+        if importer.manufacturer.casefold() == "winlens library 2002":
+            import_paths = [path for path in import_paths if is_winlens_catalog_path(path)]
         if not import_paths:
             raise ValueError(
                 "No supported catalog files were selected. "
@@ -709,6 +722,10 @@ class CatalogService:
             summary["match_type"] = (
                 str(top_link[0].get("match_type", "")).strip() if top_link else ""
             )
+            insertable_record = self.resolve_insertable_record(record.catalog_id)
+            summary["insertable_surface_count"] = len(
+                insertable_record.surfaces if insertable_record is not None else []
+            )
             if match_type_text and match_type_text not in summary["match_type"].casefold():
                 continue
             summaries.append(summary)
@@ -716,9 +733,60 @@ class CatalogService:
 
     def get_record(self, catalog_id: str) -> CatalogLensRecord | None:
         """Return a full record by id."""
-        for record in self._records:
-            if record.catalog_id == catalog_id:
-                return record
+        return self._record_by_id.get(catalog_id)
+
+    def resolve_insertable_record(self, catalog_id: str) -> CatalogLensRecord | None:
+        """Return an insertable record with surfaces for *catalog_id* when possible."""
+        if catalog_id in self._insertable_record_cache:
+            return self._insertable_record_cache[catalog_id]
+        record = self.get_record(catalog_id)
+        if record is None:
+            self._insertable_record_cache[catalog_id] = None
+            return None
+        if record.surfaces:
+            self._insertable_record_cache[catalog_id] = record
+            return record
+
+        if not self._surface_records:
+            self._insertable_record_cache[catalog_id] = None
+            return None
+
+        normalized_part = _normalize_catalog_part_token(record.part_number)
+        exact_candidates = self._surface_records_by_part.get(normalized_part, [])
+        if exact_candidates:
+            self._insertable_record_cache[catalog_id] = exact_candidates[0]
+            return exact_candidates[0]
+
+        linked_candidate = _resolve_insertable_record_from_winlens_links(
+            record,
+            self._records,
+            self._load_winlens_match_links(),
+        )
+        if linked_candidate is not None:
+            self._insertable_record_cache[catalog_id] = linked_candidate
+            return linked_candidate
+
+        alias_groups = self._load_winlens_alias_groups(self._winlens_records)
+        family_candidate = _resolve_insertable_record_from_winlens_family(
+            record,
+            self._winlens_records,
+            alias_groups,
+        )
+        if family_candidate is not None:
+            self._insertable_record_cache[catalog_id] = family_candidate
+            return family_candidate
+
+        if record.manufacturer.casefold() != "winlens library 2002":
+            self._insertable_record_cache[catalog_id] = None
+            return None
+
+        if not any(
+            candidate.manufacturer.casefold() == "winlens library 2002"
+            for candidate in self._surface_records
+        ):
+            self._insertable_record_cache[catalog_id] = None
+            return None
+        self._insertable_record_cache[catalog_id] = None
         return None
 
     def get_record_details(self, catalog_id: str) -> dict | None:
@@ -872,14 +940,14 @@ class CatalogService:
 
     def _reload_all(self) -> None:
         self._records = self._storage.load_all_records()
+        self._rebuild_record_indexes()
 
     def _refresh_winlens_record_links(self) -> None:
         """Rebuild cached WinLens record-link suggestions when possible."""
-        winlens_records = [
-            record
-            for record in self._records
-            if record.manufacturer.casefold() == "winlens library 2002"
-        ]
+        self._winlens_match_links_cache = None
+        self._winlens_alias_groups_cache = None
+        self._insertable_record_cache.clear()
+        winlens_records = self._winlens_records
         if not winlens_records:
             self._storage.save_cache_payload(
                 "winlens_record_links",
@@ -920,12 +988,17 @@ class CatalogService:
 
     def _load_winlens_match_links(self) -> dict[str, list[dict[str, object]]]:
         """Load cached WinLens record-link suggestions."""
+        if self._winlens_match_links_cache is not None:
+            return self._winlens_match_links_cache
         payload = self._storage.load_cache_payload("winlens_record_links")
         links = payload.get("links", {})
-        return links if isinstance(links, dict) else {}
+        self._winlens_match_links_cache = links if isinstance(links, dict) else {}
+        return self._winlens_match_links_cache
 
     def _load_winlens_alias_groups(self, winlens_records: list[CatalogLensRecord]):
         """Load auxiliary WinLens alias groups near the imported SPD files."""
+        if self._winlens_alias_groups_cache is not None:
+            return self._winlens_alias_groups_cache
         roots: set[Path] = set()
         for record in winlens_records:
             source_path = (record.source.source_path or "").strip()
@@ -939,7 +1012,27 @@ class CatalogService:
         alias_groups = []
         for root in sorted(roots):
             alias_groups.extend(load_winlens_alias_groups(root))
+        self._winlens_alias_groups_cache = alias_groups
         return alias_groups
+
+    def _rebuild_record_indexes(self) -> None:
+        """Prepare in-memory indexes used on hot catalog search paths."""
+        self._record_by_id = {record.catalog_id: record for record in self._records}
+        self._surface_records = [record for record in self._records if record.surfaces]
+        self._surface_records_by_part = {}
+        for record in self._surface_records:
+            normalized_part = _normalize_catalog_part_token(record.part_number)
+            if not normalized_part:
+                continue
+            self._surface_records_by_part.setdefault(normalized_part, []).append(record)
+        self._winlens_records = [
+            record
+            for record in self._records
+            if record.manufacturer.casefold() == "winlens library 2002"
+        ]
+        self._winlens_match_links_cache = None
+        self._winlens_alias_groups_cache = None
+        self._insertable_record_cache.clear()
 
     def _apply_winlens_availability_statuses(
         self,
@@ -1529,3 +1622,178 @@ def _extract_pair_value(text: str, index: int) -> float | None:
         return float(match.group(index + 1))
     except (TypeError, ValueError, IndexError):
         return None
+
+
+def _normalize_catalog_part_token(value: str) -> str:
+    token = re.sub(r"[^0-9a-z]+", "", str(value).casefold())
+    if re.fullmatch(r"g\d{5,}", token):
+        return token[1:]
+    return token
+
+
+def _record_matches_alias_tokens(record: CatalogLensRecord, alias_tokens: set[str]) -> bool:
+    record_digits = re.sub(r"[^0-9]+", "", record.part_number)
+    if record_digits in alias_tokens:
+        return True
+    return len(record_digits) >= 6 and record_digits[:6] in alias_tokens
+
+
+def _alias_tokens_for_record(record: CatalogLensRecord, alias_groups: list) -> set[str]:
+    record_digits = re.sub(r"[^0-9]+", "", record.part_number)
+    family_digits = record_digits[:6] if len(record_digits) >= 6 else ""
+    tokens: set[str] = set()
+    for group in alias_groups:
+        group_tokens = {
+            re.sub(r"[^0-9]+", "", str(token))
+            for token in [*getattr(group, "part_numbers", []), *getattr(group, "family_numbers", [])]
+        }
+        group_tokens.discard("")
+        if record_digits and record_digits in group_tokens:
+            tokens.update(group_tokens)
+            continue
+        if family_digits and family_digits in group_tokens:
+            tokens.update(group_tokens)
+    return tokens
+
+
+def _resolve_insertable_record_from_winlens_links(
+    record: CatalogLensRecord,
+    records: list[CatalogLensRecord],
+    link_map: dict[str, list[dict[str, object]]],
+) -> CatalogLensRecord | None:
+    candidates: list[tuple[int, int, str, CatalogLensRecord]] = []
+    for winlens_catalog_id, links in link_map.items():
+        for link in links:
+            if str(link.get("catalog_id", "")) != record.catalog_id:
+                continue
+            source_record = next(
+                (candidate for candidate in records if candidate.catalog_id == winlens_catalog_id),
+                None,
+            )
+            if source_record is None or not source_record.surfaces:
+                continue
+            match_type = str(link.get("match_type", "")).casefold()
+            candidates.append(
+                (
+                    0 if match_type == "confirmed" else 1,
+                    -len(source_record.surfaces),
+                    source_record.part_number.casefold(),
+                    source_record,
+                )
+            )
+            break
+
+    if not candidates:
+        return None
+    return sorted(candidates)[0][3]
+
+
+def _resolve_insertable_record_from_winlens_family(
+    record: CatalogLensRecord,
+    winlens_records: list[CatalogLensRecord],
+    alias_groups: list,
+) -> CatalogLensRecord | None:
+    alias_tokens = _alias_tokens_for_record(record, alias_groups)
+    if not alias_tokens:
+        return None
+
+    family_candidates = [
+        candidate
+        for candidate in winlens_records
+        if _record_matches_alias_tokens(candidate, alias_tokens)
+    ]
+    if not family_candidates:
+        return None
+
+    surface_candidates = [candidate for candidate in family_candidates if candidate.surfaces]
+    if surface_candidates:
+        return sorted(
+            surface_candidates,
+            key=lambda candidate: (
+                -len(candidate.surfaces),
+                candidate.part_number.casefold(),
+            ),
+        )[0]
+
+    metadata_candidates = [
+        candidate for candidate in family_candidates if _can_build_paraxial_surrogate(candidate)
+    ]
+    if not metadata_candidates:
+        return None
+    return _build_paraxial_surrogate_record(
+        sorted(
+            metadata_candidates,
+            key=lambda candidate: (
+                _normalize_catalog_part_token(candidate.part_number)
+                != _normalize_catalog_part_token(record.part_number),
+                _winlens_family_distance(record, candidate),
+                candidate.part_number.casefold(),
+            ),
+        )[0]
+    )
+
+
+def _can_build_paraxial_surrogate(record: CatalogLensRecord) -> bool:
+    return (
+        record.manufacturer.casefold() == "winlens library 2002"
+        and record.source.source_type == "winlens_dat"
+        and record.efl_mm not in (None, 0.0)
+        and record.diameter_mm not in (None, 0.0)
+    )
+
+
+def _build_paraxial_surrogate_record(record: CatalogLensRecord) -> CatalogLensRecord:
+    semi_diameter = (
+        float(record.diameter_mm) / 2.0 if record.diameter_mm not in (None, 0.0) else None
+    )
+    return CatalogLensRecord(
+        catalog_id=record.catalog_id,
+        manufacturer=record.manufacturer,
+        part_number=record.part_number,
+        product_name=record.product_name,
+        category=record.category,
+        url=record.url,
+        efl_mm=record.efl_mm,
+        bfl_mm=record.bfl_mm,
+        diameter_mm=record.diameter_mm,
+        center_thickness_mm=record.center_thickness_mm,
+        edge_thickness_mm=record.edge_thickness_mm,
+        material_summary=record.material_summary,
+        coating=record.coating,
+        availability_status=record.availability_status,
+        wavelength_min_um=record.wavelength_min_um,
+        wavelength_max_um=record.wavelength_max_um,
+        surfaces=[
+            LensSurfaceSpec(
+                surface_type="paraxial",
+                radius="inf",
+                thickness=0.0,
+                material="Air",
+                semi_diameter=semi_diameter,
+                comment=(
+                    f"{record.manufacturer} {record.part_number} "
+                    f"paraxial surrogate from WinLens DAT family metadata"
+                ),
+                extra_data={"f": float(record.efl_mm)},
+            )
+        ],
+        stop_surface_offset=None,
+        tags=list(record.tags),
+        search_blob=record.search_blob,
+        source=record.source,
+    )
+
+
+def _winlens_family_distance(record: CatalogLensRecord, candidate: CatalogLensRecord) -> tuple[float, float]:
+    record_efl = float(record.efl_mm) if record.efl_mm is not None else float("inf")
+    candidate_efl = float(candidate.efl_mm) if candidate.efl_mm is not None else float("inf")
+    record_diameter = (
+        float(record.diameter_mm) if record.diameter_mm is not None else float("inf")
+    )
+    candidate_diameter = (
+        float(candidate.diameter_mm) if candidate.diameter_mm is not None else float("inf")
+    )
+    return (
+        abs(record_efl - candidate_efl),
+        abs(record_diameter - candidate_diameter),
+    )

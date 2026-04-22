@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import json
 import shutil
+import struct
 from pathlib import Path
 from uuid import uuid4
 from unittest.mock import MagicMock
 
+import pytest
+
 from optiland_gui.catalogs.importers.winlens_spd import (
+    is_winlens_catalog_path,
     load_winlens_alias_groups,
     load_winlens_catalog_record,
     load_winlens_dat_records,
     load_winlens_table_records,
 )
+from optiland_gui.catalogs.schema import CatalogLensRecord, LensSurfaceSpec
 from optiland_gui.services.catalog_service import CatalogService
 
 
@@ -67,6 +72,45 @@ def test_load_winlens_catalog_record_parses_v4_metadata() -> None:
         shutil.rmtree(tmp_path.parent, ignore_errors=True)
 
 
+def test_load_winlens_catalog_record_ignores_disallowed_categories() -> None:
+    tmp_path = _workspace_tmp_dir()
+    try:
+        spd_dir = tmp_path / "WinLens Library 2002" / "LINOS_STANDARD_SYSTEMS" / "Microprojection_Lenses"
+        spd_dir.mkdir(parents=True, exist_ok=True)
+        spd_path = spd_dir / "MICRO001.SPD"
+        spd_path.write_text(
+            _sample_winlens_v4_spd().replace('"Asphere demo"', '"Microprojection demo"'),
+            encoding="utf-8",
+        )
+
+        record = load_winlens_catalog_record(str(spd_path), "WinLens Library 2002")
+
+        assert record is None
+    finally:
+        shutil.rmtree(tmp_path.parent, ignore_errors=True)
+
+
+def test_is_winlens_catalog_path_excludes_examples_and_manual_examples() -> None:
+    assert not is_winlens_catalog_path(
+        r"C:\WinLens Library 2002\EXAMPLES\TESSAR60.SPD"
+    )
+    assert not is_winlens_catalog_path(
+        r"C:\WinLens Library 2002\WinLens3DBasic\WL3D Tilt-Decenter Manual Examples\Ch 10 scanners\scanner.SPD"
+    )
+    assert not is_winlens_catalog_path(
+        r"C:\WinLens Library 2002\LIBRARY\Tessar_Lenses\WLTE007.SPD"
+    )
+    assert not is_winlens_catalog_path(
+        r"C:\WinLens Library 2002\LIBRARY\Zoom_Lenses\WLZOOM_001.SPD"
+    )
+    assert not is_winlens_catalog_path(
+        r"C:\WinLens Library 2002\LIBRARY\Telescopes\WLTS001.SPD"
+    )
+    assert is_winlens_catalog_path(
+        r"C:\WinLens Library 2002\LINOS_STANDARD_SYSTEMS\Aspheres\317708.SPD"
+    )
+
+
 def test_import_winlens_library_builds_links_to_existing_catalog_records(monkeypatch) -> None:
     tmp_path = _workspace_tmp_dir()
     monkeypatch.setattr(
@@ -117,6 +161,69 @@ def test_import_winlens_library_builds_links_to_existing_catalog_records(monkeyp
         assert service.get_record("winlens library 2002:317703").availability_status is None
         summaries = service.search({"match_type_text": "confirmed"})
         assert any(item["catalog_id"] == "winlens library 2002:317703" for item in summaries)
+    finally:
+        shutil.rmtree(tmp_path.parent, ignore_errors=True)
+
+
+def test_load_winlens_dat_records_ignores_disallowed_categories() -> None:
+    tmp_path = _workspace_tmp_dir()
+    try:
+        dat_path = tmp_path / "sh_l2.dat"
+        dat_path.write_bytes(
+            (
+                b"111111111222222222                  Hyperchromatic doublet 80/25.4\r\n"
+                b"333333333444444444                  Eyepiece 40/20\r\n"
+                b"555555555666666666                  Achromat 80/25.4\r\n"
+                b"@N-BK7     N-SF5\r\n"
+            )
+        )
+
+        records = load_winlens_dat_records(str(dat_path), "WinLens Library 2002")
+
+        assert {record.part_number for record in records} == {"555555555", "666666666"}
+        assert all(record.category == "achromat" for record in records)
+    finally:
+        shutil.rmtree(tmp_path.parent, ignore_errors=True)
+
+
+def test_import_winlens_library_ignores_example_spd_files(monkeypatch) -> None:
+    tmp_path = _workspace_tmp_dir()
+    monkeypatch.setattr(
+        "optiland_gui.catalogs.storage.QStandardPaths.writableLocation",
+        lambda *_args, **_kwargs: str(tmp_path),
+    )
+
+    root = tmp_path / "WinLens Library 2002"
+    example_dir = root / "EXAMPLES"
+    example_dir.mkdir(parents=True, exist_ok=True)
+    (example_dir / "TESSAR60.SPD").write_text(_sample_winlens_v4_spd(), encoding="utf-8")
+
+    manual_dir = root / "WinLens3DBasic" / "WL3D Tilt-Decenter Manual Examples" / "Ch 10 scanners"
+    manual_dir.mkdir(parents=True, exist_ok=True)
+    (manual_dir / "scanner.SPD").write_text(_sample_winlens_v4_spd(), encoding="utf-8")
+
+    library_dir = root / "LIBRARY" / "Zoom_Lenses"
+    library_dir.mkdir(parents=True, exist_ok=True)
+    (library_dir / "WLZOOM_001.SPD").write_text(
+        _sample_winlens_v4_spd().replace("317703.SPD", "WLZOOM_001.SPD"),
+        encoding="utf-8",
+    )
+    stock_dir = root / "LINOS_STANDARD_SYSTEMS" / "Aspheres"
+    stock_dir.mkdir(parents=True, exist_ok=True)
+    (stock_dir / "317708.SPD").write_text(
+        _sample_winlens_v4_spd().replace("317703.SPD", "317708.SPD"),
+        encoding="utf-8",
+    )
+
+    service = CatalogService(MagicMock())
+    try:
+        result = service.import_winlens_library(str(root))
+
+        assert result.imported_count == 1
+        assert service.get_record("winlens library 2002:317708") is not None
+        assert service.get_record("winlens library 2002:tessar60") is None
+        assert service.get_record("winlens library 2002:scanner") is None
+        assert service.get_record("winlens library 2002:wlzoom_001") is None
     finally:
         shutil.rmtree(tmp_path.parent, ignore_errors=True)
 
@@ -223,6 +330,72 @@ def test_import_winlens_library_prefers_alias_map_over_heuristic_overlap(monkeyp
         shutil.rmtree(tmp_path.parent, ignore_errors=True)
 
 
+def test_resolve_insertable_record_uses_linked_winlens_surface_record_for_excelitas_metadata(
+    monkeypatch,
+) -> None:
+    tmp_path = _workspace_tmp_dir()
+    monkeypatch.setattr(
+        "optiland_gui.catalogs.storage.QStandardPaths.writableLocation",
+        lambda *_args, **_kwargs: str(tmp_path),
+    )
+
+    root = tmp_path / "WinLens Library 2002"
+    spd_root = root / "LINOS_STANDARD_SYSTEMS" / "Achromats"
+    spd_root.mkdir(parents=True, exist_ok=True)
+    (spd_root / "322307.SPD").write_text(
+        _sample_winlens_v4_spd()
+        .replace('"Asphere demo"', '"Achromat demo"')
+        .replace('"efl",15.0', '"efl",80.0')
+        .replace('"Stop Rad",9', '"Stop Rad",12.7')
+        .replace("317703.SPD", "322307.SPD"),
+        encoding="utf-8",
+    )
+
+    basic_dir = root / "WinLens3DBasic"
+    basic_dir.mkdir(parents=True, exist_ok=True)
+    (basic_dir / "sh_l2.dat").write_bytes(
+        (
+            b"322384000322307000063213000                  Achromat 80/25.4   "
+            b"ECO-Vers.-322             Achromat         \r\n"
+            b"322384000322307322                           Achromat  f = 80/25.4 mm\r\n"
+            b"@N-BK7     N-SF5\r\n"
+        )
+    )
+
+    excelitas_json = tmp_path / "excelitas_records.json"
+    excelitas_json.write_text(
+        json.dumps(
+            [
+                {
+                    "catalog_id": "excelitas linos:g063213000",
+                    "manufacturer": "Excelitas LINOS",
+                    "part_number": "G063213000",
+                    "product_name": "Achr. VIS ARB2; D=25.4; F=80; mounted",
+                    "category": "achromat",
+                    "efl_mm": 80.0,
+                    "diameter_mm": 25.4,
+                    "coating": "ARB2",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    service = CatalogService(MagicMock())
+
+    try:
+        service.import_catalog_file("Excelitas", str(excelitas_json))
+        service.import_winlens_library(str(root))
+
+        insertable = service.resolve_insertable_record("excelitas linos:g063213000")
+
+        assert insertable is not None
+        assert insertable.catalog_id == "winlens library 2002:322307"
+        assert len(insertable.surfaces) > 0
+    finally:
+        shutil.rmtree(tmp_path.parent, ignore_errors=True)
+
+
 def test_import_winlens_library_propagates_confirmed_family_across_coating_variants(monkeypatch) -> None:
     tmp_path = _workspace_tmp_dir()
     monkeypatch.setattr(
@@ -313,6 +486,93 @@ def test_import_winlens_library_propagates_confirmed_family_across_coating_varia
             "WinLens coating-blind family propagation" in link["reasons"]
             for link in propagated.values()
         )
+    finally:
+        shutil.rmtree(tmp_path.parent, ignore_errors=True)
+
+
+def test_search_reuses_cached_winlens_links_during_insertable_resolution(monkeypatch) -> None:
+    tmp_path = _workspace_tmp_dir()
+    monkeypatch.setattr(
+        "optiland_gui.catalogs.storage.QStandardPaths.writableLocation",
+        lambda *_args, **_kwargs: str(tmp_path),
+    )
+    service = CatalogService(MagicMock())
+    service._records = [
+        CatalogLensRecord(
+            catalog_id="excelitas linos:g317704000",
+            manufacturer="Excelitas LINOS",
+            part_number="G317704000",
+            product_name="Asphere",
+            category="asphere",
+        ),
+        CatalogLensRecord(
+            catalog_id="winlens library 2002:317704",
+            manufacturer="WinLens Library 2002",
+            part_number="317704",
+            product_name="Asphere",
+            category="asphere",
+            surfaces=[LensSurfaceSpec()],
+        ),
+    ]
+    service._rebuild_record_indexes()
+
+    load_calls: list[str] = []
+
+    def _fake_load_cache_payload(name: str) -> dict:
+        load_calls.append(name)
+        if name == "winlens_record_links":
+            return {
+                "links": {
+                    "excelitas linos:g317704000": [
+                        {
+                            "catalog_id": "winlens library 2002:317704",
+                            "match_type": "confirmed",
+                        }
+                    ]
+                }
+            }
+        return {}
+
+    monkeypatch.setattr(service._storage, "load_cache_payload", _fake_load_cache_payload)
+
+    first = service.search({})
+    second = service.search({})
+
+    assert any(row["insertable_surface_count"] == 1 for row in first)
+    assert any(row["insertable_surface_count"] == 1 for row in second)
+    assert load_calls.count("winlens_record_links") == 1
+
+
+def test_load_winlens_dat_records_parses_sh_l1_plano_convex_singlet_family() -> None:
+    tmp_path = _workspace_tmp_dir()
+    try:
+        dat_path = tmp_path / "sh_l1.dat"
+        title = b"312323000063823000                  Plano-convex  f = 100 mm                     "
+        payload = (
+            title
+            + (b"\x00" * 17)
+            + struct.pack("<f", 51.212978)
+            + struct.pack("<f", 0.0)
+            + struct.pack("<f", 12.7)
+            + struct.pack("<f", 12.7)
+            + struct.pack("<f", 4.0)
+            + b"N-BK7     "
+            + struct.pack("<f", 1.517)
+            + struct.pack("<f", 64.2)
+            + (b"\x00" * 13)
+        )
+        dat_path.write_bytes(payload)
+
+        records = load_winlens_dat_records(dat_path, "WinLens Library 2002")
+
+        target = next(record for record in records if record.part_number == "063823000")
+        assert target.efl_mm == pytest.approx(100.0)
+        assert len(target.surfaces) == 2
+        assert target.surfaces[0].radius == pytest.approx(51.212978, abs=1e-4)
+        assert target.surfaces[0].thickness == pytest.approx(4.0)
+        assert target.surfaces[0].material == "N-BK7"
+        assert target.surfaces[0].semi_diameter == pytest.approx(12.7)
+        assert target.surfaces[1].radius == "inf"
     finally:
         shutil.rmtree(tmp_path.parent, ignore_errors=True)
 
@@ -590,6 +850,7 @@ def test_get_winlens_review_candidates_include_family_and_preview(monkeypatch) -
                 },
             },
         )
+        service._winlens_match_links_cache = None
         rows = service.get_winlens_review_candidates(76)
 
         assert rows
@@ -619,7 +880,73 @@ def test_load_winlens_dat_records_imports_historical_lens_families() -> None:
         assert records[0].efl_mm == 80.0
         assert records[0].diameter_mm == 18.0
         assert records[0].material_summary == "N-BK7, N-F2"
-        assert any(record.category == "hyperchromatic doublet" for record in records)
+        assert all(record.category != "hyperchromatic doublet" for record in records)
+    finally:
+        shutil.rmtree(tmp_path.parent, ignore_errors=True)
+
+
+def test_load_winlens_dat_records_parses_063213_achromat_family_without_binary_garbage() -> None:
+    tmp_path = _workspace_tmp_dir()
+    try:
+        import struct
+
+        lens_path = tmp_path / "sh_l2.dat"
+        lens_path.write_bytes(
+            (
+                struct.pack(
+                    "<8f",
+                    40.388,
+                    -32.2,
+                    -117.15,
+                    12.7,
+                    12.7,
+                    12.7,
+                    6.9,
+                    2.0,
+                )
+                + b"N-SSK8    N-SF56    "
+                + struct.pack("<4f", 1.621, 1.792, 52.6, 27.6)
+                + b"322384000322307000063213000                  Achromat 80/25.4   ECO-Vers.-322             Achromat         "
+                + struct.pack(
+                    "<8f",
+                    50.481,
+                    -35.481,
+                    -100.0,
+                    12.7,
+                    12.7,
+                    12.7,
+                    5.0,
+                    2.0,
+                )
+                + b"N-BK7     N-SF5     "
+                + struct.pack("<4f", 1.519, 1.678, 64.0, 32.0)
+                + b"322384000322307322                           Achromat  f = 80/25.4 mm                     "
+            )
+        )
+
+        records = load_winlens_dat_records(str(lens_path), "WinLens Library 2002")
+        record_map = {record.part_number: record for record in records}
+
+        assert "Achromat 80/25.4" in record_map["063213000"].product_name
+        assert "ECO-Vers.-322" in record_map["063213000"].product_name
+        assert record_map["063213000"].efl_mm == 80.0
+        assert record_map["063213000"].diameter_mm == 25.4
+        assert record_map["063213000"].material_summary in {"N-SSK8, N-SF56", "N-BK7, N-SF5"}
+        assert len(record_map["063213000"].surfaces) == 3
+        assert record_map["063213000"].surfaces[0].surface_type == "standard"
+        assert record_map["063213000"].surfaces[1].thickness == pytest.approx(2.0)
+        assert record_map["063213000"].surfaces[2].material == "Air"
+        assert record_map["063213000"].surfaces[2].semi_diameter == pytest.approx(12.7)
+        assert record_map["322307000"].material_summary in {"N-SSK8, N-SF56", "N-BK7, N-SF5"}
+        assert len(record_map["322307000"].surfaces) == 3
+        assert record_map["322307322"].efl_mm == 80.0
+        assert record_map["322307322"].material_summary == "N-BK7, N-SF5"
+        assert len(record_map["322307322"].surfaces) == 3
+        assert record_map["322307322"].surfaces[0].radius == pytest.approx(50.480999, abs=1e-3)
+        assert record_map["322307322"].surfaces[0].material == "N-BK7"
+        assert record_map["322307322"].surfaces[1].radius == pytest.approx(-35.480999, abs=1e-3)
+        assert record_map["322307322"].surfaces[1].material == "N-SF5"
+        assert record_map["322307322"].surfaces[2].radius == pytest.approx(-100.0)
     finally:
         shutil.rmtree(tmp_path.parent, ignore_errors=True)
 

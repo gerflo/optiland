@@ -657,10 +657,16 @@ class OptilandConnector(QObject):
         record = self._catalog_service.get_record(catalog_id)
         if record is None:
             raise ValueError(f"Catalog lens not found: {catalog_id}")
+        insert_record = self._catalog_service.resolve_insertable_record(catalog_id) or record
 
         insert_index = surface_index if mode == "before" else surface_index + 1
-        surfaces, stop_offset = record_to_insert_specs(record)
+        surfaces, stop_offset = record_to_insert_specs(insert_record)
         if not surfaces:
+            if record.manufacturer.casefold() == "winlens library 2002":
+                raise ValueError(
+                    "This WinLens entry only contains family metadata. "
+                    "No optical surface model was found in the imported WinLens library for this family."
+                )
             raise ValueError(
                 "This catalog entry has no optical surface data to insert. "
                 "It is currently metadata-only."

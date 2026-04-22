@@ -164,7 +164,7 @@ class MainWindow(FramelessWindow):
             return self._win.panel_manager.viewer_panel
 
         def get_catalog_browser_panel(self):
-            """Returns the stock lens catalog browser panel."""
+            """Returns the stock parts catalog browser panel."""
             return self._win.panel_manager.catalog_browser_panel
 
         def get_material_browser_panel(self):
@@ -181,14 +181,12 @@ class MainWindow(FramelessWindow):
             self._win.focus_dock_widget(dock)
 
         def show_catalog_browser(self):
-            """Bring the stock lens catalog dock widget to the front."""
-            dock = self._win.panel_manager.catalog_browser_dock
-            self._win.focus_dock_widget(dock)
+            """Bring the stock parts catalog dock widget to the front."""
+            self._win.panel_manager.focus_catalog_browser()
 
         def show_material_browser(self):
             """Bring the material database dock widget to the front."""
-            dock = self._win.panel_manager.material_browser_dock
-            self._win.focus_dock_widget(dock)
+            self._win.panel_manager.focus_material_browser()
 
         def refresh_all(self):
             """Triggers a full refresh of all GUI panels.
@@ -1208,15 +1206,15 @@ class MainWindow(FramelessWindow):
 
     @Slot()
     def show_catalog_browser_action(self) -> None:
-        """Show and raise the stock lens catalog browser dock."""
+        """Show and raise the stock parts catalog browser dock."""
         if hasattr(self, "panel_manager") and self.panel_manager.catalog_browser_dock:
-            self.focus_dock_widget(self.panel_manager.catalog_browser_dock)
+            self.panel_manager.focus_catalog_browser()
 
     @Slot()
     def show_material_browser_action(self) -> None:
         """Show and raise the material database browser dock."""
-        if hasattr(self, "panel_manager") and self.panel_manager.material_browser_dock:
-            self.focus_dock_widget(self.panel_manager.material_browser_dock)
+        if hasattr(self, "panel_manager") and self.panel_manager.catalog_browser_dock:
+            self.panel_manager.focus_material_browser()
 
     @Slot()
     def export_zemax_action(self):
@@ -1509,8 +1507,8 @@ class MainWindow(FramelessWindow):
         if catalog_action:
             reg.register(
                 PaletteCommand(
-                    "Show Stock Lens Catalog",
-                    "Open the stock-lens catalog browser",
+                    "Show Stock Parts Catalog",
+                    "Open the stock parts catalog browser",
                     catalog_action.trigger,
                     category="Panels",
                 )

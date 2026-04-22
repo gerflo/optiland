@@ -73,11 +73,25 @@ class MaterialBrowserPanel(QWidget):
         "Max λ",
         "File",
     ]
+    HEADER_LABELS = [
+        "☑",
+        "Reference",
+        "Name",
+        "Category",
+        "Source",
+        "Min λ",
+        "Max λ",
+        "File",
+    ]
+    _SORT_ASC_ARROW = "↑"
+    _SORT_DESC_ARROW = "↓"
 
     def __init__(self, connector: OptilandConnector, parent=None) -> None:
         super().__init__(parent)
         self.connector = connector
         self._current_results: list[dict] = []
+        self._sort_column: int | None = None
+        self._sort_order = Qt.SortOrder.AscendingOrder
         self._filter_widgets_ready = False
         self._filter_row_height = 30
         self._task_thread: QThread | None = None
@@ -153,7 +167,7 @@ class MaterialBrowserPanel(QWidget):
         self.table_view_layout.addWidget(self.filter_row_container)
 
         self.results_table = QTableWidget(0, len(self.RESULT_COLUMNS))
-        self.results_table.setHorizontalHeaderLabels(self.RESULT_COLUMNS)
+        self.results_table.setHorizontalHeaderLabels(self.HEADER_LABELS)
         self.results_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.results_table.setSelectionMode(QTableWidget.SingleSelection)
         self.results_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -163,6 +177,7 @@ class MaterialBrowserPanel(QWidget):
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(False)
         header.setSectionsMovable(True)
+        header.setSortIndicatorShown(False)
         self.results_table.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
@@ -200,6 +215,7 @@ class MaterialBrowserPanel(QWidget):
         self.open_material_file_button.clicked.connect(self._open_selected_material_file)
         self.results_table.itemSelectionChanged.connect(self._update_details)
         header = self.results_table.horizontalHeader()
+        header.sectionClicked.connect(self._toggle_sort_column)
         header.sectionResized.connect(self._sync_filter_row_geometry)
         header.sectionMoved.connect(self._sync_filter_row_geometry)
         self.connector.materialsChanged.connect(self.refresh)
@@ -218,8 +234,57 @@ class MaterialBrowserPanel(QWidget):
             "max_wavelength": self.max_wavelength_filter.text(),
         }
         self._current_results = self.connector.search_materials(query)
+        self._sort_current_results()
         self._refresh_reference_filter()
         self._populate_results()
+
+    def _sort_current_results(self) -> None:
+        if self._sort_column is None:
+            return
+        key_funcs = {
+            0: lambda record: str(record.get("material_id", "")).casefold(),
+            1: lambda record: str(record.get("reference", "")).casefold(),
+            2: lambda record: str(record.get("name", "")).casefold(),
+            3: lambda record: str(record.get("category", "")).casefold(),
+            4: lambda record: str(record.get("source", "")).casefold(),
+            5: lambda record: _sortable_number(record.get("min_wavelength")),
+            6: lambda record: _sortable_number(record.get("max_wavelength")),
+            7: lambda record: str(record.get("filename", "")).casefold(),
+        }
+        key_func = key_funcs.get(self._sort_column, key_funcs[0])
+        self._current_results.sort(
+            key=key_func,
+            reverse=self._sort_order == Qt.SortOrder.DescendingOrder,
+        )
+
+    def _toggle_sort_column(self, column: int) -> None:
+        if self._sort_column == column and self._sort_order == Qt.SortOrder.AscendingOrder:
+            next_order = Qt.SortOrder.DescendingOrder
+        else:
+            next_order = Qt.SortOrder.AscendingOrder
+        self._sort_column = column
+        self._sort_order = next_order
+        header = self.results_table.horizontalHeader()
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(column, next_order)
+        self._update_sort_header_labels(column, next_order)
+        self.refresh()
+
+    def _update_sort_header_labels(self, column: int | None, order: Qt.SortOrder) -> None:
+        for index, base_label in enumerate(self.RESULT_COLUMNS):
+            label = self.HEADER_LABELS[index]
+            if column is not None and index == column:
+                arrow = (
+                    self._SORT_DESC_ARROW
+                    if order == Qt.SortOrder.DescendingOrder
+                    else self._SORT_ASC_ARROW
+                )
+                label = f"{label} {arrow}"
+            item = self.results_table.horizontalHeaderItem(index)
+            if item is None:
+                self.results_table.setHorizontalHeaderItem(index, QTableWidgetItem(label))
+            else:
+                item.setText(label)
 
     def _populate_results(self) -> None:
         self.results_table.clearContents()
@@ -229,6 +294,7 @@ class MaterialBrowserPanel(QWidget):
             mark_item = QTableWidgetItem("")
             material_id = str(record.get("material_id", ""))
             mark_item.setData(Qt.UserRole, material_id)
+            mark_item.setData(Qt.UserRole + 1, bool(record.get("is_local_import")))
             mark_item.setFlags(
                 Qt.ItemFlag.ItemIsEnabled
                 | Qt.ItemFlag.ItemIsSelectable
@@ -239,8 +305,6 @@ class MaterialBrowserPanel(QWidget):
                 if material_id in self._marked_material_ids
                 else Qt.CheckState.Unchecked
             )
-            if not record.get("is_local_import"):
-                mark_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             self.results_table.setItem(row, 0, mark_item)
             values = [
                 record.get("reference", ""),
@@ -387,6 +451,17 @@ class MaterialBrowserPanel(QWidget):
             return
         material_id = str(item.data(Qt.UserRole) or "")
         if not material_id:
+            return
+        if not bool(item.data(Qt.UserRole + 1)):
+            self._updating_mark_column = True
+            try:
+                item.setCheckState(Qt.CheckState.Unchecked)
+            finally:
+                self._updating_mark_column = False
+            self._notify(
+                "Built-in material entries cannot be marked for deletion. Only local WinLens imports can be deleted.",
+                "warning",
+            )
             return
         if item.checkState() == Qt.CheckState.Checked:
             self._marked_material_ids.add(material_id)
@@ -562,3 +637,12 @@ def _fmt_float(value, precision: int = 2) -> str:  # noqa: ANN001
         return f"{float(value):.{precision}f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _sortable_number(value) -> tuple[int, float]:  # noqa: ANN001
+    if value in (None, ""):
+        return (1, 0.0)
+    try:
+        return (0, float(value))
+    except (TypeError, ValueError):
+        return (1, 0.0)

@@ -164,6 +164,11 @@ class _ResultConnector(_DummyConnector):
             return ["https://example.com/docs/49-847.pdf"]
         return []
 
+    def insert_catalog_lens(
+        self, catalog_id: str, surface_index: int, mode: str
+    ) -> None:
+        self.last_insert_call = (catalog_id, surface_index, mode)
+
 
 class _MultiDocumentConnector(_ResultConnector):
     def get_catalog_document_urls(self, catalog_id: str) -> list[str]:
@@ -424,6 +429,22 @@ def test_catalog_browser_restores_saved_column_widths_and_sort(monkeypatch, qapp
     assert header.visualIndex(7) == 1
     assert header.sortIndicatorSection() == 2
     assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+    assert second_panel.results_table.horizontalHeaderItem(2).text() == "Part No. ↓"
+    assert second_panel.results_table.horizontalHeaderItem(1).text() == "Manufacturer"
+
+
+def test_catalog_browser_updates_sorted_column_header_label_with_arrow(qapp) -> None:
+    panel = CatalogBrowserPanel(_ResultConnector())
+    header = panel.results_table.horizontalHeader()
+
+    header.setSortIndicator(3, Qt.SortOrder.AscendingOrder)
+
+    assert panel.results_table.horizontalHeaderItem(3).text() == "Name ↑"
+    assert panel.results_table.horizontalHeaderItem(2).text() == "Part No."
+
+    header.setSortIndicator(3, Qt.SortOrder.DescendingOrder)
+
+    assert panel.results_table.horizontalHeaderItem(3).text() == "Name ↓"
 
 
 def test_catalog_browser_numeric_columns_are_right_aligned_with_two_decimals(qapp) -> None:
@@ -437,6 +458,61 @@ def test_catalog_browser_numeric_columns_are_right_aligned_with_two_decimals(qap
     assert bool(efl_item.textAlignment() & int(Qt.AlignmentFlag.AlignRight))
     assert bool(diameter_item.textAlignment() & int(Qt.AlignmentFlag.AlignRight))
     assert panel.results_table.item(0, 7).text() == "N-BK7"
+
+
+def test_catalog_browser_context_menu_prioritizes_insert_actions(monkeypatch, qapp) -> None:
+    panel = CatalogBrowserPanel(_ResultConnector())
+    action_texts: list[str] = []
+
+    class _FakeAction:
+        def __init__(self, text: str) -> None:
+            self._text = text
+            self.enabled = True
+
+        def text(self) -> str:
+            return self._text
+
+        def setEnabled(self, enabled: bool) -> None:  # noqa: N802
+            self.enabled = enabled
+
+    class _FakeMenu:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self._actions: list[_FakeAction] = []
+
+        def addAction(self, text: str) -> _FakeAction:  # noqa: N802
+            action = _FakeAction(text)
+            self._actions.append(action)
+            return action
+
+        def addSeparator(self):  # noqa: ANN201
+            action = _FakeAction("")
+            self._actions.append(action)
+            return action
+
+        def addMenu(self, text: str):  # noqa: ANN201, N802
+            action = _FakeAction(text)
+            self._actions.append(action)
+            return self
+
+        def exec(self, *_args, **_kwargs):  # noqa: ANN201
+            action_texts.extend(action.text() for action in self._actions)
+            return None
+
+    monkeypatch.setattr("optiland_gui.catalog_browser_panel.QMenu", _FakeMenu)
+
+    target_item = panel.results_table.item(0, 2)
+    assert target_item is not None
+
+    panel._show_results_context_menu(panel.results_table.visualItemRect(target_item).center())
+
+    assert action_texts[:6] == [
+        "Insert Before Selected Surface",
+        "Insert After Selected Surface",
+        "",
+        "Copy Cell",
+        "Copy Row",
+        "",
+    ]
     assert panel.results_table.item(0, 8).text() == "VIS"
 
 
@@ -596,6 +672,66 @@ def test_catalog_browser_match_filter_keeps_confirmed_records(qapp) -> None:
     assert panel.results_table.item(0, 2).text() == "322307"
 
 
+def test_catalog_browser_default_sort_prioritizes_insertable_results(qapp) -> None:
+    class _InsertableFirstConnector(_DummyConnector):
+        def search_catalog_lenses(self, query: dict) -> list[dict]:
+            return [
+                {
+                    "catalog_id": "excelitas linos:g317704000",
+                    "manufacturer": "Excelitas LINOS",
+                    "part_number": "G317704000",
+                    "product_name": "Asph. condenser lens; D=22.4; F=18",
+                    "category": "asphere",
+                    "efl_mm": 18.0,
+                    "diameter_mm": 22.4,
+                    "material_summary": "",
+                    "coating": "",
+                    "availability_status": "",
+                    "match_type": "",
+                    "surface_count": 0,
+                    "insertable_surface_count": 3,
+                },
+                {
+                    "catalog_id": "winlens library 2002:317704",
+                    "manufacturer": "WinLens Library 2002",
+                    "part_number": "317704",
+                    "product_name": "aspherical condenser lens f = 18",
+                    "category": "condenser",
+                    "efl_mm": 18.0883,
+                    "diameter_mm": 21.4,
+                    "material_summary": "B270",
+                    "coating": "",
+                    "availability_status": "",
+                    "match_type": "confirmed",
+                    "surface_count": 3,
+                    "insertable_surface_count": 3,
+                },
+            ]
+
+        def get_catalog_lens_details(self, catalog_id: str) -> dict | None:
+            return {
+                "catalog_id": catalog_id,
+                "manufacturer": "WinLens Library 2002",
+                "part_number": "317704",
+                "product_name": "aspherical condenser lens f = 18",
+                "category": "condenser",
+                "efl_mm": 18.0883,
+                "diameter_mm": 21.4,
+                "material_summary": "B270",
+                "coating": "",
+                "surfaces": [{}, {}, {}],
+                "source": {
+                    "source_type": "winlens_spd",
+                    "imported_at": "2026-04-21T16:00:00",
+                },
+            }
+
+    panel = CatalogBrowserPanel(_InsertableFirstConnector())
+
+    assert panel.results_table.rowCount() == 2
+    assert panel.results_table.item(0, 2).text() == "317704"
+
+
 def test_catalog_browser_can_mark_filtered_and_delete_marked(monkeypatch, qapp) -> None:
     connector = _ResultConnector()
     deleted: list[str] = []
@@ -616,6 +752,18 @@ def test_catalog_browser_can_mark_filtered_and_delete_marked(monkeypatch, qapp) 
     assert panel._marked_catalog_ids == set()
 
 
+def test_catalog_browser_mark_button_switches_to_mark_all_without_selection(qapp) -> None:
+    panel = CatalogBrowserPanel(_ResultConnector())
+
+    assert panel.mark_filtered_button.text() == "Mark Filtered"
+
+    panel.results_table.clearSelection()
+    panel.results_table.setCurrentCell(-1, -1)
+    panel._update_details()
+
+    assert panel.mark_filtered_button.text() == "Mark All"
+
+
 def test_catalog_browser_populates_large_result_sets_in_batches(qapp) -> None:
     panel = CatalogBrowserPanel(_LargeResultConnector())
 
@@ -624,8 +772,44 @@ def test_catalog_browser_populates_large_result_sets_in_batches(qapp) -> None:
     assert panel.results_table.item(300, 2) is None
     assert panel.status_label.text() == "Loading catalog entries... 250/600"
 
-    QTest.qWait(50)
+    QTest.qWait(120)
 
     assert panel.results_table.item(300, 2) is not None
     assert panel.status_label.text() == "600 catalog entries found."
     assert panel.results_table.currentRow() != -1
+
+
+def test_insert_before_defaults_to_image_when_no_lde_row_selected(qapp) -> None:
+    connector = _ResultConnector()
+    panel = CatalogBrowserPanel(connector)
+    panel.results_table.selectRow(0)
+
+    class _LensEditorConnector:
+        @staticmethod
+        def get_surface_count() -> int:
+            return 5
+
+    class _LensEditor:
+        def __init__(self) -> None:
+            self.tableWidget = type(
+                "_TableStub",
+                (),
+                {"currentRow": staticmethod(lambda: -1)},
+            )()
+            self.connector = _LensEditorConnector()
+
+        @staticmethod
+        def map_ui_row_to_surface_index(ui_row: int) -> int:
+            return ui_row
+
+    host = QWidget()
+    host.panel_manager = type(
+        "_PanelManager",
+        (),
+        {"lens_editor": _LensEditor()},
+    )()
+    panel.setParent(host)
+
+    panel._insert_selected("before")
+
+    assert connector.last_insert_call == ("edmund:49-847", 4, "before")

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import re
+import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,20 +23,40 @@ _WAVEBAND_RE = re.compile(
 _PART_DIGITS_RE = re.compile(r"\d{5,}")
 _PRINTABLE_RUN_RE = re.compile(rb"[ -~]{12,}")
 _ALIAS_LINE_RE = re.compile(r"^[\d\s]{9,}.+?[A-Za-z].*$")
+_FOCAL_DIAMETER_PAIR_RE = re.compile(r"\b([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)\b")
 _CATEGORY_KEYWORDS = (
     ("double gauss", "double gauss"),
     ("eyepiece", "eyepiece"),
     ("microscopic", "microscope objective"),
+    ("microscope objective", "microscope objective"),
+    ("microprojection", "microprojection lenses"),
+    ("micro projection", "microprojection lenses"),
     ("petzval", "petzval"),
     ("laser focus", "laser focus"),
     ("beam expander", "beam expander"),
     ("condenser", "condenser"),
     ("asphere", "asphere"),
     ("aspheric", "asphere"),
+    ("plano-convex", "plano-convex"),
+    ("planoconvex", "plano-convex"),
+    ("plano-concave", "plano-concave"),
+    ("planoconcave", "plano-concave"),
+    ("bi-convex", "bi-convex"),
+    ("biconvex", "bi-convex"),
+    ("bi-concave", "bi-concave"),
+    ("biconcave", "bi-concave"),
+    ("meniscus", "meniscus"),
     ("ball lens", "ball lens"),
     ("halo", "halo"),
     ("achromat", "achromat"),
 )
+_IGNORED_WINLENS_CATEGORIES = {
+    "beam expander",
+    "eyepiece",
+    "hyperchromatic doublet",
+    "microprojection lenses",
+    "microscope objective",
+}
 
 
 @dataclass(slots=True)
@@ -58,7 +79,10 @@ class WinLensCatalogImporter(CatalogImporter):
     def import_file(self, path: str) -> list[CatalogLensRecord]:
         file_path = Path(path)
         if file_path.suffix.lower() == ".spd":
-            return [load_winlens_catalog_record(path, self.manufacturer)]
+            record = load_winlens_catalog_record(path, self.manufacturer)
+            if record is None:
+                return []
+            return [record]
         if file_path.suffix.lower() == ".txt":
             return load_winlens_table_records(path, self.manufacturer)
         if file_path.suffix.lower() == ".dat":
@@ -66,7 +90,37 @@ class WinLensCatalogImporter(CatalogImporter):
         raise ValueError(f"Unsupported WinLens catalog file: {file_path.name}")
 
 
-def load_winlens_catalog_record(path: str, manufacturer: str) -> CatalogLensRecord:
+def is_winlens_catalog_path(path: str | Path) -> bool:
+    """Return whether *path* belongs to importable WinLens catalog content."""
+    file_path = Path(path)
+    suffix = file_path.suffix.casefold()
+    parts = {part.casefold() for part in file_path.parts}
+    parts_joined = " / ".join(part.casefold() for part in file_path.parts)
+
+    if suffix == ".spd":
+        if "examples" in parts or "manual examples" in parts_joined:
+            return False
+        # Generic WinLens "LIBRARY" families (zoom lenses, telescopes, tessars, etc.)
+        # are design examples/templates rather than concrete stock-lens products.
+        # Only the LINOS standard systems subtree maps to actual stock-lens-like items.
+        return "linos_standard_systems" in parts
+
+    if suffix == ".txt":
+        return file_path.name.casefold() in {"prisms.txt", "gratings.txt"}
+
+    if suffix == ".dat":
+        return file_path.name.casefold() in {
+            "sh_l1.dat",
+            "sh_l2.dat",
+            "sh_l2a.dat",
+            "sh_c1.dat",
+            "sh_grin.dat",
+        }
+
+    return False
+
+
+def load_winlens_catalog_record(path: str, manufacturer: str) -> CatalogLensRecord | None:
     """Load a WinLens ``.SPD`` design file as a catalog-like record."""
     file_path = Path(path)
     raw_text = _read_text_with_fallback(file_path)
@@ -107,6 +161,8 @@ def load_winlens_catalog_record(path: str, manufacturer: str) -> CatalogLensReco
             version_hint=f"WinLens SPD v{version}" if version else file_path.name,
         ),
     )
+    if _should_ignore_winlens_record(record):
+        return None
     record.search_blob = record.build_search_blob()
     return record
 
@@ -227,7 +283,7 @@ def _family_aliases(part_numbers: list[str]) -> list[str]:
 
 
 def _extract_alias_title(text: str) -> str:
-    title = re.sub(r"^[\d\s]+", "", text).strip()
+    title = re.sub(r"^[^A-Za-z]+", "", text).strip()
     return re.sub(r"\s+", " ", title)
 
 
@@ -242,6 +298,29 @@ def _extract_alias_materials(text: str) -> list[str]:
         seen.add(candidate)
         materials.append(candidate)
     return materials
+
+
+def _extract_material_sequence(text: str) -> list[str]:
+    candidates = _extract_alias_materials(text)
+    if not candidates:
+        return []
+    filtered = [candidate for candidate in candidates if _looks_like_glass_code(candidate)]
+    if not filtered or len(filtered) > 4:
+        return []
+    return filtered
+
+
+def _looks_like_glass_code(candidate: str) -> bool:
+    upper = candidate.strip().upper()
+    if upper in {"AIR", "GRIN"}:
+        return True
+    if len(upper) > 12:
+        return False
+    if upper.startswith(("WL", "W8", "33K", "FFF")):
+        return False
+    if not re.fullmatch(r"(?:[A-Z]{1,3}-)?[A-Z]{1,6}\d{1,3}[A-Z]?", upper):
+        return False
+    return True
 
 
 def _should_merge_alias_group(first: WinLensAliasGroup, second: WinLensAliasGroup) -> bool:
@@ -448,6 +527,8 @@ def _load_winlens_cylinder_dat_records(path: Path, manufacturer: str) -> list[Ca
                         version_hint=path.name,
                     ),
                 )
+                if _should_ignore_winlens_record(record):
+                    continue
                 record.search_blob = record.build_search_blob() + _extra_search_blob(line_dims)
                 current_indexes.append(len(records))
                 records.append(record)
@@ -507,6 +588,8 @@ def _load_winlens_grin_dat_records(path: Path, manufacturer: str) -> list[Catalo
                     version_hint=path.name,
                 ),
             )
+            if _should_ignore_winlens_record(record):
+                continue
             record.search_blob = record.build_search_blob() + _extra_search_blob(
                 _extract_named_metrics(title, ("pitch", "na", "wd"))
             )
@@ -516,9 +599,13 @@ def _load_winlens_grin_dat_records(path: Path, manufacturer: str) -> list[Catalo
 
 def _load_winlens_lens_family_dat_records(path: Path, manufacturer: str) -> list[CatalogLensRecord]:
     imported_at = datetime.now(timezone.utc).isoformat()
+    raw_data = path.read_bytes()
     records: list[CatalogLensRecord] = []
     pending_record_indexes: list[int] = []
-    for entry in _iter_dat_text_lines(path):
+    search_cursor = 0
+    printable_entries = _extract_printable_strings(path)
+    repeated_anchor_tokens = _find_repeated_family_anchor_tokens(printable_entries)
+    for entry in printable_entries:
         normalized = _normalize_alias_line(entry)
         if not normalized:
             continue
@@ -526,11 +613,30 @@ def _load_winlens_lens_family_dat_records(path: Path, manufacturer: str) -> list
             part_numbers = _extract_alias_part_numbers(normalized)
             if not part_numbers:
                 continue
+            part_numbers = _normalize_family_product_part_numbers(
+                part_numbers,
+                repeated_anchor_tokens,
+            )
+            recipe = _extract_winlens_lens_family_recipe(raw_data, part_numbers, search_cursor)
             title = _extract_alias_title(normalized)
             efl_mm = _extract_efl_from_title(title)
             diameter_mm = _extract_family_diameter(title)
             category = _infer_family_category(title)
-            inline_materials = _extract_alias_materials(normalized)
+            if recipe is None or "surfaces" not in recipe:
+                singlet_recipe = _extract_winlens_singlet_recipe_after_text(
+                    raw_data,
+                    part_numbers,
+                    title,
+                    search_cursor,
+                )
+                if singlet_recipe is not None:
+                    recipe = singlet_recipe
+            inline_materials: list[str] = []
+            surfaces: list[LensSurfaceSpec] = []
+            if recipe is not None and "surfaces" in recipe:
+                surfaces = recipe["surfaces"]
+                inline_materials = recipe["materials"]
+                diameter_mm = diameter_mm or recipe["diameter_mm"]
             current_indexes: list[int] = []
             for part_number in part_numbers:
                 record = CatalogLensRecord(
@@ -542,6 +648,19 @@ def _load_winlens_lens_family_dat_records(path: Path, manufacturer: str) -> list
                     efl_mm=efl_mm,
                     diameter_mm=diameter_mm,
                     material_summary=", ".join(inline_materials) if inline_materials else None,
+                    surfaces=[
+                        LensSurfaceSpec(
+                            surface_type=surface.surface_type,
+                            radius=surface.radius,
+                            thickness=surface.thickness,
+                            material=surface.material,
+                            conic=surface.conic,
+                            semi_diameter=surface.semi_diameter,
+                            comment=surface.comment,
+                            extra_data=dict(surface.extra_data),
+                        )
+                        for surface in surfaces
+                    ],
                     tags=_build_table_tags("winlens", category, title, *inline_materials),
                     source=CatalogSource(
                         manufacturer=manufacturer,
@@ -556,12 +675,16 @@ def _load_winlens_lens_family_dat_records(path: Path, manufacturer: str) -> list
                         version_hint=path.name,
                     ),
                 )
+                if _should_ignore_winlens_record(record):
+                    continue
                 record.search_blob = record.build_search_blob()
                 current_indexes.append(len(records))
                 records.append(record)
-            pending_record_indexes = [] if inline_materials else current_indexes
+            if recipe is not None:
+                search_cursor = recipe["next_cursor"]
+            pending_record_indexes = current_indexes
             continue
-        material_candidates = _extract_alias_materials(normalized)
+        material_candidates = _extract_material_sequence(normalized)
         if material_candidates and pending_record_indexes:
             material_summary = ", ".join(material_candidates)
             for index in pending_record_indexes:
@@ -575,6 +698,242 @@ def _load_winlens_lens_family_dat_records(path: Path, manufacturer: str) -> list
                 records[index].search_blob = records[index].build_search_blob()
             pending_record_indexes = []
     return records
+
+
+def _find_repeated_family_anchor_tokens(entries: list[str]) -> set[str]:
+    counts: dict[str, set[str]] = {}
+    for entry in entries:
+        normalized = _normalize_alias_line(entry)
+        if not normalized or not _is_winlens_family_product_line(normalized):
+            continue
+        part_numbers = _extract_alias_part_numbers(normalized)
+        if not part_numbers:
+            continue
+        counts.setdefault(part_numbers[0], set()).add(_extract_alias_title(normalized))
+    return {
+        token
+        for token, titles in counts.items()
+        if len(titles) >= 2
+    }
+
+
+def _normalize_family_product_part_numbers(
+    part_numbers: list[str],
+    repeated_anchor_tokens: set[str],
+) -> list[str]:
+    if len(part_numbers) <= 1:
+        return part_numbers
+    anchor = part_numbers[0]
+    if anchor not in repeated_anchor_tokens:
+        return part_numbers
+    if len(part_numbers) == 2 and part_numbers[1].startswith("052"):
+        return part_numbers
+    return part_numbers[1:]
+
+
+def _extract_winlens_lens_family_recipe(
+    data: bytes,
+    part_numbers: list[str],
+    start_pos: int,
+) -> dict[str, object] | None:
+    part_run = "".join(part_numbers).encode("ascii", "ignore")
+    match_start = data.find(part_run, start_pos)
+    if match_start == -1:
+        return None
+
+    candidate = _find_winlens_recipe_block(data, match_start)
+    if candidate is None:
+        return {"next_cursor": match_start + len(part_run)}
+
+    radii = candidate["radii"]
+    semi_diameters = candidate["semi_diameters"]
+    thicknesses = candidate["thicknesses"]
+    materials = candidate["materials"]
+    surfaces = [
+        LensSurfaceSpec(
+            surface_type="standard",
+            radius=_normalize_recipe_radius(radii[0]),
+            thickness=thicknesses[0],
+            material=materials[0],
+            semi_diameter=semi_diameters[0],
+            comment="Surf  1",
+        ),
+        LensSurfaceSpec(
+            surface_type="standard",
+            radius=_normalize_recipe_radius(radii[1]),
+            thickness=thicknesses[1],
+            material=materials[1],
+            semi_diameter=semi_diameters[1],
+            comment="Surf  2",
+        ),
+        LensSurfaceSpec(
+            surface_type="standard",
+            radius=_normalize_recipe_radius(radii[2]),
+            thickness=0.0,
+            material="Air",
+            semi_diameter=semi_diameters[2],
+            comment="Surf  3",
+        ),
+    ]
+    return {
+        "surfaces": surfaces,
+        "materials": materials,
+        "diameter_mm": max(semi_diameters) * 2.0 if semi_diameters else None,
+        "next_cursor": match_start + len(part_run),
+    }
+
+
+def _find_winlens_recipe_block(data: bytes, match_start: int) -> dict[str, object] | None:
+    for offset in range(match_start - 80, match_start - 60):
+        if offset < 0 or offset + 68 > len(data):
+            continue
+        radii = [_unpack_le_float(data, offset + index * 4) for index in range(3)]
+        semi_diameters = [_unpack_le_float(data, offset + 12 + index * 4) for index in range(3)]
+        thicknesses = [_unpack_le_float(data, offset + 24 + index * 4) for index in range(2)]
+        if not _looks_like_recipe_numbers(radii, semi_diameters, thicknesses):
+            continue
+        materials = _decode_recipe_materials(data[offset + 32 : offset + 52])
+        if materials is None:
+            continue
+        optical_constants = [
+            _unpack_le_float(data, offset + 52 + index * 4) for index in range(4)
+        ]
+        if not _looks_like_recipe_optical_constants(optical_constants):
+            continue
+        return {
+            "radii": radii,
+            "semi_diameters": semi_diameters,
+            "thicknesses": thicknesses,
+            "materials": materials,
+        }
+    return None
+
+
+def _extract_winlens_singlet_recipe_after_text(
+    data: bytes,
+    part_numbers: list[str],
+    title: str,
+    start_pos: int,
+) -> dict[str, object] | None:
+    lowered = title.casefold()
+    if "plano-convex" not in lowered and "plano-concave" not in lowered:
+        return None
+    part_run = "".join(part_numbers).encode("ascii", "ignore")
+    match_start = data.find(part_run, start_pos)
+    if match_start == -1:
+        return None
+    candidate = _find_winlens_singlet_recipe_block_after_text(data, match_start)
+    if candidate is None:
+        return None
+
+    radius = candidate["radius"]
+    semi_diameter = candidate["semi_diameter"]
+    thickness = candidate["thickness"]
+    material = candidate["material"]
+    surfaces = [
+        LensSurfaceSpec(
+            surface_type="standard",
+            radius=_normalize_recipe_radius(radius),
+            thickness=thickness,
+            material=material,
+            semi_diameter=semi_diameter,
+            comment="Surf  1",
+        ),
+        LensSurfaceSpec(
+            surface_type="standard",
+            radius="inf",
+            thickness=0.0,
+            material="Air",
+            semi_diameter=semi_diameter,
+            comment="Surf  2",
+        ),
+    ]
+    return {
+        "surfaces": surfaces,
+        "materials": [material],
+        "diameter_mm": semi_diameter * 2.0,
+        "next_cursor": match_start + len(part_run),
+    }
+
+
+def _find_winlens_singlet_recipe_block_after_text(
+    data: bytes,
+    match_start: int,
+) -> dict[str, object] | None:
+    window = data[match_start : match_start + 180]
+    for material_offset in range(96, min(len(window) - 18, 145)):
+        material = window[material_offset : material_offset + 10].decode("latin1", "ignore").strip()
+        if not _looks_like_glass_code(material):
+            continue
+        if material_offset < 20:
+            continue
+        radius = _unpack_le_float(window, material_offset - 20)
+        semi_diameter_1 = _unpack_le_float(window, material_offset - 12)
+        semi_diameter_2 = _unpack_le_float(window, material_offset - 8)
+        thickness = _unpack_le_float(window, material_offset - 4)
+        nd = _unpack_le_float(window, material_offset + 10)
+        vd = _unpack_le_float(window, material_offset + 14)
+        if not (0.1 <= abs(radius) <= 5000.0):
+            continue
+        if not (0.1 <= semi_diameter_1 <= 250.0):
+            continue
+        if abs(semi_diameter_1 - semi_diameter_2) > 1e-3:
+            continue
+        if not (0.0 <= thickness <= 100.0):
+            continue
+        if not (1.0 <= nd <= 2.5 and 10.0 <= vd <= 100.0):
+            continue
+        return {
+            "radius": radius,
+            "semi_diameter": semi_diameter_1,
+            "thickness": thickness,
+            "material": material,
+        }
+    return None
+
+
+def _unpack_le_float(data: bytes, offset: int) -> float:
+    return struct.unpack("<f", data[offset : offset + 4])[0]
+
+
+def _looks_like_recipe_numbers(
+    radii: list[float],
+    semi_diameters: list[float],
+    thicknesses: list[float],
+) -> bool:
+    return (
+        len(radii) == 3
+        and len(semi_diameters) == 3
+        and len(thicknesses) == 2
+        and all(0.1 <= abs(radius) <= 5000.0 for radius in radii)
+        and all(0.1 <= semi_diameter <= 250.0 for semi_diameter in semi_diameters)
+        and all(0.0 <= thickness <= 100.0 for thickness in thicknesses)
+    )
+
+
+def _decode_recipe_materials(payload: bytes) -> list[str] | None:
+    tokens = [payload[:10].decode("latin1", "ignore").strip(), payload[10:20].decode("latin1", "ignore").strip()]
+    if len(tokens) != 2 or not all(_looks_like_glass_code(token) for token in tokens):
+        return None
+    return tokens
+
+
+def _looks_like_recipe_optical_constants(values: list[float]) -> bool:
+    if len(values) != 4:
+        return False
+    n1, n2, vd1, vd2 = values
+    return (
+        1.0 <= n1 <= 2.5
+        and 1.0 <= n2 <= 2.5
+        and 10.0 <= vd1 <= 100.0
+        and 10.0 <= vd2 <= 100.0
+    )
+
+
+def _normalize_recipe_radius(value: float) -> float | str:
+    if abs(value) < 1e-9:
+        return "inf"
+    return value
 
 
 def _parse_v4_surfaces(lines: list[str]) -> list[LensSurfaceSpec]:
@@ -669,6 +1028,10 @@ def _infer_category(title: str, path: Path) -> str:
         if needle in haystack:
             return category
     return path.parent.name.replace("_", " ").casefold()
+
+
+def _should_ignore_winlens_record(record: CatalogLensRecord) -> bool:
+    return str(record.category or "").casefold() in _IGNORED_WINLENS_CATEGORIES
 
 
 def _build_tags(path: Path, version: str, category: str) -> list[str]:
@@ -797,7 +1160,13 @@ def _infer_family_category(title: str) -> str:
 
 
 def _extract_efl_from_title(title: str) -> float | None:
-    return _extract_first_named_float(r"f\s*=\s*([-+]?\d+(?:\.\d+)?)", title)
+    explicit = _extract_first_named_float(r"f\s*=\s*([-+]?\d+(?:\.\d+)?)", title)
+    if explicit is not None:
+        return explicit
+    match = _FOCAL_DIAMETER_PAIR_RE.search(title)
+    if match:
+        return _safe_float(match.group(1))
+    return None
 
 
 def _extract_family_diameter(title: str) -> float | None:
@@ -808,6 +1177,9 @@ def _extract_family_diameter(title: str) -> float | None:
     )
     if match:
         return _safe_float(match.group(1))
+    pair_match = _FOCAL_DIAMETER_PAIR_RE.search(title)
+    if pair_match:
+        return _safe_float(pair_match.group(2))
     return None
 
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QWidget
 
 from optiland_gui.material_browser_panel import MaterialBrowserPanel
 
@@ -115,6 +116,25 @@ def test_material_browser_panel_renders_result_and_details(qapp) -> None:
     assert "Built-in Glass" in panel.details_text.text()
 
 
+def test_material_browser_sorts_and_shows_arrow_on_active_column(qapp) -> None:
+    panel = MaterialBrowserPanel(_DummyConnector())
+    header = panel.results_table.horizontalHeader()
+
+    panel._toggle_sort_column(1)
+
+    assert panel.results_table.horizontalHeaderItem(1).text() == "Reference ↑"
+    assert panel.results_table.item(0, 1).text() == "Hoya"
+    assert panel.results_table.item(1, 1).text() == "Schott"
+
+    panel._toggle_sort_column(1)
+
+    assert panel.results_table.horizontalHeaderItem(1).text() == "Reference ↓"
+    assert panel.results_table.item(0, 1).text() == "Schott"
+    assert panel.results_table.item(1, 1).text() == "Hoya"
+    assert header.sortIndicatorSection() == 1
+    assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+
+
 def test_material_browser_panel_filters_by_search_text(qapp) -> None:
     panel = MaterialBrowserPanel(_DummyConnector())
 
@@ -171,3 +191,29 @@ def test_material_browser_delete_marked_imported_materials(monkeypatch, qapp) ->
     panel._delete_marked_results()
 
     assert connector.deleted_material_ids == ["Hoya|ADC1|glass/winlens/hoya/ADC1.yml"]
+
+
+def test_material_browser_warns_when_marking_builtin_material(qapp) -> None:
+    class _ToastRecorder:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def notify(self, message: str, level: str) -> None:
+            self.calls.append((message, level))
+
+    host = QWidget()
+    host.toast_manager = _ToastRecorder()  # type: ignore[attr-defined]
+    panel = MaterialBrowserPanel(_DummyConnector(), parent=host)
+
+    item = panel.results_table.item(0, 0)
+    assert item is not None
+
+    item.setCheckState(Qt.CheckState.Checked)
+
+    assert item.checkState() == Qt.CheckState.Unchecked
+    assert host.toast_manager.calls == [
+        (
+            "Built-in material entries cannot be marked for deletion. Only local WinLens imports can be deleted.",
+            "warning",
+        )
+    ]

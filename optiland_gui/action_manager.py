@@ -179,7 +179,7 @@ class ActionManager:
         )
         self._create_action(
             "show_catalog_browser",
-            "Stock Lens Catalog",
+            "Stock Parts Catalog",
             triggered=self.main_window.show_catalog_browser_action,
         )
         self._create_action(
