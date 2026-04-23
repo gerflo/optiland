@@ -324,6 +324,7 @@ class Surface:
 
         return {
             "type": self.__class__.__name__,
+            "surface_type": self.surface_type,
             "thickness": self.thickness,
             "geometry": self.geometry.to_dict(),
             "material_post": self.material_post.to_dict(),
@@ -362,7 +363,7 @@ class Surface:
             Surface: The surface.
 
         """
-        surface_type = data.get("type")
+        surface_type = data.get("surface_type", "standard")
         geometry = BaseGeometry.from_dict(data["geometry"])
         material_post = BaseMaterial.from_dict(data["material_post"])
         aperture = (
@@ -391,6 +392,7 @@ class Surface:
         surface = surface_class(
             previous_surface=None,
             geometry=geometry,
+            surface_type=surface_type,
             material_post=material_post,
             is_stop=data.get("is_stop", False),
             aperture=aperture,

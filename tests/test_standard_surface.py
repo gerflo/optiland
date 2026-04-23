@@ -106,6 +106,7 @@ class TestSurface:
         surface = self.create_surface()
         data = surface.to_dict()
         assert data["type"] == "Surface"
+        assert data["surface_type"] is None
 
     def test_from_dict(self, set_test_backend):
         surface = self.create_surface()
@@ -135,6 +136,34 @@ class TestSurface:
         assert be.array_equal(new_surface.intensity, be.empty(0))
         assert be.array_equal(new_surface.aoi, be.empty(0))
         assert be.array_equal(new_surface.opd, be.empty(0))
+
+    def test_roundtrip_preserves_surface_type(self, set_test_backend):
+        cs = CoordinateSystem()
+        geometry = Plane(cs)
+        material_post = IdealMaterial(1.0, 0)
+        interaction_model = RefractiveReflectiveModel(
+            parent_surface=None,
+            is_reflective=False,
+            coating=None,
+            bsdf=None,
+        )
+        surface = Surface(
+            previous_surface=None,
+            geometry=geometry,
+            surface_type="even_asphere",
+            material_post=material_post,
+            is_stop=False,
+            aperture=None,
+            comment="Asphere test",
+            interaction_model=interaction_model,
+        )
+        interaction_model.parent_surface = surface
+
+        data = surface.to_dict()
+        restored = Surface.from_dict(data)
+
+        assert data["surface_type"] == "even_asphere"
+        assert restored.surface_type == "even_asphere"
 
     def test_from_dict_missing_type(self, set_test_backend):
         surface = self.create_surface()

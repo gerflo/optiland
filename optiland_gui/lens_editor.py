@@ -48,6 +48,8 @@ if TYPE_CHECKING:
 class SurfacePropertiesWidget(QWidget):
     """A widget to display and edit specific parameters of a surface geometry."""
 
+    requestClose = Signal()
+
     def __init__(self, row, connector, parent=None):
         super().__init__(parent)
         self.row = row
@@ -75,15 +77,18 @@ class SurfacePropertiesWidget(QWidget):
         )
 
         self.input_widgets = {}
+        self._geometry_mode = "generic"
+        self._asphere_coeff_inputs: list[QLineEdit] = []
         self.aperture_type_combo: QComboBox | None = None
         self.aperture_inputs: dict[str, QLineEdit] = {}
         self._aperture_form_layout: QFormLayout | None = None
         self._aperture_labels: dict[str, QLabel] = {}
+        self._suspend_dirty_tracking = False
         self._populate_properties_form()
 
     def preferred_height_for_width(self, width: int) -> int:
         """Return the preferred widget height for a constrained width."""
-        target_width = max(320, int(width))
+        target_width = max(1, int(width))
         self.setFixedWidth(target_width)
         layout = self.layout()
         if layout is not None:
@@ -97,17 +102,33 @@ class SurfacePropertiesWidget(QWidget):
     def _create_parameter_input(self, name, value):
         """Creates a configured QLineEdit for a given surface parameter."""
         line_edit = QLineEdit()
-        line_edit.setMaximumWidth(60)
 
         if isinstance(value, (list | tuple)) or hasattr(value, "tolist"):
             list_val = value.tolist() if hasattr(value, "tolist") else value
             line_edit.setText(str(list_val))
-            line_edit.setPlaceholderText("e.g., [0.1, -0.2]")
+            line_edit.setPlaceholderText("Example: [0.1, -0.2, 0.0]")
+            line_edit.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            )
         else:
+            line_edit.setMaximumWidth(60)
             line_edit.setText(f"{value:.6f}")
 
-        line_edit.editingFinished.connect(self.apply_changes)
+        line_edit.textEdited.connect(self._mark_dirty)
         self.input_widgets[name] = line_edit
+        return line_edit
+
+    def _create_geometry_numeric_input(
+        self, value: float | str, *, decimals: int = 8, width: int = 110
+    ) -> QLineEdit:
+        """Create a compact numeric editor used by structured geometry forms."""
+        line_edit = QLineEdit()
+        line_edit.setMaximumWidth(width)
+        if isinstance(value, str):
+            line_edit.setText(value)
+        else:
+            line_edit.setText(f"{float(value):.{decimals}g}")
+        line_edit.textEdited.connect(self._mark_dirty)
         return line_edit
 
     def _populate_properties_form(self):
@@ -117,13 +138,14 @@ class SurfacePropertiesWidget(QWidget):
         main_layout.setSpacing(10)
         self._add_aperture_form(main_layout)
         self._add_geometry_form(main_layout)
+        self._add_action_row(main_layout)
 
     def _create_aperture_input(self, value: float) -> QLineEdit:
         """Create a compact numeric line edit for aperture settings."""
         line_edit = QLineEdit()
-        line_edit.setFixedWidth(90)
+        line_edit.setMaximumWidth(90)
         line_edit.setText(f"{value:.4f}")
-        line_edit.editingFinished.connect(self.apply_changes)
+        line_edit.textEdited.connect(self._mark_dirty)
         return line_edit
 
     def _add_aperture_form(self, main_layout: QVBoxLayout) -> None:
@@ -141,6 +163,7 @@ class SurfacePropertiesWidget(QWidget):
             "Choose the aperture type and edit only the relevant dimensions."
         )
         hint.setProperty("hint", True)
+        hint.setWordWrap(True)
         section_layout.addWidget(title)
         section_layout.addWidget(hint)
 
@@ -159,7 +182,7 @@ class SurfacePropertiesWidget(QWidget):
         section_layout.addLayout(self._aperture_form_layout)
 
         self.aperture_type_combo = QComboBox()
-        self.aperture_type_combo.setFixedWidth(180)
+        self.aperture_type_combo.setMaximumWidth(180)
         self.aperture_type_combo.addItems(
             [
                 "None",
@@ -182,7 +205,9 @@ class SurfacePropertiesWidget(QWidget):
             type_map.get(str(config.get("type", "none")).lower(), "None")
         )
         self.aperture_type_combo.currentTextChanged.connect(self._refresh_aperture_ui)
-        self.aperture_type_combo.currentTextChanged.connect(self._handle_aperture_type_changed)
+        self.aperture_type_combo.currentTextChanged.connect(
+            self._handle_aperture_type_changed
+        )
         self._aperture_form_layout.addRow("Aperture Type:", self.aperture_type_combo)
 
         self.aperture_inputs = {
@@ -220,9 +245,15 @@ class SurfacePropertiesWidget(QWidget):
         section_layout.addWidget(title)
 
         params = self.connector.get_surface_geometry_params(self.row)
+        if self._should_use_even_asphere_editor(params):
+            self._add_even_asphere_geometry_form(section_layout, params)
+            main_layout.addWidget(section)
+            return
+
         if not params:
             hint = QLabel("This surface type has no additional geometry parameters.")
             hint.setProperty("hint", True)
+            hint.setWordWrap(True)
             section_layout.addWidget(hint)
             main_layout.addWidget(section)
             return
@@ -263,6 +294,89 @@ class SurfacePropertiesWidget(QWidget):
         section_layout.addLayout(columns_layout)
         main_layout.addWidget(section)
 
+    def _should_use_even_asphere_editor(self, params: dict) -> bool:
+        """Return True when the current surface should use the structured even-asphere UI."""
+        try:
+            surface = self.connector._optic.surfaces.surfaces[self.row]
+            geometry = surface.geometry
+            if geometry.__class__.__name__ == "EvenAsphere":
+                return True
+            if str(getattr(surface, "surface_type", "")).lower() == "even_asphere":
+                return True
+        except Exception:
+            pass
+
+        type_info = self.connector.get_surface_type_info(self.row)
+        surface_type_text = str(type_info.get("display_text", "")).lower()
+        if "even_asphere" in surface_type_text:
+            return True
+
+        return False
+
+    def _add_even_asphere_geometry_form(
+        self, section_layout: QVBoxLayout, params: dict
+    ) -> None:
+        """Render a structured editor for even-asphere coefficients."""
+        self._geometry_mode = "even_asphere"
+        hint = QLabel(
+            "Base Radius and Conic are edited in the table. Enter the even asphere "
+            "coefficients here by radial order."
+        )
+        hint.setProperty("hint", True)
+        hint.setWordWrap(True)
+        section_layout.addWidget(hint)
+
+        coefficients = params.get("Coefficients", [])
+        if hasattr(coefficients, "tolist"):
+            coefficients = coefficients.tolist()
+        coefficients = list(coefficients or [])
+        field_count = max(8, len(coefficients))
+
+        form_layout = QFormLayout()
+        form_layout.setHorizontalSpacing(12)
+        form_layout.setVerticalSpacing(6)
+        form_layout.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint
+        )
+        form_layout.setFormAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        form_layout.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self._asphere_coeff_inputs = []
+        for idx in range(field_count):
+            radial_order = 2 * (idx + 1)
+            value = coefficients[idx] if idx < len(coefficients) else 0.0
+            line_edit = self._create_geometry_numeric_input(value)
+            line_edit.setPlaceholderText("0")
+            self._asphere_coeff_inputs.append(line_edit)
+            form_layout.addRow(f"A{radial_order}:", line_edit)
+
+        section_layout.addLayout(form_layout)
+
+    def _add_action_row(self, main_layout: QVBoxLayout) -> None:
+        """Add explicit actions so properties are applied only once per edit session."""
+        actions = QHBoxLayout()
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(8)
+        actions.addStretch(1)
+
+        close_button = QPushButton("Close Without Saving")
+        close_button.clicked.connect(self.requestClose.emit)
+        actions.addWidget(close_button)
+
+        apply_button = QPushButton("Apply and Close")
+        apply_button.clicked.connect(self._apply_and_close)
+        actions.addWidget(apply_button)
+        main_layout.addLayout(actions)
+
+    def _mark_dirty(self, *_args) -> None:  # noqa: ANN002
+        """Placeholder hook for future dirty-state UI; currently intentional no-op."""
+        if self._suspend_dirty_tracking:
+            return
+
     def _refresh_aperture_ui(self) -> None:
         """Show only the aperture fields relevant to the selected type."""
         if self.aperture_type_combo is None or self._aperture_form_layout is None:
@@ -301,6 +415,7 @@ class SurfacePropertiesWidget(QWidget):
         """Seed sensible defaults before applying a newly selected aperture type."""
         if self.aperture_type_combo is None:
             return
+        self._suspend_dirty_tracking = True
         aperture_type = self.aperture_type_combo.currentText()
         outer_text = self.aperture_inputs["outer_radius"].text().strip()
         inner_text = self.aperture_inputs["inner_radius"].text().strip()
@@ -345,12 +460,33 @@ class SurfacePropertiesWidget(QWidget):
             self.aperture_inputs["clear_radius"].setText(
                 self.aperture_inputs["outer_radius"].text()
             )
+        self._suspend_dirty_tracking = False
+        self._mark_dirty()
 
+    def _apply_and_close(self) -> None:
+        """Persist the edited properties and close the panel."""
         self.apply_changes()
+        self.requestClose.emit()
 
     @Slot()
     def apply_changes(self):
         """Collects data from input fields and sends it to the connector."""
+        if self._geometry_mode == "even_asphere":
+            coefficients: list[float] = []
+            for widget in self._asphere_coeff_inputs:
+                text = widget.text().strip()
+                if not text:
+                    coefficients.append(0.0)
+                    continue
+                try:
+                    coefficients.append(float(text))
+                except ValueError:
+                    coefficients.append(0.0)
+            while coefficients and coefficients[-1] == 0.0:
+                coefficients.pop()
+            self.connector.set_surface_geometry_params(
+                self.row, {"Coefficients": str(coefficients)}
+            )
         if self.input_widgets:
             params_to_set = {}
             for name, widget in self.input_widgets.items():
@@ -772,6 +908,12 @@ class LensEditor(QWidget):
         self.tableWidget.currentCellChanged.connect(self._sync_current_cell_highlight)
         self.tableWidget.horizontalHeader().sectionResized.connect(self._save_table_state)
         self.tableWidget.horizontalHeader().sectionMoved.connect(self._save_table_state)
+        self.tableWidget.horizontalHeader().sectionResized.connect(
+            self._update_properties_widget_geometry
+        )
+        self.tableWidget.horizontalHeader().sectionMoved.connect(
+            self._update_properties_widget_geometry
+        )
         app = QApplication.instance()
         if app is not None:
             app.focusChanged.connect(self._handle_application_focus_changed)
@@ -828,6 +970,13 @@ class LensEditor(QWidget):
             return
         header = self.tableWidget.horizontalHeader()
         self.settings.setValue(self._settings_key("HeaderState"), header.saveState())
+        if hasattr(self.settings, "sync"):
+            self.settings.sync()
+
+    def closeEvent(self, event) -> None:
+        """Persist table layout when the editor widget is closed."""
+        self._save_table_state()
+        super().closeEvent(event)
 
     def eventFilter(self, source, event):
         if source is self.tableWidget.viewport() and event.type() == QEvent.Resize:
@@ -1450,12 +1599,21 @@ class LensEditor(QWidget):
         self.tableWidget.insertRow(prop_row_index)
         self.tableWidget.setVerticalHeaderItem(prop_row_index, QTableWidgetItem(""))
         prop_widget = SurfacePropertiesWidget(source_row, self.connector)
+        prop_widget.requestClose.connect(
+            lambda sr=source_row: self._close_properties_widget_for_row(sr)
+        )
         self.tableWidget.setCellWidget(prop_row_index, 0, prop_widget)
         self.tableWidget.setSpan(prop_row_index, 0, 1, self.tableWidget.columnCount())
         self.tableWidget.verticalHeader().setSectionResizeMode(
             prop_row_index, QHeaderView.ResizeMode.Fixed
         )
         self._update_properties_widget_geometry()
+
+    def _close_properties_widget_for_row(self, source_row: int) -> None:
+        """Close the expanded properties row for the given source row."""
+        if self.open_prop_source_row != source_row:
+            return
+        self.toggle_properties_widget(source_row)
 
     def _update_properties_widget_geometry(self) -> None:
         """Fit the expanded properties row to the current table width and content."""
@@ -1465,9 +1623,20 @@ class LensEditor(QWidget):
         prop_widget = self.tableWidget.cellWidget(prop_row_index, 0)
         if not isinstance(prop_widget, SurfacePropertiesWidget):
             return
-        available_width = max(320, self.tableWidget.viewport().width() - 24)
+        available_width = self._properties_widget_available_width()
         preferred_height = prop_widget.preferred_height_for_width(available_width)
+        prop_widget.setFixedWidth(available_width)
         self.tableWidget.setRowHeight(prop_row_index, preferred_height)
+
+    def _properties_widget_available_width(self) -> int:
+        """Return the maximum width the embedded properties widget may use."""
+        viewport_width = max(1, self.tableWidget.viewport().width())
+        column_width = sum(
+            self.tableWidget.columnWidth(col)
+            for col in range(self.tableWidget.columnCount())
+            if not self.tableWidget.isColumnHidden(col)
+        )
+        return max(1, min(column_width, viewport_width) - 24)
 
     @Slot()
     def update_headers_on_selection(self):

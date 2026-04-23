@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from optiland_gui.services.file_service import SpecialFloatEncoder
 from optiland_gui.services.surface_service import SurfaceService
 
 
@@ -75,3 +76,19 @@ class TestSurfaceService:
         original_type = mock_connector._optic.surface_group.surfaces[1].surface_type
         service.set_surface_type(1, "not_a_real_type")
         assert mock_connector._optic.surface_group.surfaces[1].surface_type == original_type
+
+    def test_even_asphere_coefficients_remain_json_serializable(
+        self, service, mock_connector
+    ):
+        import json
+
+        service.set_surface_type(1, "even_asphere")
+        service.set_surface_geometry_params(1, {"Coefficients": "[0.1, 0.01, 0.001]"})
+
+        geometry = mock_connector._optic.surface_group.surfaces[1].geometry
+        assert isinstance(geometry.coefficients, list)
+        assert geometry.coefficients == [0.1, 0.01, 0.001]
+
+        payload = mock_connector._optic.to_dict()
+        encoded = json.dumps(payload, cls=SpecialFloatEncoder)
+        assert '"coefficients": [\n' in encoded or '"coefficients": [' in encoded

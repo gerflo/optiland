@@ -563,6 +563,7 @@ def test_lens_editor_restores_persisted_column_widths(qapp, mock_connector, monk
 
     class _FakeSettings:
         _store: dict[str, object] = {}
+        sync_calls = 0
 
         def __init__(self, *_args, **_kwargs):
             pass
@@ -579,17 +580,21 @@ def test_lens_editor_restores_persisted_column_widths(qapp, mock_connector, monk
         def setValue(self, key, value):  # noqa: ANN001, N802
             self._store[key] = value
 
+        def sync(self):
+            type(self).sync_calls += 1
+
     monkeypatch.setattr("optiland_gui.lens_editor.QSettings", _FakeSettings)
 
     editor = LensEditor(mock_connector)
     editor.load_data()
     editor.tableWidget.setColumnWidth(mock_connector.COL_THICKNESS, 173)
-    editor._save_table_state()
+    editor.close()
 
     restored = LensEditor(mock_connector)
     restored.load_data()
 
     assert restored.tableWidget.columnWidth(mock_connector.COL_THICKNESS) == 173
+    assert _FakeSettings.sync_calls >= 1
 
 
 def test_surface_properties_widget_applies_annular_aperture(qapp, mock_connector):
@@ -618,7 +623,7 @@ def test_surface_properties_widget_applies_annular_aperture(qapp, mock_connector
     )
 
 
-def test_surface_properties_widget_selecting_annular_seeds_inner_radius_and_skips_empty_geometry(
+def test_surface_properties_widget_selecting_annular_seeds_inner_radius_and_applies_on_confirm(
     qapp, mock_connector
 ):
     from optiland_gui.lens_editor import SurfacePropertiesWidget
@@ -627,6 +632,11 @@ def test_surface_properties_widget_selecting_annular_seeds_inner_radius_and_skip
 
     widget = SurfacePropertiesWidget(1, mock_connector)
     widget.aperture_type_combo.setCurrentText("Annular Aperture")
+
+    mock_connector.set_surface_aperture_config.assert_not_called()
+    mock_connector.set_surface_geometry_params.assert_not_called()
+
+    widget.apply_changes()
 
     mock_connector.set_surface_aperture_config.assert_called_with(
         1,
@@ -663,3 +673,115 @@ def test_surface_properties_widget_shows_only_relevant_aperture_fields(
     assert not widget.aperture_inputs["outer_radius"].isHidden()
     assert not widget.aperture_inputs["inner_radius"].isHidden()
     assert not widget.aperture_inputs["clear_radius"].isHidden()
+
+
+def test_even_asphere_surface_properties_widget_uses_structured_coefficient_fields(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import SurfacePropertiesWidget
+
+    mock_connector.get_surface_type_info.return_value = {
+        "display_text": "Even_Asphere",
+        "is_changeable": True,
+        "has_extra_params": True,
+    }
+    mock_connector.get_surface_geometry_params.return_value = {
+        "Coefficients": [0.1, 0.01, 0.001]
+    }
+
+    widget = SurfacePropertiesWidget(1, mock_connector)
+
+    assert widget._geometry_mode == "even_asphere"
+    assert len(widget._asphere_coeff_inputs) >= 8
+    assert widget._asphere_coeff_inputs[0].text() == "0.1"
+    assert widget._asphere_coeff_inputs[1].text() == "0.01"
+    assert widget._asphere_coeff_inputs[2].text() == "0.001"
+
+    widget._asphere_coeff_inputs[0].setText("0.25")
+    widget._asphere_coeff_inputs[1].setText("0.05")
+    widget._asphere_coeff_inputs[2].setText("")
+    widget.apply_changes()
+
+    mock_connector.set_surface_geometry_params.assert_called_with(
+        1, {"Coefficients": "[0.25, 0.05]"}
+    )
+
+
+def test_structured_even_asphere_editor_is_used_even_if_display_type_is_standard(
+    qapp, mock_connector
+):
+    from optiland.geometries.even_asphere import EvenAsphere
+    from optiland.coordinate_system import CoordinateSystem
+    from optiland_gui.lens_editor import SurfacePropertiesWidget
+
+    mock_connector.get_surface_type_info.return_value = {
+        "display_text": "Standard",
+        "is_changeable": True,
+        "has_extra_params": True,
+    }
+    mock_connector.get_surface_geometry_params.return_value = {
+        "Coefficients": [0.1, 0.01]
+    }
+    mock_connector._optic.surfaces.surfaces[1].geometry = EvenAsphere(
+        CoordinateSystem(), 50.0, 0.0, coefficients=[0.1, 0.01]
+    )
+
+    widget = SurfacePropertiesWidget(1, mock_connector)
+
+    assert widget._geometry_mode == "even_asphere"
+    assert widget._asphere_coeff_inputs[0].text() == "0.1"
+
+
+def test_standard_surface_with_coeff_like_params_does_not_use_even_asphere_editor(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import SurfacePropertiesWidget
+
+    mock_connector.get_surface_type_info.return_value = {
+        "display_text": "Standard",
+        "is_changeable": True,
+        "has_extra_params": True,
+    }
+    mock_connector.get_surface_geometry_params.return_value = {
+        "Coefficients": [0.1, 0.01]
+    }
+
+    widget = SurfacePropertiesWidget(1, mock_connector)
+
+    assert widget._geometry_mode == "generic"
+    assert widget._asphere_coeff_inputs == []
+
+
+def test_properties_panel_width_stays_within_table_viewport(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+
+    editor = LensEditor(mock_connector)
+    editor.resize(640, 480)
+    editor.load_data()
+    editor.open_prop_source_row = 1
+    editor.load_data()
+    editor.tableWidget.viewport().resize(300, 300)
+
+    for col in range(editor.tableWidget.columnCount()):
+        editor.tableWidget.setColumnWidth(col, 70)
+
+    assert editor._properties_widget_available_width() <= (
+        editor.tableWidget.viewport().width() - 24
+    )
+
+
+def test_surface_properties_widget_apply_and_close_emits_close_request(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import SurfacePropertiesWidget
+
+    mock_connector.get_surface_aperture_config.return_value = {"type": "none"}
+    widget = SurfacePropertiesWidget(1, mock_connector)
+    closed: list[bool] = []
+    widget.requestClose.connect(lambda: closed.append(True))
+
+    widget.aperture_type_combo.setCurrentText("Annular Aperture")
+    widget._apply_and_close()
+
+    assert closed == [True]
+    mock_connector.set_surface_aperture_config.assert_called()

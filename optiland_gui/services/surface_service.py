@@ -59,8 +59,8 @@ class SurfaceService:
             "Norm X": "norm_x",
             "Norm Y": "norm_y",
         },
-        "EvenAsphere": {"Coefficients": "c"},
-        "OddAsphere": {"Coefficients": "c"},
+        "EvenAsphere": {"Coefficients": "coefficients"},
+        "OddAsphere": {"Coefficients": "coefficients"},
         "PolynomialGeometry": {"Coefficients": "c"},
         "ToroidalGeometry": {
             "Radius of Rotation (XZ)": "R_rot",
@@ -809,6 +809,17 @@ class SurfaceService:
                 return ast.literal_eval(value_str)
         return float(value_str)
 
+    def _coerce_geometry_param_value(self, attr_name: str, value: object) -> object:
+        """Convert parsed geometry values to the storage shape expected by the geometry.
+
+        Sequence-like geometry parameters such as asphere coefficients must stay
+        plain Python lists so they serialize cleanly to Optiland JSON.
+        Scalar values continue to use the active backend array/scalar type.
+        """
+        if attr_name in {"coefficients", "coeffs_poly_y"}:
+            return list(value) if isinstance(value, (list, tuple)) else [value]
+        return be.array(value)
+
     def _update_biconic_geometry(self, surface: object, params_dict: dict) -> None:
         """Replace a plane geometry with a biconic using values from *params_dict*.
 
@@ -971,7 +982,11 @@ class SurfaceService:
                     if attr_name and hasattr(geometry, attr_name):
                         try:
                             new_value = self._parse_param_value(value_str)
-                            setattr(geometry, attr_name, be.array(new_value))
+                            setattr(
+                                geometry,
+                                attr_name,
+                                self._coerce_geometry_param_value(attr_name, new_value),
+                            )
 
                             if (
                                 geo_class_name == "BiconicGeometry"
