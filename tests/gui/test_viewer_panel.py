@@ -16,6 +16,7 @@ class _ConnectorStub(QObject):
     def __init__(self, optic) -> None:
         super().__init__()
         self._optic = optic
+        self.toast_manager = None
 
     def get_optic(self):  # noqa: ANN201
         return self._optic
@@ -281,3 +282,44 @@ def test_viewer_toolbar_pan_zoom_keeps_ratio_while_dragging(
     data_ratio = abs((x1 - x0) / (y1 - y0))
 
     assert data_ratio == pytest.approx(box_ratio, rel=1e-3)
+
+
+def test_viewer_without_stop_surface_keeps_layout_and_warns(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    class _ToastRecorder:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def notify(self, message: str, level: str) -> None:
+            self.calls.append((message, level))
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    for surface in minimal_optic.surfaces:
+        surface.is_stop = False
+    connector = _ConnectorStub(minimal_optic)
+    connector.toast_manager = _ToastRecorder()
+
+    panel = ViewerPanel(connector)
+
+    assert panel.viewer2D.ax.get_title() == f"System: {minimal_optic.name} (2D)"
+    assert "Error plotting system" not in {
+        text.get_text() for text in panel.viewer2D.ax.texts
+    }
+    assert connector.toast_manager.calls
+    assert "No stop surface is defined" in connector.toast_manager.calls[0][0]
+    assert connector.toast_manager.calls[0][1] == "warning"

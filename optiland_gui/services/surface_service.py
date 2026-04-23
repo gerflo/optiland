@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import logging
+from contextlib import suppress
 
 import optiland.backend as be
 from optiland.geometries.biconic import BiconicGeometry
@@ -599,6 +600,12 @@ class SurfaceService:
         old_state = self._connector._capture_optic_state()
         num_rows = self.get_surface_count()
         insert_idx = min(max(index, 1), max(num_rows - 1, 1))
+        existing_stop_surface = None
+        with suppress(ValueError):
+            existing_stop_surface = self._connector._optic.surfaces[
+                self._connector._optic.surfaces.stop_index
+            ]
+        preserve_existing_stop = existing_stop_surface is not None
 
         try:
             for offset, spec in enumerate(surfaces):
@@ -646,10 +653,16 @@ class SurfaceService:
                     thickness=float(spec.get("thickness", 0.0)),
                     material=material_spec,
                     comment=str(spec.get("comment", "Catalog Surface")),
-                    is_stop=stop_offset == offset,
+                    is_stop=(not preserve_existing_stop and stop_offset == offset),
                     aperture=aperture,
                     **geometry_kwargs,
                 )
+
+            if preserve_existing_stop and existing_stop_surface is not None:
+                restored_stop_index = self._connector._optic.surfaces.index(
+                    existing_stop_surface
+                )
+                self._connector._optic.surfaces.stop_index = restored_stop_index
 
             self._connector._optic.updater.update()
             self._connector._undo_redo_manager.add_state(old_state)

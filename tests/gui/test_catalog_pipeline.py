@@ -333,6 +333,37 @@ class TestCatalogSurfaceInsertion:
                 shutil.copytree(backup_glass_root, local_glass_root)
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def test_insert_surface_sequence_preserves_existing_system_stop(self, service):
+        optic = service._connector._optic
+        original_stop_surface = optic.surfaces[2]
+
+        service.insert_surface_sequence(
+            3,
+            [
+                {
+                    "surface_type": "standard",
+                    "radius": 20.0,
+                    "thickness": 3.0,
+                    "material": "N-BK7",
+                    "semi_diameter": 4.0,
+                    "comment": "Catalog S1",
+                },
+                {
+                    "surface_type": "standard",
+                    "radius": -20.0,
+                    "thickness": 0.0,
+                    "material": "Air",
+                    "semi_diameter": 4.0,
+                    "comment": "Catalog S2",
+                },
+            ],
+            stop_offset=0,
+        )
+
+        stop_surfaces = [surface for surface in optic.surfaces if surface.is_stop]
+        assert stop_surfaces == [original_stop_surface]
+        assert optic.surfaces.stop_index == optic.surfaces.index(original_stop_surface)
+
     def test_insert_catalog_lens_rejects_metadata_only_records(self) -> None:
         connector = MagicMock()
         connector._catalog_service = MagicMock()

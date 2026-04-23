@@ -83,6 +83,7 @@ class _ResultConnector(_DummyConnector):
             "diameter_mm": 25,
             "material_summary": "N-BK7",
             "coating": "VIS",
+            "insertable_surface_count": 2,
         }
         text = str(query.get("text", "")).casefold()
         manufacturer = str(query.get("manufacturer", "")).casefold()
@@ -278,6 +279,36 @@ class _LargeResultConnector(_DummyConnector):
         }
 
 
+class _InsertableFilterConnector(_DummyConnector):
+    def search_catalog_lenses(self, query: dict) -> list[dict]:
+        return [
+            {
+                "catalog_id": "edmund:usable",
+                "manufacturer": "Edmund",
+                "part_number": "49-847",
+                "product_name": "Usable Lens",
+                "category": "achromat",
+                "efl_mm": 25.0,
+                "diameter_mm": 25.0,
+                "material_summary": "N-BK7",
+                "coating": "VIS",
+                "insertable_surface_count": 2,
+            },
+            {
+                "catalog_id": "excelitas:metadata-only",
+                "manufacturer": "Excelitas LINOS",
+                "part_number": "G000000000",
+                "product_name": "Metadata Only",
+                "category": "achromat",
+                "efl_mm": 25.0,
+                "diameter_mm": 25.0,
+                "material_summary": "N-BK7",
+                "coating": "VIS",
+                "insertable_surface_count": 0,
+            },
+        ]
+
+
 class _FakeSettings:
     """Small in-memory stand-in for QSettings used in panel tests."""
 
@@ -310,6 +341,10 @@ def test_catalog_browser_uses_download_button_and_filter_row(qapp) -> None:
     assert panel.download_catalog_button.text() == "Download online catalog..."
     assert panel.reset_filters_button.text() == "↻"
     assert panel.reset_filters_button.toolTip() == "Reset all search filters"
+    assert panel.insertable_only_button.text() == "Insertable"
+    assert panel.insertable_only_button.isCheckable() is True
+    assert panel.insertable_only_button.isChecked() is True
+    assert panel.insertable_only_button.icon().isNull() is False
 
     download_actions = [action.text() for action in panel.download_catalog_button.menu().actions()]
     assert download_actions == [
@@ -388,6 +423,7 @@ def test_catalog_browser_reset_filters_restores_default_values(qapp) -> None:
     panel.status_filter.setText("legacy")
     panel.match_filter.setText("confirmed")
     panel.manufacturer_filter.setCurrentIndex(1)
+    panel.insertable_only_button.setChecked(False)
 
     panel._reset_filters()
 
@@ -402,6 +438,22 @@ def test_catalog_browser_reset_filters_restores_default_values(qapp) -> None:
     assert panel.status_filter.text() == ""
     assert panel.match_filter.text() == ""
     assert panel.manufacturer_filter.currentData() == ""
+    assert panel.insertable_only_button.isChecked() is True
+
+
+def test_catalog_browser_insertable_only_filter_hides_metadata_only_rows(qapp) -> None:
+    panel = CatalogBrowserPanel(_InsertableFilterConnector())
+
+    assert [record["catalog_id"] for record in panel._current_results] == ["edmund:usable"]
+    assert panel.insertable_only_button.toolTip().startswith("Showing only")
+
+    panel.insertable_only_button.setChecked(False)
+
+    assert [record["catalog_id"] for record in panel._current_results] == [
+        "edmund:usable",
+        "excelitas:metadata-only",
+    ]
+    assert panel.insertable_only_button.toolTip().startswith("Showing all")
 
 
 def test_catalog_browser_restores_saved_column_widths_and_sort(monkeypatch, qapp) -> None:

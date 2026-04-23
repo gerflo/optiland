@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QTreeWidget,
@@ -170,6 +171,13 @@ class CatalogBrowserPanel(QWidget):
         self.reset_filters_button.setFixedWidth(42)
         controls_layout.addWidget(self.reset_filters_button)
 
+        self.insertable_only_button = QPushButton("Insertable")
+        self.insertable_only_button.setCheckable(True)
+        self.insertable_only_button.setChecked(True)
+        self.insertable_only_button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        self._update_insertable_only_button_state()
+        controls_layout.addWidget(self.insertable_only_button)
+
         self.mark_filtered_button = QPushButton("")
         self.clear_marks_button = QPushButton("")
         self.delete_marked_button = QPushButton("")
@@ -298,9 +306,39 @@ class CatalogBrowserPanel(QWidget):
         button.setAccessibleName(tooltip)
         button.setFixedWidth(32)
 
+    def _update_insertable_only_button_state(self) -> None:
+        """Refresh the insertable filter button to make its state obvious."""
+        theme = self.settings.value("Appearance/ThemeId", "dark", type=str) or "dark"
+        icon_theme = get_icon_theme_id(theme)
+        checked = self.insertable_only_button.isChecked()
+        icon_name = "check_apply.svg" if checked else "dash.svg"
+        tooltip = (
+            "Showing only catalog entries with usable optical surface data"
+            if checked
+            else "Showing all catalog entries, including metadata-only rows"
+        )
+        icon = QIcon(f":/icons/{icon_theme}/{icon_name}")
+        if icon.isNull():
+            fallback = (
+                QStyle.StandardPixmap.SP_DialogApplyButton
+                if checked
+                else QStyle.StandardPixmap.SP_TitleBarShadeButton
+            )
+            icon = self.style().standardIcon(fallback)
+        self.insertable_only_button.setIcon(icon)
+        self.insertable_only_button.setIconSize(QSize(14, 14))
+        self.insertable_only_button.setToolTip(tooltip)
+        self.insertable_only_button.setAccessibleName(
+            f"Insertable filter {'on' if checked else 'off'}"
+        )
+
     def _wire_signals(self) -> None:
         self.search_edit.textChanged.connect(self.refresh)
         self.reset_filters_button.clicked.connect(self._reset_filters)
+        self.insertable_only_button.toggled.connect(
+            lambda _checked: self._update_insertable_only_button_state()
+        )
+        self.insertable_only_button.toggled.connect(self.refresh)
         self.results_table.itemSelectionChanged.connect(self._update_details)
         self.results_table.customContextMenuRequested.connect(self._show_results_context_menu)
         self.results_table.itemChanged.connect(self._handle_results_item_changed)
@@ -364,6 +402,13 @@ class CatalogBrowserPanel(QWidget):
             "match_type_text": self.match_filter.text(),
         }
         self._current_results = self.connector.search_catalog_lenses(query)
+        if self.insertable_only_button.isChecked():
+            self._current_results = [
+                record
+                for record in self._current_results
+                if record.get("insertable_surface_count") is None
+                or int(record.get("insertable_surface_count", 0) or 0) > 0
+            ]
         self._sort_current_results()
         self._refresh_manufacturer_filter()
         self._begin_results_population()
@@ -712,6 +757,7 @@ class CatalogBrowserPanel(QWidget):
             self.status_filter.clear()
             self.match_filter.clear()
             self.manufacturer_filter.setCurrentIndex(0)
+        self.insertable_only_button.setChecked(True)
         self.refresh()
 
     def _settings_key(self, suffix: str) -> str:

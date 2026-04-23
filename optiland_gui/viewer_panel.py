@@ -10,6 +10,8 @@ plots and `VTKViewer` for 3D rendering.
 
 from __future__ import annotations
 
+import logging
+
 import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -54,6 +56,9 @@ from .config import APPLICATION_NAME, ORGANIZATION_NAME
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
+
+
+logger = logging.getLogger(__name__)
 
 
 class SagViewer(QWidget):
@@ -503,6 +508,20 @@ class MatplotlibViewer(QWidget):
         self.plot_optic()
         self.update_theme()
 
+    def _notify_missing_stop_surface(self) -> None:
+        """Warn once that rays cannot be shown until a stop surface is defined."""
+        if getattr(self.connector, "_missing_stop_surface_warned", False):
+            return
+        setattr(self.connector, "_missing_stop_surface_warned", True)
+        message = (
+            "No stop surface is defined. The optical layout is shown, but rays are hidden."
+        )
+        toast_manager = getattr(self.connector, "toast_manager", None)
+        if toast_manager is not None:
+            toast_manager.notify(message, "warning")
+        else:
+            logger.warning(message)
+
     def on_ax_limit_changed(self, ax):
         """Callback for when axis limits change, to detect user interaction."""
         if self._adjusting_equal_xy_limits:
@@ -727,14 +746,20 @@ class MatplotlibViewer(QWidget):
                     from optiland.visualization.themes import get_active_theme
 
                     theme = get_active_theme()
-                    rays2d_plotter.plot(
-                        self.ax,
-                        fields="all",
-                        wavelengths="primary",
-                        num_rays=num_rays,
-                        distribution=distribution,
-                        theme=theme,
-                    )
+                    try:
+                        rays2d_plotter.plot(
+                            self.ax,
+                            fields="all",
+                            wavelengths="primary",
+                            num_rays=num_rays,
+                            distribution=distribution,
+                            theme=theme,
+                        )
+                        setattr(self.connector, "_missing_stop_surface_warned", False)
+                    except ValueError as exc:
+                        if "No stop surface found." not in str(exc):
+                            raise
+                        self._notify_missing_stop_surface()
                     system_plotter.plot(self.ax, theme=theme)
                     self.ax.set_title(
                         f"System: {optic.name} (2D)",
@@ -844,6 +869,20 @@ class VTKViewer(QWidget):
         self.renderer.SetBackground(*background)
         self.vtkWidget.GetRenderWindow().Render()
 
+    def _notify_missing_stop_surface(self) -> None:
+        """Warn once that 3D rays cannot be shown until a stop surface is defined."""
+        if getattr(self.connector, "_missing_stop_surface_warned", False):
+            return
+        setattr(self.connector, "_missing_stop_surface_warned", True)
+        message = (
+            "No stop surface is defined. The optical layout is shown, but rays are hidden."
+        )
+        toast_manager = getattr(self.connector, "toast_manager", None)
+        if toast_manager is not None:
+            toast_manager.notify(message, "warning")
+        else:
+            logger.warning(message)
+
     def render_optic(self):
         """
         Clears the current scene and re-renders the optical system in 3D.
@@ -873,14 +912,20 @@ class VTKViewer(QWidget):
                 from optiland.visualization.themes import get_active_theme
 
                 theme = get_active_theme()
-                rays3d_plotter.plot(
-                    self.renderer,
-                    fields="all",
-                    wavelengths="primary",
-                    num_rays=24,
-                    distribution="ring",
-                    theme=theme,
-                )
+                try:
+                    rays3d_plotter.plot(
+                        self.renderer,
+                        fields="all",
+                        wavelengths="primary",
+                        num_rays=24,
+                        distribution="ring",
+                        theme=theme,
+                    )
+                    setattr(self.connector, "_missing_stop_surface_warned", False)
+                except ValueError as exc:
+                    if "No stop surface found." not in str(exc):
+                        raise
+                    self._notify_missing_stop_surface()
 
                 system_plotter.plot(self.renderer, theme=theme)
 
