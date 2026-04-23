@@ -596,11 +596,10 @@ def test_surface_properties_widget_applies_annular_aperture(qapp, mock_connector
     from optiland_gui.lens_editor import SurfacePropertiesWidget
 
     mock_connector.get_surface_aperture_config.return_value = {
-        "type": "annular",
+        "type": "ring_aperture",
         "outer_radius": 3.8,
         "inner_radius": 1.5,
-        "offset_x": 0.0,
-        "offset_y": 0.0,
+        "clear_radius": 3.8,
     }
 
     widget = SurfacePropertiesWidget(1, mock_connector)
@@ -611,11 +610,10 @@ def test_surface_properties_widget_applies_annular_aperture(qapp, mock_connector
     mock_connector.set_surface_aperture_config.assert_called_with(
         1,
         {
-            "type": "annular",
+            "type": "ring_aperture",
             "outer_radius": "4.2000",
             "inner_radius": "1.1000",
-            "offset_x": "0.0000",
-            "offset_y": "0.0000",
+            "clear_radius": "4.2000",
         },
     )
 
@@ -628,16 +626,40 @@ def test_surface_properties_widget_selecting_annular_seeds_inner_radius_and_skip
     mock_connector.get_surface_aperture_config.return_value = {"type": "none"}
 
     widget = SurfacePropertiesWidget(1, mock_connector)
-    widget.aperture_type_combo.setCurrentText("Annular")
+    widget.aperture_type_combo.setCurrentText("Annular Aperture")
 
     mock_connector.set_surface_aperture_config.assert_called_with(
         1,
         {
-            "type": "annular",
+            "type": "ring_aperture",
             "outer_radius": "1.0000",
             "inner_radius": "0.2500",
-            "offset_x": "0.0000",
-            "offset_y": "0.0000",
+            "clear_radius": "1.0000",
         },
     )
     mock_connector.set_surface_geometry_params.assert_not_called()
+
+
+def test_surface_properties_widget_shows_only_relevant_aperture_fields(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import SurfacePropertiesWidget
+
+    mock_connector.get_surface_aperture_config.return_value = {"type": "none"}
+
+    widget = SurfacePropertiesWidget(1, mock_connector)
+
+    widget.aperture_type_combo.setCurrentText("Circular Aperture")
+    assert not widget.aperture_inputs["outer_radius"].isHidden()
+    assert widget.aperture_inputs["inner_radius"].isHidden()
+    assert widget.aperture_inputs["clear_radius"].isHidden()
+
+    widget.aperture_type_combo.setCurrentText("Annular Aperture")
+    assert not widget.aperture_inputs["outer_radius"].isHidden()
+    assert not widget.aperture_inputs["inner_radius"].isHidden()
+    assert widget.aperture_inputs["clear_radius"].isHidden()
+
+    widget.aperture_type_combo.setCurrentText("Annular Mask")
+    assert not widget.aperture_inputs["outer_radius"].isHidden()
+    assert not widget.aperture_inputs["inner_radius"].isHidden()
+    assert not widget.aperture_inputs["clear_radius"].isHidden()

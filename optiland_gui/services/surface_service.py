@@ -15,7 +15,7 @@ import optiland.backend as be
 from optiland.geometries.biconic import BiconicGeometry
 from optiland.materials import IdealMaterial
 from optiland.materials import Material as OptilandMaterial
-from optiland.physical_apertures import OffsetRadialAperture, RadialAperture
+from optiland.physical_apertures import DifferenceAperture, RadialAperture
 from optiland.physical_apertures.radial import configure_aperture
 from optiland.surfaces.factories.geometry_factory import (
     GeometryFactory,
@@ -396,23 +396,25 @@ class SurfaceService:
         aperture = getattr(surface, "aperture", None)
         if aperture is None:
             return {"type": "none"}
-        if isinstance(aperture, OffsetRadialAperture):
-            return {
-                "type": (
-                    "offset_annular" if float(aperture.r_min) > 0 else "offset_circular"
-                ),
-                "outer_radius": float(aperture.r_max),
-                "inner_radius": float(aperture.r_min),
-                "offset_x": float(aperture.offset_x),
-                "offset_y": float(aperture.offset_y),
-            }
         if isinstance(aperture, RadialAperture):
             return {
-                "type": "annular" if float(aperture.r_min) > 0 else "circular",
+                "type": "ring_aperture" if float(aperture.r_min) > 0 else "circular_aperture",
                 "outer_radius": float(aperture.r_max),
                 "inner_radius": float(aperture.r_min),
-                "offset_x": 0.0,
-                "offset_y": 0.0,
+                "clear_radius": float(aperture.r_max),
+            }
+        if (
+            isinstance(aperture, DifferenceAperture)
+            and isinstance(aperture.a, RadialAperture)
+            and isinstance(aperture.b, RadialAperture)
+        ):
+            return {
+                "type": (
+                    "ring_mask" if float(aperture.b.r_min) > 0 else "circular_mask"
+                ),
+                "outer_radius": float(aperture.b.r_max),
+                "inner_radius": float(aperture.b.r_min),
+                "clear_radius": float(aperture.a.r_max),
             }
         return {"type": aperture.__class__.__name__}
 
@@ -422,6 +424,14 @@ class SurfaceService:
             return
         surface = self._connector._optic.surfaces.surfaces[row]
         aperture_type = str(config.get("type", "none")).strip().lower()
+        aperture_type = {
+            "circular": "circular_aperture",
+            "annular": "ring_aperture",
+            "ring_aperture": "ring_aperture",
+            "ring_mask": "ring_mask",
+            "circular_mask": "circular_mask",
+            "circular_aperture": "circular_aperture",
+        }.get(aperture_type, aperture_type)
         if aperture_type == "none":
             surface.aperture = None
             self._connector._optic.updater.update()
@@ -429,8 +439,7 @@ class SurfaceService:
 
         outer_radius = float(config.get("outer_radius", 0.0) or 0.0)
         inner_radius = float(config.get("inner_radius", 0.0) or 0.0)
-        offset_x = float(config.get("offset_x", 0.0) or 0.0)
-        offset_y = float(config.get("offset_y", 0.0) or 0.0)
+        clear_radius = float(config.get("clear_radius", outer_radius) or outer_radius or 0.0)
 
         if outer_radius <= 0:
             raise ValueError("Aperture outer radius must be greater than zero.")
@@ -438,24 +447,24 @@ class SurfaceService:
             raise ValueError("Aperture inner radius cannot be negative.")
         if inner_radius >= outer_radius:
             raise ValueError("Aperture inner radius must be smaller than outer radius.")
+        if clear_radius <= 0:
+            raise ValueError("Aperture clear radius must be greater than zero.")
+        if clear_radius < outer_radius:
+            raise ValueError("Aperture clear radius must be greater than or equal to outer radius.")
 
-        if aperture_type == "circular":
+        if aperture_type == "circular_aperture":
             surface.aperture = RadialAperture(r_max=outer_radius, r_min=0.0)
-        elif aperture_type == "annular":
+        elif aperture_type == "ring_aperture":
             surface.aperture = RadialAperture(r_max=outer_radius, r_min=inner_radius)
-        elif aperture_type == "offset_circular":
-            surface.aperture = OffsetRadialAperture(
-                r_max=outer_radius,
-                r_min=0.0,
-                offset_x=offset_x,
-                offset_y=offset_y,
+        elif aperture_type == "circular_mask":
+            surface.aperture = DifferenceAperture(
+                RadialAperture(r_max=clear_radius, r_min=0.0),
+                RadialAperture(r_max=outer_radius, r_min=0.0),
             )
-        elif aperture_type == "offset_annular":
-            surface.aperture = OffsetRadialAperture(
-                r_max=outer_radius,
-                r_min=inner_radius,
-                offset_x=offset_x,
-                offset_y=offset_y,
+        elif aperture_type == "ring_mask":
+            surface.aperture = DifferenceAperture(
+                RadialAperture(r_max=clear_radius, r_min=0.0),
+                RadialAperture(r_max=outer_radius, r_min=inner_radius),
             )
         else:
             raise ValueError(f"Unsupported aperture type '{aperture_type}'.")

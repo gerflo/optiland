@@ -78,6 +78,7 @@ class SurfacePropertiesWidget(QWidget):
         self.aperture_type_combo: QComboBox | None = None
         self.aperture_inputs: dict[str, QLineEdit] = {}
         self._aperture_form_layout: QFormLayout | None = None
+        self._aperture_labels: dict[str, QLabel] = {}
         self._populate_properties_form()
 
     def preferred_height_for_width(self, width: int) -> int:
@@ -120,7 +121,7 @@ class SurfacePropertiesWidget(QWidget):
     def _create_aperture_input(self, value: float) -> QLineEdit:
         """Create a compact numeric line edit for aperture settings."""
         line_edit = QLineEdit()
-        line_edit.setMaximumWidth(80)
+        line_edit.setFixedWidth(90)
         line_edit.setText(f"{value:.4f}")
         line_edit.editingFinished.connect(self.apply_changes)
         return line_edit
@@ -137,33 +138,45 @@ class SurfacePropertiesWidget(QWidget):
         title = QLabel("Physical Aperture")
         title.setProperty("sectionTitle", True)
         hint = QLabel(
-            "For a ring aperture choose Annular and set Inner Radius and Outer Radius."
+            "Choose the aperture type and edit only the relevant dimensions."
         )
         hint.setProperty("hint", True)
         section_layout.addWidget(title)
         section_layout.addWidget(hint)
 
         self._aperture_form_layout = QFormLayout()
-        self._aperture_form_layout.setHorizontalSpacing(15)
-        self._aperture_form_layout.setVerticalSpacing(5)
+        self._aperture_form_layout.setHorizontalSpacing(12)
+        self._aperture_form_layout.setVerticalSpacing(6)
+        self._aperture_form_layout.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint
+        )
+        self._aperture_form_layout.setFormAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+        )
+        self._aperture_form_layout.setLabelAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
         section_layout.addLayout(self._aperture_form_layout)
 
         self.aperture_type_combo = QComboBox()
+        self.aperture_type_combo.setFixedWidth(180)
         self.aperture_type_combo.addItems(
             [
                 "None",
-                "Circular",
-                "Annular",
-                "Offset Circular",
-                "Offset Annular",
+                "Circular Aperture",
+                "Circular Mask",
+                "Annular Aperture",
+                "Annular Mask",
             ]
         )
         type_map = {
             "none": "None",
-            "circular": "Circular",
-            "annular": "Annular",
-            "offset_circular": "Offset Circular",
-            "offset_annular": "Offset Annular",
+            "circular": "Circular Aperture",
+            "circular_aperture": "Circular Aperture",
+            "annular": "Annular Aperture",
+            "ring_aperture": "Annular Aperture",
+            "circular_mask": "Circular Mask",
+            "ring_mask": "Annular Mask",
         }
         self.aperture_type_combo.setCurrentText(
             type_map.get(str(config.get("type", "none")).lower(), "None")
@@ -179,21 +192,18 @@ class SurfacePropertiesWidget(QWidget):
             "inner_radius": self._create_aperture_input(
                 float(config.get("inner_radius", 0.0) or 0.0)
             ),
-            "offset_x": self._create_aperture_input(
-                float(config.get("offset_x", 0.0) or 0.0)
-            ),
-            "offset_y": self._create_aperture_input(
-                float(config.get("offset_y", 0.0) or 0.0)
+            "clear_radius": self._create_aperture_input(
+                float(config.get("clear_radius", config.get("outer_radius", 0.0)) or 0.0)
             ),
         }
-        self._aperture_form_layout.addRow(
-            "Outer Radius:", self.aperture_inputs["outer_radius"]
-        )
-        self._aperture_form_layout.addRow(
-            "Inner Radius:", self.aperture_inputs["inner_radius"]
-        )
-        self._aperture_form_layout.addRow("Offset X:", self.aperture_inputs["offset_x"])
-        self._aperture_form_layout.addRow("Offset Y:", self.aperture_inputs["offset_y"])
+        for label_text, key in (
+            ("Outer Radius:", "outer_radius"),
+            ("Inner Radius:", "inner_radius"),
+            ("Clear Radius:", "clear_radius"),
+        ):
+            label = QLabel(label_text)
+            self._aperture_labels[key] = label
+            self._aperture_form_layout.addRow(label, self.aperture_inputs[key])
         main_layout.addWidget(section)
         self._refresh_aperture_ui()
 
@@ -218,15 +228,25 @@ class SurfacePropertiesWidget(QWidget):
             return
 
         columns_layout = QHBoxLayout()
-        columns_layout.setSpacing(20)
+        columns_layout.setSpacing(16)
+        columns_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         items_per_column = 2
         param_items = list(params.items())
         num_columns = (len(param_items) + items_per_column - 1) // items_per_column
 
         for col in range(num_columns):
             form_layout = QFormLayout()
-            form_layout.setHorizontalSpacing(15)
-            form_layout.setVerticalSpacing(5)
+            form_layout.setHorizontalSpacing(12)
+            form_layout.setVerticalSpacing(6)
+            form_layout.setFieldGrowthPolicy(
+                QFormLayout.FieldGrowthPolicy.FieldsStayAtSizeHint
+            )
+            form_layout.setFormAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+            )
+            form_layout.setLabelAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
 
             start_idx = col * items_per_column
             end_idx = min((col + 1) * items_per_column, len(param_items))
@@ -244,22 +264,38 @@ class SurfacePropertiesWidget(QWidget):
         main_layout.addWidget(section)
 
     def _refresh_aperture_ui(self) -> None:
-        """Enable aperture-specific fields based on the chosen aperture type."""
+        """Show only the aperture fields relevant to the selected type."""
         if self.aperture_type_combo is None or self._aperture_form_layout is None:
             return
         aperture_type = self.aperture_type_combo.currentText()
-        enabled = {
-            "outer_radius": aperture_type != "None",
-            "inner_radius": aperture_type in {"Annular", "Offset Annular"},
-            "offset_x": aperture_type in {"Offset Circular", "Offset Annular"},
-            "offset_y": aperture_type in {"Offset Circular", "Offset Annular"},
+        visible = {
+            "outer_radius": aperture_type in {
+                "Circular Aperture",
+                "Circular Mask",
+                "Annular Aperture",
+                "Annular Mask",
+            },
+            "inner_radius": aperture_type in {"Annular Aperture", "Annular Mask"},
+            "clear_radius": aperture_type in {"Circular Mask", "Annular Mask"},
         }
-        for key, is_enabled in enabled.items():
+        label_texts = {
+            "outer_radius": (
+                "Radius:"
+                if aperture_type == "Circular Aperture"
+                else "Mask Radius:"
+                if aperture_type == "Circular Mask"
+                else "Outer Radius:"
+            ),
+            "inner_radius": "Inner Radius:",
+            "clear_radius": "Clear Radius:",
+        }
+        for key, is_visible in visible.items():
             widget = self.aperture_inputs[key]
-            widget.setEnabled(is_enabled)
-            label = self._aperture_form_layout.labelForField(widget)
+            widget.setVisible(is_visible)
+            label = self._aperture_labels.get(key)
             if label is not None:
-                label.setEnabled(is_enabled)
+                label.setText(label_texts[key])
+                label.setVisible(is_visible)
 
     def _handle_aperture_type_changed(self) -> None:
         """Seed sensible defaults before applying a newly selected aperture type."""
@@ -268,8 +304,7 @@ class SurfacePropertiesWidget(QWidget):
         aperture_type = self.aperture_type_combo.currentText()
         outer_text = self.aperture_inputs["outer_radius"].text().strip()
         inner_text = self.aperture_inputs["inner_radius"].text().strip()
-        offset_x_text = self.aperture_inputs["offset_x"].text().strip()
-        offset_y_text = self.aperture_inputs["offset_y"].text().strip()
+        clear_text = self.aperture_inputs["clear_radius"].text().strip()
 
         if aperture_type != "None":
             try:
@@ -279,7 +314,7 @@ class SurfacePropertiesWidget(QWidget):
             if outer_value <= 0:
                 self.aperture_inputs["outer_radius"].setText("1.0000")
 
-        if aperture_type in {"Annular", "Offset Annular"}:
+        if aperture_type in {"Annular Aperture", "Annular Mask"}:
             try:
                 inner_value = float(inner_text or "0")
             except ValueError:
@@ -294,14 +329,22 @@ class SurfacePropertiesWidget(QWidget):
         else:
             self.aperture_inputs["inner_radius"].setText("0.0000")
 
-        if aperture_type not in {"Offset Circular", "Offset Annular"}:
-            self.aperture_inputs["offset_x"].setText("0.0000")
-            self.aperture_inputs["offset_y"].setText("0.0000")
+        if aperture_type in {"Circular Mask", "Annular Mask"}:
+            try:
+                clear_value = float(clear_text or "0")
+            except ValueError:
+                clear_value = 0.0
+            try:
+                outer_value = float(self.aperture_inputs["outer_radius"].text() or "0")
+            except ValueError:
+                outer_value = 0.0
+            if clear_value < outer_value or clear_value <= 0:
+                seeded_clear = max(outer_value + 0.1, outer_value * 1.25, 1.0)
+                self.aperture_inputs["clear_radius"].setText(f"{seeded_clear:.4f}")
         else:
-            if not offset_x_text:
-                self.aperture_inputs["offset_x"].setText("0.0000")
-            if not offset_y_text:
-                self.aperture_inputs["offset_y"].setText("0.0000")
+            self.aperture_inputs["clear_radius"].setText(
+                self.aperture_inputs["outer_radius"].text()
+            )
 
         self.apply_changes()
 
@@ -317,20 +360,24 @@ class SurfacePropertiesWidget(QWidget):
             return
         reverse_type_map = {
             "None": "none",
-            "Circular": "circular",
-            "Annular": "annular",
-            "Offset Circular": "offset_circular",
-            "Offset Annular": "offset_annular",
+            "Circular Aperture": "circular_aperture",
+            "Circular Mask": "circular_mask",
+            "Annular Aperture": "ring_aperture",
+            "Annular Mask": "ring_mask",
         }
+        selected_type = self.aperture_type_combo.currentText()
+        if selected_type in {"Circular Aperture", "Annular Aperture"}:
+            self.aperture_inputs["clear_radius"].setText(
+                self.aperture_inputs["outer_radius"].text()
+            )
         try:
             self.connector.set_surface_aperture_config(
                 self.row,
                 {
-                    "type": reverse_type_map[self.aperture_type_combo.currentText()],
+                    "type": reverse_type_map[selected_type],
                     "outer_radius": self.aperture_inputs["outer_radius"].text(),
                     "inner_radius": self.aperture_inputs["inner_radius"].text(),
-                    "offset_x": self.aperture_inputs["offset_x"].text(),
-                    "offset_y": self.aperture_inputs["offset_y"].text(),
+                    "clear_radius": self.aperture_inputs["clear_radius"].text(),
                 },
             )
         except ValueError:
