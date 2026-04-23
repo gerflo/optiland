@@ -440,9 +440,13 @@ class OptilandConnector(QObject):
         index: int,
         surfaces: list[dict],
         stop_offset: int | None = None,
+        group_name: str | None = None,
+        group_role: str | None = None,
     ) -> None:
         """Insert a sequence of surfaces as one logical design change."""
-        self._surface_service.insert_surface_sequence(index, surfaces, stop_offset)
+        self._surface_service.insert_surface_sequence(
+            index, surfaces, stop_offset, group_name, group_role
+        )
 
     def remove_surface(self, lde_row_index: int) -> None:
         """Remove a surface by its LDE row index.
@@ -487,6 +491,42 @@ class OptilandConnector(QObject):
     def set_surface_aperture_config(self, row: int, config: dict) -> None:
         """Apply a physical aperture configuration to a surface row."""
         self._surface_service.set_surface_aperture_config(row, config)
+
+    def get_surface_group_metadata(self, row: int) -> dict:
+        """Return grouping metadata for a surface row."""
+        return self._surface_service.get_surface_group_metadata(row)
+
+    def get_group_rows(self, row: int) -> list[int]:
+        """Return all rows belonging to the same logical element as *row*."""
+        return self._surface_service.get_group_rows(row)
+
+    def create_surface_group(
+        self, rows: list[int], group_name: str | None = None, group_role: str = "assembly"
+    ) -> str | None:
+        """Create a logical element from contiguous surface rows."""
+        return self._surface_service.create_surface_group(rows, group_name, group_role)
+
+    def rename_surface_group(self, row: int, group_name: str) -> None:
+        """Rename the logical element containing *row*."""
+        self._surface_service.rename_surface_group(row, group_name)
+
+    def ungroup_surface_element(self, row: int) -> None:
+        """Clear the grouping metadata for the logical element containing *row*."""
+        self._surface_service.ungroup_surface_element(row)
+
+    def duplicate_surface_element(
+        self, row: int, target_index: int | None = None
+    ) -> list[int]:
+        """Duplicate the logical element containing *row*."""
+        return self._surface_service.duplicate_surface_element(row, target_index)
+
+    def move_surface_element(self, row: int, target_index: int) -> list[int]:
+        """Move the logical element containing *row* to *target_index*."""
+        return self._surface_service.move_surface_element(row, target_index)
+
+    def flip_surface_element(self, row: int) -> list[int]:
+        """Flip the logical element containing *row* in optical direction."""
+        return self._surface_service.flip_surface_element(row)
 
     # ------------------------------------------------------------------
     # SystemService delegation
@@ -683,6 +723,8 @@ class OptilandConnector(QObject):
             insert_index,
             surfaces,
             stop_offset,
+            record.part_number or record.product_name,
+            "stock_part",
         )
 
     # ------------------------------------------------------------------

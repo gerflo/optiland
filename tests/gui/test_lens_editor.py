@@ -155,6 +155,7 @@ def test_lens_editor_context_menu_contains_copy_actions(qapp, mock_connector, mo
 
     editor = LensEditor(mock_connector)
     action_texts: list[str] = []
+    mock_connector.get_group_rows.return_value = []
 
     class _FakeMenu:
         def __init__(self, *_args, **_kwargs):
@@ -184,6 +185,13 @@ def test_lens_editor_context_menu_contains_copy_actions(qapp, mock_connector, mo
     editor.show_context_menu(editor.tableWidget.visualItemRect(target_item).center())
 
     assert action_texts[:4] == ["Copy Cell", "Cut Cell", "Copy Row", "Paste Cell"]
+    assert "Create Element from Selected Surfaces" in action_texts
+    assert "Select Entire Element" in action_texts
+    assert "Rename Element" in action_texts
+    assert "Ungroup Element" in action_texts
+    assert "Flip Element" in action_texts
+    assert "Duplicate Element" in action_texts
+    assert "Move Element..." in action_texts
 
 
 def test_lens_editor_ctrl_c_copies_widget_backed_type_cell(qapp, mock_connector):
@@ -203,6 +211,19 @@ def test_lens_editor_ctrl_c_copies_widget_backed_type_cell(qapp, mock_connector)
 
     assert handled is True
     assert qapp.clipboard().text() == "Standard"
+
+
+def test_lens_editor_select_entire_element_selects_group_rows(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.return_value = [1, 2]
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+
+    editor._select_entire_element(1)
+
+    selected_rows = sorted({index.row() for index in editor.tableWidget.selectedIndexes()})
+    assert selected_rows == [1, 2]
 
 
 def test_lens_editor_ctrl_insert_copies_widget_backed_type_cell(qapp, mock_connector):

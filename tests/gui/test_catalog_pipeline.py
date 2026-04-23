@@ -432,6 +432,14 @@ class TestCatalogSurfaceInsertion:
         OptilandConnector.insert_catalog_lens(connector, "winlens:063213000", 1, "after")
 
         connector._surface_service.insert_surface_sequence.assert_called_once()
+        assert (
+            connector._surface_service.insert_surface_sequence.call_args.args[3]
+            == metadata_record.part_number
+        )
+        assert (
+            connector._surface_service.insert_surface_sequence.call_args.args[4]
+            == "stock_part"
+        )
 
     def test_insert_catalog_lens_reports_missing_winlens_surface_model_clearly(self) -> None:
         connector = MagicMock()
@@ -507,6 +515,14 @@ class TestCatalogSurfaceInsertion:
         assert inserted_surfaces[0]["surface_type"] == "paraxial"
         assert inserted_surfaces[0]["f"] == 80.0
         assert inserted_surfaces[0]["semi_diameter"] == 12.7
+        assert (
+            connector._surface_service.insert_surface_sequence.call_args.args[3]
+            == metadata_record.part_number
+        )
+        assert (
+            connector._surface_service.insert_surface_sequence.call_args.args[4]
+            == "stock_part"
+        )
 
 
 class TestCatalogSearchNormalization:

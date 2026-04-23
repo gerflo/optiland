@@ -11,7 +11,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QSettings, QSize, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QEvent,
+    QItemSelectionModel,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import QBrush, QColor, QIcon, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
@@ -23,6 +32,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -31,6 +41,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidget,
+    QTableWidgetSelectionRange,
     QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
@@ -929,6 +940,9 @@ class LensEditor(QWidget):
         self.tableWidget.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
         )
+        self.tableWidget.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
         # Prevent excessive column resizing
         self.tableWidget.horizontalHeader().setMinimumSectionSize(60)
         self.tableWidget.horizontalHeader().setMaximumSectionSize(200)
@@ -1820,12 +1834,41 @@ class LensEditor(QWidget):
             props_action.triggered.connect(
                 lambda: self.toggle_properties_widget(surface_index)
             )
+            create_element_action = menu.addAction("Create Element from Selected Surfaces")
+            create_element_action.triggered.connect(
+                self._create_element_from_selection
+            )
+            select_element_action = menu.addAction("Select Entire Element")
+            select_element_action.triggered.connect(
+                lambda _=False, si=surface_index: self._select_entire_element(si)
+            )
+            rename_element_action = menu.addAction("Rename Element")
+            rename_element_action.triggered.connect(
+                lambda _=False, si=surface_index: self._rename_element(si)
+            )
+            ungroup_element_action = menu.addAction("Ungroup Element")
+            ungroup_element_action.triggered.connect(
+                lambda _=False, si=surface_index: self._ungroup_element(si)
+            )
+            flip_element_action = menu.addAction("Flip Element")
+            flip_element_action.triggered.connect(
+                lambda _=False, si=surface_index: self._flip_element(si)
+            )
+            duplicate_element_action = menu.addAction("Duplicate Element")
+            duplicate_element_action.triggered.connect(
+                lambda _=False, si=surface_index: self._duplicate_element(si)
+            )
+            move_element_action = menu.addAction("Move Element...")
+            move_element_action.triggered.connect(
+                lambda _=False, si=surface_index: self._move_element(si)
+            )
             editor_action = menu.addAction("Surface Editor (WIP)")
             editor_action.setEnabled(False)
 
             is_obj_or_img = (surface_index == 0) or (
                 surface_index == self.connector.get_surface_count() - 1
             )
+            group_rows = self.connector.get_group_rows(surface_index)
 
             menu.addSeparator()
             make_stop_action = menu.addAction("Make Stop Surface")
@@ -1839,6 +1882,23 @@ class LensEditor(QWidget):
                 remove_action.setEnabled(False)
                 props_action.setEnabled(False)
                 make_stop_action.setEnabled(False)
+                create_element_action.setEnabled(False)
+                select_element_action.setEnabled(False)
+                rename_element_action.setEnabled(False)
+                ungroup_element_action.setEnabled(False)
+                flip_element_action.setEnabled(False)
+                duplicate_element_action.setEnabled(False)
+                move_element_action.setEnabled(False)
+
+            if len(self._selected_surface_rows()) < 2:
+                create_element_action.setEnabled(False)
+            if not group_rows:
+                select_element_action.setEnabled(False)
+                rename_element_action.setEnabled(False)
+                ungroup_element_action.setEnabled(False)
+                flip_element_action.setEnabled(False)
+                duplicate_element_action.setEnabled(False)
+                move_element_action.setEnabled(False)
 
             menu.addSeparator()
             ui_col = self.tableWidget.columnAt(pos.x())
@@ -1867,5 +1927,99 @@ class LensEditor(QWidget):
                 self._copy_selected_row_to_clipboard()
             elif chosen == paste_cell_action:
                 self._paste_clipboard_into_current_cell()
-        else:
-            menu.exec(self.tableWidget.viewport().mapToGlobal(pos))
+
+    def _selected_surface_rows(self) -> list[int]:
+        """Return selected table rows mapped to actual surface rows."""
+        rows = sorted({index.row() for index in self.tableWidget.selectedIndexes()})
+        return [
+            self.map_ui_row_to_surface_index(row)
+            for row in rows
+            if not self._is_properties_row(row)
+            and self.map_ui_row_to_surface_index(row) >= 0
+        ]
+
+    def _select_entire_element(self, surface_index: int) -> None:
+        """Select all Lens Editor rows that belong to the same grouped element."""
+        group_rows = self.connector.get_group_rows(surface_index)
+        if not group_rows:
+            return
+        self._select_surface_rows(group_rows)
+
+    def _select_surface_rows(self, surface_rows: list[int]) -> None:
+        """Select the provided Lens Editor surface rows as one block."""
+        if not surface_rows:
+            return
+        self.tableWidget.clearSelection()
+        selection = QTableWidgetSelectionRange(
+            surface_rows[0], 0, surface_rows[-1], self.tableWidget.columnCount() - 1
+        )
+        self.tableWidget.setRangeSelected(selection, True)
+        current_index = self.tableWidget.model().index(
+            surface_rows[0], self.connector.COL_TYPE
+        )
+        self.tableWidget.selectionModel().setCurrentIndex(
+            current_index, QItemSelectionModel.SelectionFlag.NoUpdate
+        )
+
+    def _create_element_from_selection(self) -> None:
+        """Create a logical element from the currently selected contiguous rows."""
+        rows = self._selected_surface_rows()
+        if len(rows) < 2:
+            return
+        name, accepted = QInputDialog.getText(
+            self,
+            "Create Element",
+            "Element name:",
+            text=f"Element {rows[0]}",
+        )
+        if not accepted:
+            return
+        self.connector.create_surface_group(rows, name or None, "assembly")
+        self._select_entire_element(rows[0])
+
+    def _rename_element(self, surface_index: int) -> None:
+        """Rename the grouped element containing *surface_index*."""
+        meta = self.connector.get_surface_group_metadata(surface_index)
+        if not meta.get("group_id"):
+            return
+        name, accepted = QInputDialog.getText(
+            self,
+            "Rename Element",
+            "Element name:",
+            text=str(meta.get("group_name") or ""),
+        )
+        if not accepted:
+            return
+        self.connector.rename_surface_group(surface_index, name)
+
+    def _ungroup_element(self, surface_index: int) -> None:
+        """Remove logical grouping metadata from the selected element."""
+        self.connector.ungroup_surface_element(surface_index)
+
+    def _duplicate_element(self, surface_index: int) -> None:
+        """Duplicate the grouped element containing *surface_index*."""
+        new_rows = self.connector.duplicate_surface_element(surface_index)
+        self._select_surface_rows(new_rows)
+
+    def _flip_element(self, surface_index: int) -> None:
+        """Flip the grouped element containing *surface_index*."""
+        flipped_rows = self.connector.flip_surface_element(surface_index)
+        self._select_surface_rows(flipped_rows)
+
+    def _move_element(self, surface_index: int) -> None:
+        """Move the grouped element containing *surface_index* to a new row."""
+        group_rows = self.connector.get_group_rows(surface_index)
+        if not group_rows:
+            return
+        target_row, accepted = QInputDialog.getInt(
+            self,
+            "Move Element",
+            "Insert before surface row:",
+            value=min(group_rows[-1] + 1, self.connector.get_surface_count() - 1),
+            min=1,
+            max=max(self.connector.get_surface_count() - 1, 1),
+        )
+        if not accepted:
+            return
+        moved_rows = self.connector.move_surface_element(surface_index, target_row)
+        self._select_surface_rows(moved_rows)

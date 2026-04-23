@@ -165,6 +165,38 @@ class TestSurface:
         assert data["surface_type"] == "even_asphere"
         assert restored.surface_type == "even_asphere"
 
+    def test_roundtrip_preserves_group_metadata(self, set_test_backend):
+        cs = CoordinateSystem()
+        geometry = Plane(cs)
+        material_post = IdealMaterial(1.0, 0)
+        interaction_model = RefractiveReflectiveModel(
+            parent_surface=None,
+            is_reflective=False,
+            coating=None,
+            bsdf=None,
+        )
+        surface = Surface(
+            previous_surface=None,
+            geometry=geometry,
+            surface_type="standard",
+            material_post=material_post,
+            group_id="grp123",
+            group_name="L1",
+            group_role="stock_part",
+            interaction_model=interaction_model,
+        )
+        interaction_model.parent_surface = surface
+
+        data = surface.to_dict()
+        restored = Surface.from_dict(data)
+
+        assert data["group_id"] == "grp123"
+        assert data["group_name"] == "L1"
+        assert data["group_role"] == "stock_part"
+        assert restored.group_id == "grp123"
+        assert restored.group_name == "L1"
+        assert restored.group_role == "stock_part"
+
     def test_from_dict_missing_type(self, set_test_backend):
         surface = self.create_surface()
         data = surface.to_dict()

@@ -61,6 +61,9 @@ class Surface:
         aperture: BaseAperture | None = None,
         surface_type: str | None = None,
         comment: str = "",
+        group_id: str | None = None,
+        group_name: str | None = None,
+        group_role: str | None = None,
         interaction_model: BaseInteractionModel | None = None,
     ):
         self.geometry = geometry
@@ -71,6 +74,9 @@ class Surface:
         self.semi_aperture = None
         self.surface_type = surface_type
         self.comment = comment
+        self.group_id = group_id
+        self.group_name = group_name
+        self.group_role = group_role
 
         if interaction_model is None:
             self.interaction_model = RefractiveReflectiveModel(
@@ -331,6 +337,9 @@ class Surface:
             "is_stop": self.is_stop,
             "aperture": self.aperture.to_dict() if self.aperture else None,
             "comment": self.comment,
+            "group_id": self.group_id,
+            "group_name": self.group_name,
+            "group_role": self.group_role,
             "interaction_model": self.interaction_model.to_dict(),
         }
 
@@ -397,6 +406,9 @@ class Surface:
             is_stop=data.get("is_stop", False),
             aperture=aperture,
             comment=data.get("comment", ""),
+            group_id=data.get("group_id"),
+            group_name=data.get("group_name"),
+            group_role=data.get("group_role"),
             interaction_model=interaction_model,
         )
         interaction_model.parent_surface = surface

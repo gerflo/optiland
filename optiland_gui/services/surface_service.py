@@ -8,7 +8,9 @@ extracting/applying extra geometry parameters from the surface properties box.
 from __future__ import annotations
 
 import ast
+import copy
 import logging
+import uuid
 from contextlib import suppress
 
 import optiland.backend as be
@@ -17,6 +19,7 @@ from optiland.materials import IdealMaterial
 from optiland.materials import Material as OptilandMaterial
 from optiland.physical_apertures import DifferenceAperture, RadialAperture
 from optiland.physical_apertures.radial import configure_aperture
+from optiland.surfaces.standard_surface import Surface
 from optiland.surfaces.factories.geometry_factory import (
     GeometryFactory,
     config_registry,
@@ -669,6 +672,8 @@ class SurfaceService:
         index: int,
         surfaces: list[dict],
         stop_offset: int | None = None,
+        group_name: str | None = None,
+        group_role: str | None = None,
     ) -> None:
         """Insert a sequence of surfaces as a single undoable operation.
 
@@ -683,6 +688,7 @@ class SurfaceService:
         old_state = self._connector._capture_optic_state()
         num_rows = self.get_surface_count()
         insert_idx = min(max(index, 1), max(num_rows - 1, 1))
+        assigned_group_id = uuid.uuid4().hex if len(surfaces) > 1 else None
         existing_stop_surface = None
         with suppress(ValueError):
             existing_stop_surface = self._connector._optic.surfaces[
@@ -736,6 +742,9 @@ class SurfaceService:
                     thickness=float(spec.get("thickness", 0.0)),
                     material=material_spec,
                     comment=str(spec.get("comment", "Catalog Surface")),
+                    group_id=assigned_group_id,
+                    group_name=group_name,
+                    group_role=group_role,
                     is_stop=(not preserve_existing_stop and stop_offset == offset),
                     aperture=aperture,
                     **geometry_kwargs,
@@ -789,9 +798,301 @@ class SurfaceService:
             logger.warning("SurfaceService: Error setting stop surface: %s", exc)
             self._connector._restore_optic_state(old_state)
 
+    def get_surface_group_metadata(self, row: int) -> dict:
+        """Return grouping metadata for a surface row."""
+        if not (0 < row < self.get_surface_count() - 1):
+            return {"group_id": None, "group_name": None, "group_role": None}
+        surface = self._connector._optic.surfaces.surfaces[row]
+        return {
+            "group_id": getattr(surface, "group_id", None),
+            "group_name": getattr(surface, "group_name", None),
+            "group_role": getattr(surface, "group_role", None),
+        }
+
+    def get_group_rows(self, row: int) -> list[int]:
+        """Return all LDE rows belonging to the same surface group as *row*."""
+        if not (0 < row < self.get_surface_count() - 1):
+            return []
+        group_id = getattr(self._connector._optic.surfaces.surfaces[row], "group_id", None)
+        if not group_id:
+            return []
+        return [
+            idx
+            for idx, surface in enumerate(self._connector._optic.surfaces.surfaces)
+            if getattr(surface, "group_id", None) == group_id
+        ]
+
+    def create_surface_group(
+        self,
+        rows: list[int],
+        group_name: str | None = None,
+        group_role: str = "assembly",
+    ) -> str | None:
+        """Assign a new logical element group to contiguous surface rows."""
+        cleaned_rows = sorted(
+            {
+                int(row)
+                for row in rows
+                if 0 < int(row) < self.get_surface_count() - 1
+            }
+        )
+        if len(cleaned_rows) < 2:
+            return None
+        if cleaned_rows != list(range(cleaned_rows[0], cleaned_rows[-1] + 1)):
+            raise ValueError("Element groups must be created from contiguous surfaces.")
+
+        old_state = self._connector._capture_optic_state()
+        group_id = uuid.uuid4().hex
+        group_name = (group_name or f"Element {cleaned_rows[0]}").strip()
+        try:
+            for row in cleaned_rows:
+                surface = self._connector._optic.surfaces.surfaces[row]
+                surface.group_id = group_id
+                surface.group_name = group_name
+                surface.group_role = group_role
+            self._connector._undo_redo_manager.add_state(old_state)
+            self._connector.set_modified(True)
+            self._connector.opticChanged.emit()
+            return group_id
+        except Exception:
+            self._connector._restore_optic_state(old_state)
+            raise
+
+    def rename_surface_group(self, row: int, group_name: str) -> None:
+        """Rename the logical element containing *row*."""
+        rows = self.get_group_rows(row)
+        if not rows:
+            return
+        old_state = self._connector._capture_optic_state()
+        try:
+            clean_name = group_name.strip()
+            for group_row in rows:
+                self._connector._optic.surfaces.surfaces[group_row].group_name = clean_name
+            self._connector._undo_redo_manager.add_state(old_state)
+            self._connector.set_modified(True)
+            self._connector.opticChanged.emit()
+        except Exception:
+            self._connector._restore_optic_state(old_state)
+            raise
+
+    def ungroup_surface_element(self, row: int) -> None:
+        """Clear the logical element metadata for the group containing *row*."""
+        rows = self.get_group_rows(row)
+        if not rows:
+            return
+        old_state = self._connector._capture_optic_state()
+        try:
+            for group_row in rows:
+                surface = self._connector._optic.surfaces.surfaces[group_row]
+                surface.group_id = None
+                surface.group_name = None
+                surface.group_role = None
+            self._connector._undo_redo_manager.add_state(old_state)
+            self._connector.set_modified(True)
+            self._connector.opticChanged.emit()
+        except Exception:
+            self._connector._restore_optic_state(old_state)
+            raise
+
+    def duplicate_surface_element(
+        self, row: int, target_index: int | None = None
+    ) -> list[int]:
+        """Duplicate the logical element containing *row*.
+
+        The duplicate receives a fresh ``group_id`` and is inserted before
+        ``target_index`` or, by default, directly after the original block.
+        """
+        rows = self.get_group_rows(row)
+        if not rows:
+            return []
+
+        old_state = self._connector._capture_optic_state()
+        surfaces = self._connector._optic.surfaces
+        insert_idx = rows[-1] + 1 if target_index is None else int(target_index)
+        insert_idx = min(max(insert_idx, 1), max(self.get_surface_count() - 1, 1))
+        new_group_id = uuid.uuid4().hex
+        cloned_surfaces: list[Surface] = []
+
+        existing_stop_surface = None
+        with suppress(ValueError):
+            existing_stop_surface = surfaces[surfaces.stop_index]
+
+        try:
+            for src_row in rows:
+                source_surface = surfaces.surfaces[src_row]
+                clone = Surface.from_dict(source_surface.to_dict())
+                clone.group_id = new_group_id
+                clone.group_name = getattr(source_surface, "group_name", None)
+                clone.group_role = getattr(source_surface, "group_role", None)
+                clone.is_stop = False
+                cloned_surfaces.append(clone)
+
+            for offset, clone in enumerate(cloned_surfaces):
+                surfaces.add(
+                    new_surface=clone,
+                    index=insert_idx + offset,
+                    thickness=clone.thickness,
+                )
+
+            if existing_stop_surface is not None:
+                surfaces.stop_index = surfaces.index(existing_stop_surface)
+
+            self._connector._optic.updater.update()
+            self._connector._undo_redo_manager.add_state(old_state)
+            self._connector.set_modified(True)
+            self._connector.opticChanged.emit()
+            return list(range(insert_idx, insert_idx + len(cloned_surfaces)))
+        except Exception:
+            self._connector._restore_optic_state(old_state)
+            raise
+
+    def move_surface_element(self, row: int, target_index: int) -> list[int]:
+        """Move the logical element containing *row* to a new insertion index."""
+        rows = self.get_group_rows(row)
+        if not rows:
+            return []
+
+        block_start = rows[0]
+        block_end = rows[-1]
+        insert_idx = min(max(int(target_index), 1), max(self.get_surface_count() - 1, 1))
+        if block_start <= insert_idx <= block_end + 1:
+            return rows
+
+        old_state = self._connector._capture_optic_state()
+        surfaces = self._connector._optic.surfaces
+        block = [surfaces.surfaces[group_row] for group_row in rows]
+
+        existing_stop_surface = None
+        with suppress(ValueError):
+            existing_stop_surface = surfaces[surfaces.stop_index]
+
+        try:
+            for group_row in reversed(rows):
+                surfaces.remove(group_row)
+
+            if insert_idx > block_end:
+                insert_idx -= len(block)
+            insert_idx = min(max(insert_idx, 1), max(len(surfaces) - 1, 1))
+
+            for offset, surface in enumerate(block):
+                surfaces.add(
+                    new_surface=surface,
+                    index=insert_idx + offset,
+                    thickness=surface.thickness,
+                )
+
+            if existing_stop_surface is not None:
+                surfaces.stop_index = surfaces.index(existing_stop_surface)
+
+            self._connector._optic.updater.update()
+            self._connector._undo_redo_manager.add_state(old_state)
+            self._connector.set_modified(True)
+            self._connector.opticChanged.emit()
+            return list(range(insert_idx, insert_idx + len(block)))
+        except Exception:
+            self._connector._restore_optic_state(old_state)
+            raise
+
+    def flip_surface_element(self, row: int) -> list[int]:
+        """Reverse the grouped element containing *row* in optical direction."""
+        rows = self.get_group_rows(row)
+        if not rows:
+            return []
+
+        old_state = self._connector._capture_optic_state()
+        surfaces = self._connector._optic.surfaces
+        original_block = [copy.deepcopy(surfaces.surfaces[group_row].to_dict()) for group_row in rows]
+        stop_offset = next(
+            (offset for offset, surface_data in enumerate(original_block) if surface_data.get("is_stop")),
+            None,
+        )
+        original_thicknesses = [surface_data.get("thickness", 0.0) for surface_data in original_block]
+        reversed_internal_thicknesses = list(reversed(original_thicknesses[:-1]))
+        flipped_thicknesses = reversed_internal_thicknesses + [original_thicknesses[-1]]
+
+        original_material_posts = [
+            copy.deepcopy(surface_data["material_post"]) for surface_data in original_block
+        ]
+        flipped_material_posts = list(reversed(original_material_posts[:-1])) + [
+            copy.deepcopy(original_material_posts[-1])
+        ]
+
+        try:
+            flipped_block: list[dict] = []
+            for new_offset, surface_data in enumerate(reversed(original_block)):
+                flipped_surface = copy.deepcopy(surface_data)
+                self._flip_surface_geometry_dict(flipped_surface["geometry"])
+                flipped_surface["thickness"] = flipped_thicknesses[new_offset]
+                flipped_surface["material_post"] = flipped_material_posts[new_offset]
+                flipped_surface["is_stop"] = (
+                    stop_offset is not None
+                    and new_offset == len(original_block) - 1 - stop_offset
+                )
+                flipped_block.append(flipped_surface)
+
+            for group_row in reversed(rows):
+                surfaces.remove(group_row)
+
+            insert_idx = rows[0]
+            for offset, surface_data in enumerate(flipped_block):
+                new_surface = Surface.from_dict(surface_data)
+                surfaces.add(
+                    new_surface=new_surface,
+                    index=insert_idx + offset,
+                    thickness=new_surface.thickness,
+                )
+
+            self._connector._optic.updater.update()
+            self._connector._undo_redo_manager.add_state(old_state)
+            self._connector.set_modified(True)
+            self._connector.opticChanged.emit()
+            return list(range(insert_idx, insert_idx + len(flipped_block)))
+        except Exception:
+            self._connector._restore_optic_state(old_state)
+            raise
+
     # ------------------------------------------------------------------
     # Geometry parameter helpers (private)
     # ------------------------------------------------------------------
+
+    def _flip_surface_geometry_dict(self, geometry_data: dict) -> None:
+        """Flip a serialized geometry in-place for element reversal."""
+        geometry_type = geometry_data.get("type")
+
+        if geometry_type in {"Plane", "PlaneGrating"}:
+            return
+
+        if geometry_type == "StandardGeometry":
+            geometry_data["radius"] = self._negate_finite_value(geometry_data.get("radius"))
+            return
+
+        if geometry_type == "EvenAsphere":
+            geometry_data["radius"] = self._negate_finite_value(geometry_data.get("radius"))
+            geometry_data["coefficients"] = [
+                -float(coefficient) for coefficient in geometry_data.get("coefficients", [])
+            ]
+            return
+
+        if geometry_type == "BiconicGeometry":
+            geometry_data["radius_x"] = self._negate_finite_value(geometry_data.get("radius_x"))
+            geometry_data["radius_y"] = self._negate_finite_value(geometry_data.get("radius_y"))
+            return
+
+        raise NotImplementedError(
+            f"Element flip is not implemented for geometry type '{geometry_type}'."
+        )
+
+    def _negate_finite_value(self, value):  # noqa: ANN001
+        """Negate a scalar unless it represents an infinite plane radius."""
+        if value in (None, "", "Auto"):
+            return value
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return value
+        if numeric == float("inf") or numeric == float("-inf"):
+            return value
+        return -numeric
 
     def _parse_param_value(self, value_str: str) -> object:
         """Parse a string that may represent a list, tuple, or float.

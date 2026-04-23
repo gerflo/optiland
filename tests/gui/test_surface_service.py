@@ -92,3 +92,124 @@ class TestSurfaceService:
         payload = mock_connector._optic.to_dict()
         encoded = json.dumps(payload, cls=SpecialFloatEncoder)
         assert '"coefficients": [\n' in encoded or '"coefficients": [' in encoded
+
+    def test_create_rename_and_ungroup_surface_element(self, service, mock_connector):
+        group_id = service.create_surface_group([1, 2], "L1", "lens")
+
+        assert group_id is not None
+        assert service.get_group_rows(1) == [1, 2]
+        assert mock_connector._optic.surfaces.surfaces[1].group_name == "L1"
+        assert mock_connector._optic.surfaces.surfaces[2].group_role == "lens"
+
+        service.rename_surface_group(1, "Front Group")
+        assert mock_connector._optic.surfaces.surfaces[1].group_name == "Front Group"
+        assert mock_connector._optic.surfaces.surfaces[2].group_name == "Front Group"
+
+        service.ungroup_surface_element(1)
+        assert service.get_group_rows(1) == []
+        assert mock_connector._optic.surfaces.surfaces[1].group_id is None
+        assert mock_connector._optic.surfaces.surfaces[2].group_name is None
+
+    def test_insert_surface_sequence_assigns_group_metadata(self, service):
+        service.insert_surface_sequence(
+            2,
+            [
+                {
+                    "surface_type": "standard",
+                    "radius": 20.0,
+                    "thickness": 3.0,
+                    "material": "N-BK7",
+                    "semi_diameter": 4.0,
+                    "comment": "Catalog S1",
+                },
+                {
+                    "surface_type": "standard",
+                    "radius": -20.0,
+                    "thickness": 0.0,
+                    "material": "Air",
+                    "semi_diameter": 4.0,
+                    "comment": "Catalog S2",
+                },
+            ],
+            group_name="Edmund 12345",
+            group_role="stock_part",
+        )
+
+        inserted = service._connector._optic.surfaces.surfaces[2:4]
+        assert inserted[0].group_id is not None
+        assert inserted[0].group_id == inserted[1].group_id
+        assert inserted[0].group_name == "Edmund 12345"
+        assert inserted[1].group_role == "stock_part"
+
+    def test_duplicate_surface_element_clones_block_with_new_group_id(
+        self, service, mock_connector
+    ):
+        group_id = service.create_surface_group([1, 2], "L1", "lens")
+
+        new_rows = service.duplicate_surface_element(1)
+
+        assert new_rows == [3, 4]
+        duplicated = [mock_connector._optic.surfaces.surfaces[row] for row in new_rows]
+        assert duplicated[0].group_id != group_id
+        assert duplicated[0].group_id == duplicated[1].group_id
+        assert duplicated[0].group_name == "L1"
+        assert duplicated[1].group_role == "lens"
+        assert not duplicated[0].is_stop
+        assert not duplicated[1].is_stop
+
+    def test_move_surface_element_repositions_group_and_preserves_stop(
+        self, service, mock_connector
+    ):
+        service.add_surface()
+        service.create_surface_group([1, 2], "L1", "lens")
+
+        moved_rows = service.move_surface_element(1, 4)
+
+        assert moved_rows == [2, 3]
+        moved = [mock_connector._optic.surfaces.surfaces[row] for row in moved_rows]
+        assert [surface.group_name for surface in moved] == ["L1", "L1"]
+        assert [surface.group_role for surface in moved] == ["lens", "lens"]
+        assert mock_connector._optic.surfaces.stop_index == moved_rows[-1]
+
+    def test_flip_surface_element_reverses_singlet_surface_order(self, service, mock_connector):
+        service.create_surface_group([1, 2], "L1", "lens")
+
+        flipped_rows = service.flip_surface_element(1)
+
+        assert flipped_rows == [1, 2]
+        flipped = [mock_connector._optic.surfaces.surfaces[row] for row in flipped_rows]
+        assert [float(surface.geometry.radius) for surface in flipped] == [50.0, -50.0]
+        assert [float(surface.thickness) for surface in flipped] == [5.0, 45.0]
+        assert flipped[0].material_post.to_dict()["name"] == "N-BK7"
+        assert flipped[1].material_post.to_dict()["type"] == "IdealMaterial"
+        assert mock_connector._optic.surfaces.stop_index == 1
+
+    def test_flip_surface_element_reverses_cemented_doublet_interfaces(
+        self, service, mock_connector
+    ):
+        from optiland.materials import Material as OptilandMaterial
+
+        optic = mock_connector._optic
+        optic.surfaces.surfaces[1].geometry.radius = 30.0
+        optic.surfaces.surfaces[1].thickness = 4.0
+        optic.surfaces.surfaces[1].material_post = OptilandMaterial("N-BK7")
+        optic.surfaces.surfaces[1].is_stop = False
+
+        optic.surfaces.surfaces[2].geometry.radius = -20.0
+        optic.surfaces.surfaces[2].thickness = 2.0
+        optic.surfaces.surfaces[2].material_post = OptilandMaterial("N-SF5")
+        optic.surfaces.surfaces[2].is_stop = False
+
+        optic.surfaces.add(index=3, radius=-60.0, thickness=45.0, material="air")
+        optic.updater.update()
+        service.create_surface_group([1, 2, 3], "D1", "doublet")
+
+        flipped_rows = service.flip_surface_element(1)
+
+        assert flipped_rows == [1, 2, 3]
+        flipped = [optic.surfaces.surfaces[row] for row in flipped_rows]
+        assert [float(surface.geometry.radius) for surface in flipped] == [60.0, 20.0, -30.0]
+        assert [float(surface.thickness) for surface in flipped] == [2.0, 4.0, 45.0]
+        assert flipped[0].material_post.to_dict()["name"] == "N-SF5"
+        assert flipped[1].material_post.to_dict()["name"] == "N-BK7"
+        assert flipped[2].material_post.to_dict()["type"] == "IdealMaterial"
