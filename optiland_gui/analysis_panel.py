@@ -95,6 +95,7 @@ class CustomMatplotlibToolbar(NavigationToolbar):
     def __init__(self, canvas, parent=None):
         super().__init__(canvas, parent, coordinates=False)
         self._original_icons = {}
+        self.on_view_limits_changed: Callable[[], None] | None = None
 
         # Assign unique object names to each tool button
         for action in self.actions():
@@ -143,6 +144,12 @@ class CustomMatplotlibToolbar(NavigationToolbar):
         foreground = self._toolbar_foreground_color()
         for action, original_icon in self._original_icons.items():
             action.setIcon(self._tinted_icon(original_icon, foreground))
+
+    def release_zoom(self, event):
+        """Finalize toolbar rectangle zoom and notify listeners about new limits."""
+        super().release_zoom(event)
+        if self.on_view_limits_changed is not None:
+            self.on_view_limits_changed()
 
 
 class AnalysisPanel(QWidget):

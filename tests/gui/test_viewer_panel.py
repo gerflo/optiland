@@ -138,5 +138,146 @@ def test_viewer_pan_does_not_start_while_toolbar_zoom_mode_is_active(
     panel.viewer2D.on_mouse_button_press(event)
 
     assert panel.viewer2D._is_panning is False
-    assert panel.viewer2D._pan_start_x is None
-    assert panel.viewer2D._pan_start_y is None
+    assert panel.viewer2D._active_pan_button is None
+
+
+def test_viewer_toolbar_zoom_keeps_preserve_xy_ratio(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    panel.preserve_xy_ratio_checkbox.setChecked(True)
+
+    panel.viewer2D.ax.set_xlim(10.0, 70.0)
+    panel.viewer2D.ax.set_ylim(-2.0, 8.0)
+    panel.viewer2D._handle_toolbar_view_limits_changed()
+
+    x0, x1 = panel.viewer2D.ax.get_xlim()
+    y0, y1 = panel.viewer2D.ax.get_ylim()
+    bbox = panel.viewer2D.ax.get_position()
+    figure_width = panel.viewer2D.figure.get_figwidth()
+    figure_height = panel.viewer2D.figure.get_figheight()
+    box_ratio = (bbox.width * figure_width) / (bbox.height * figure_height)
+    data_ratio = abs((x1 - x0) / (y1 - y0))
+
+    assert data_ratio == pytest.approx(box_ratio, rel=1e-3)
+
+
+def test_viewer_free_drag_uses_matplotlib_pan_helpers(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    monkeypatch.setattr(
+        panel.viewer2D.ax,
+        "start_pan",
+        lambda x, y, button: calls.append(("start", (x, y, button))),
+    )
+    monkeypatch.setattr(
+        panel.viewer2D.ax,
+        "drag_pan",
+        lambda button, key, x, y: calls.append(("drag", (button, key, x, y))),
+    )
+    monkeypatch.setattr(
+        panel.viewer2D.ax,
+        "end_pan",
+        lambda: calls.append(("end", ())),
+    )
+
+    panel.viewer2D.on_mouse_button_press(
+        SimpleNamespace(
+            button=1,
+            inaxes=panel.viewer2D.ax,
+            x=120,
+            y=80,
+            xdata=10.0,
+            ydata=2.0,
+        )
+    )
+    panel.viewer2D.on_mouse_move_on_plot(
+        SimpleNamespace(
+            inaxes=panel.viewer2D.ax,
+            x=140,
+            y=90,
+            xdata=12.0,
+            ydata=3.0,
+            key=None,
+        )
+    )
+    panel.viewer2D.on_mouse_button_release(
+        SimpleNamespace(button=1, inaxes=panel.viewer2D.ax)
+    )
+
+    assert calls == [
+        ("start", (120, 80, 1)),
+        ("drag", (1, None, 140, 90)),
+        ("end", ()),
+    ]
+
+
+def test_viewer_toolbar_pan_zoom_keeps_ratio_while_dragging(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    panel.preserve_xy_ratio_checkbox.setChecked(True)
+    panel.viewer2D.toolbar.mode = "pan/zoom"
+    panel.viewer2D._enforce_equal_xy_on_toolbar_release = True
+
+    panel.viewer2D.ax.set_xlim(5.0, 45.0)
+    panel.viewer2D.ax.set_ylim(-1.0, 7.0)
+    panel.viewer2D.on_ax_limit_changed(panel.viewer2D.ax)
+
+    x0, x1 = panel.viewer2D.ax.get_xlim()
+    y0, y1 = panel.viewer2D.ax.get_ylim()
+    bbox = panel.viewer2D.ax.get_position()
+    figure_width = panel.viewer2D.figure.get_figwidth()
+    figure_height = panel.viewer2D.figure.get_figheight()
+    box_ratio = (bbox.width * figure_width) / (bbox.height * figure_height)
+    data_ratio = abs((x1 - x0) / (y1 - y0))
+
+    assert data_ratio == pytest.approx(box_ratio, rel=1e-3)

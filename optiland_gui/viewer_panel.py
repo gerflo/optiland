@@ -16,6 +16,7 @@ from matplotlib.figure import Figure
 from PySide6.QtCore import QSettings, Qt, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -426,6 +427,7 @@ class MatplotlibViewer(QWidget):
         self._user_initiated_view_change = False
 
         self.toolbar = CustomMatplotlibToolbar(self.canvas, self.toolbar_container)
+        self.toolbar.on_view_limits_changed = self._handle_toolbar_view_limits_changed
         toolbar_layout.addWidget(self.toolbar)
         toolbar_layout.addStretch()
 
@@ -493,17 +495,31 @@ class MatplotlibViewer(QWidget):
         self.ax.callbacks.connect("ylim_changed", self.on_ax_limit_changed)
 
         # Initialize panning state variables
-        self._pan_start_x = None
-        self._pan_start_y = None
+        self._active_pan_button = None
         self._is_panning = False
+        self._enforce_equal_xy_on_toolbar_release = False
+        self._adjusting_equal_xy_limits = False
 
         self.plot_optic()
         self.update_theme()
 
     def on_ax_limit_changed(self, ax):
         """Callback for when axis limits change, to detect user interaction."""
+        if self._adjusting_equal_xy_limits:
+            return
         if not self._is_plotting:
             self._user_initiated_view_change = True
+        if (
+            self._enforce_equal_xy_on_toolbar_release
+            and self._toolbar_navigation_mode_active()
+            and (self._preserve_xy_ratio or bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier))
+        ):
+            self._adjusting_equal_xy_limits = True
+            try:
+                self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
+                self.canvas.draw_idle()
+            finally:
+                self._adjusting_equal_xy_limits = False
 
     def reset_view(self):
         """Resets the view to the default zoom and panel-filling framing."""
@@ -514,6 +530,15 @@ class MatplotlibViewer(QWidget):
         """Return whether Matplotlib's own pan/zoom tool currently owns drag input."""
         return bool(getattr(self.toolbar, "mode", ""))
 
+    def _ctrl_modifier_active(self, event) -> bool:
+        """Return whether Ctrl is currently active for a Matplotlib mouse event."""
+        key = str(getattr(event, "key", "") or "").lower()
+        if "ctrl" in key or "control" in key:
+            return True
+        return bool(
+            QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier
+        )
+
     def on_mouse_button_press(self, event):
         """
         Handles mouse button press events to initiate panning.
@@ -522,11 +547,16 @@ class MatplotlibViewer(QWidget):
             event: The Matplotlib mouse button press event.
         """
         if self._toolbar_navigation_mode_active():
+            self._enforce_equal_xy_on_toolbar_release = bool(
+                event.inaxes
+                and event.button == 3
+                and (self._preserve_xy_ratio or self._ctrl_modifier_active(event))
+            )
             return
 
         if event.button == 1 and event.inaxes:  # Left mouse button
-            self._pan_start_x = event.xdata
-            self._pan_start_y = event.ydata
+            event.inaxes.start_pan(event.x, event.y, event.button)
+            self._active_pan_button = event.button
             self._is_panning = True
             self.canvas.setCursor(
                 Qt.ClosedHandCursor
@@ -539,10 +569,18 @@ class MatplotlibViewer(QWidget):
         Args:
             event: The Matplotlib mouse button release event.
         """
+        if self._toolbar_navigation_mode_active():
+            if event.button == 3 and self._enforce_equal_xy_on_toolbar_release:
+                self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
+                self.canvas.draw_idle()
+            self._enforce_equal_xy_on_toolbar_release = False
+            return
+
         if event.button == 1:  # Left mouse button
+            if self._is_panning and event.inaxes:
+                event.inaxes.end_pan()
             self._is_panning = False
-            self._pan_start_x = None
-            self._pan_start_y = None
+            self._active_pan_button = None
             self.canvas.setCursor(Qt.ArrowCursor)  # Reset cursor
 
     def on_mouse_move_on_plot(self, event):
@@ -552,25 +590,8 @@ class MatplotlibViewer(QWidget):
         Args:
             event: The Matplotlib motion notify event.
         """
-        if self._is_panning and event.inaxes and self._pan_start_x is not None:
-            # Calculate the distance moved
-            dx = self._pan_start_x - event.xdata
-            dy = self._pan_start_y - event.ydata
-
-            # Get current axis limits
-            ax = event.inaxes
-            xlim = ax.get_xlim()
-            ylim = ax.get_ylim()
-
-            # Update the limits by the distance moved
-            ax.set_xlim(xlim[0] + dx, xlim[1] + dx)
-            ax.set_ylim(ylim[0] + dy, ylim[1] + dy)
-
-            # Update the starting position for the next move
-            self._pan_start_x = event.xdata
-            self._pan_start_y = event.ydata
-
-            # Redraw the canvas
+        if self._is_panning and event.inaxes and self._active_pan_button is not None:
+            event.inaxes.drag_pan(self._active_pan_button, event.key, event.x, event.y)
             self.canvas.draw_idle()
             return  # Skip the coordinate display when panning
 
@@ -662,6 +683,13 @@ class MatplotlibViewer(QWidget):
         y_half = target_y_span / 2.0
         self.ax.set_xlim(x0, x1)
         self.ax.set_ylim(y_center - y_half, y_center + y_half)
+
+    def _handle_toolbar_view_limits_changed(self) -> None:
+        """Re-apply equal X/Y scaling after Matplotlib toolbar zoom changes limits."""
+        if not self._preserve_xy_ratio:
+            return
+        self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
+        self.canvas.draw_idle()
 
     def plot_optic(self, preserve_zoom=False):
         """
