@@ -4,9 +4,11 @@ from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
+import optiland.backend as be
 from PySide6.QtCore import QObject, Signal
 
 from optiland_gui.viewer_panel import ViewerPanel
+from optiland.visualization.system.rays import Rays2D
 
 
 class _ConnectorStub(QObject):
@@ -112,6 +114,21 @@ def test_viewer_panel_restores_persistent_2d_settings(
     assert settings_store["Viewer2D/PreserveZoom"] is False
     assert settings_store["Viewer2D/PreserveXYRatio"] is False
     assert settings_store["Viewer2D/NumRays"] == 7
+
+
+def test_rays2d_annular_line_y_skips_blocked_center(minimal_optic) -> None:
+    from optiland.physical_apertures import RadialAperture
+
+    minimal_optic.surfaces.surfaces[1].aperture = RadialAperture(r_max=3.8, r_min=2.4)
+    minimal_optic.updater.update()
+    rays = Rays2D(minimal_optic)
+
+    rays._trace((0.0, 0.0), 0.55, 8, "line_y")
+
+    start_y = rays.y[0]
+    finite_start_y = start_y[~be.isnan(start_y)]
+    assert finite_start_y.size == 8
+    assert all(abs(float(value)) >= (2.4 / 3.8) - 1e-9 for value in finite_start_y)
 
 
 def test_viewer_pan_does_not_start_while_toolbar_zoom_mode_is_active(

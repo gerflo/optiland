@@ -11,6 +11,7 @@ import numpy as np
 import vtk
 
 import optiland.backend as be
+from optiland.physical_apertures import DifferenceAperture, RadialAperture
 from optiland.utils import resolve_fields, resolve_wavelengths
 from optiland.visualization.system.ray_bundle import RayBundle
 from optiland.visualization.system.utils import transform
@@ -146,7 +147,40 @@ class Rays2D:
             None
 
         """
+        if distribution == "line_y":
+            obscuration_ratio = self._annular_obscuration_ratio()
+            if obscuration_ratio is not None:
+                self._trace_annular_line_y(field, wavelength, num_rays, obscuration_ratio)
+                return
         self.optic.trace(*field, wavelength, num_rays, distribution)
+        self._process_traced_rays()
+
+    def _annular_obscuration_ratio(self) -> float | None:
+        """Return the normalized inner obscuration radius of an annular aperture."""
+        for surface in self.optic.surfaces:
+            aperture = getattr(surface, "aperture", None)
+            if isinstance(aperture, RadialAperture) and float(aperture.r_min) > 0:
+                return float(aperture.r_min) / max(float(aperture.r_max), 1e-9)
+            if (
+                isinstance(aperture, DifferenceAperture)
+                and isinstance(aperture.b, RadialAperture)
+                and float(aperture.b.r_min) > 0
+            ):
+                return float(aperture.b.r_min) / max(float(aperture.b.r_max), 1e-9)
+        return None
+
+    def _trace_annular_line_y(
+        self, field, wavelength, num_rays: int, obscuration_ratio: float
+    ) -> None:
+        """Trace a meridional Y fan that excludes the blocked annular center."""
+        num_rays = max(int(num_rays), 2)
+        lower_count = num_rays // 2
+        upper_count = num_rays - lower_count
+        negative = be.linspace(-1.0, -obscuration_ratio, lower_count)
+        positive = be.linspace(obscuration_ratio, 1.0, upper_count)
+        py = be.concatenate((negative, positive))
+        px = be.zeros_like(py)
+        self.optic.trace_generic(field[0], field[1], px, py, wavelength)
         self._process_traced_rays()
 
     def _trace_reference(self, field, wavelength, reference):
