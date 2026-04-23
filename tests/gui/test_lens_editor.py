@@ -34,6 +34,7 @@ def mock_connector(minimal_optic, qapp):
         "has_extra_params": False,
     }
     conn.get_surface_geometry_params.return_value = {}
+    conn.get_surface_aperture_config.return_value = {"type": "none"}
     conn.get_surface_data.return_value = ""
     conn.get_available_surface_types.return_value = ["standard", "aspheric"]
     return conn
@@ -589,3 +590,54 @@ def test_lens_editor_restores_persisted_column_widths(qapp, mock_connector, monk
     restored.load_data()
 
     assert restored.tableWidget.columnWidth(mock_connector.COL_THICKNESS) == 173
+
+
+def test_surface_properties_widget_applies_annular_aperture(qapp, mock_connector):
+    from optiland_gui.lens_editor import SurfacePropertiesWidget
+
+    mock_connector.get_surface_aperture_config.return_value = {
+        "type": "annular",
+        "outer_radius": 3.8,
+        "inner_radius": 1.5,
+        "offset_x": 0.0,
+        "offset_y": 0.0,
+    }
+
+    widget = SurfacePropertiesWidget(1, mock_connector)
+    widget.aperture_inputs["outer_radius"].setText("4.2000")
+    widget.aperture_inputs["inner_radius"].setText("1.1000")
+    widget.apply_changes()
+
+    mock_connector.set_surface_aperture_config.assert_called_with(
+        1,
+        {
+            "type": "annular",
+            "outer_radius": "4.2000",
+            "inner_radius": "1.1000",
+            "offset_x": "0.0000",
+            "offset_y": "0.0000",
+        },
+    )
+
+
+def test_surface_properties_widget_selecting_annular_seeds_inner_radius_and_skips_empty_geometry(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import SurfacePropertiesWidget
+
+    mock_connector.get_surface_aperture_config.return_value = {"type": "none"}
+
+    widget = SurfacePropertiesWidget(1, mock_connector)
+    widget.aperture_type_combo.setCurrentText("Annular")
+
+    mock_connector.set_surface_aperture_config.assert_called_with(
+        1,
+        {
+            "type": "annular",
+            "outer_radius": "1.0000",
+            "inner_radius": "0.2500",
+            "offset_x": "0.0000",
+            "offset_y": "0.0000",
+        },
+    )
+    mock_connector.set_surface_geometry_params.assert_not_called()

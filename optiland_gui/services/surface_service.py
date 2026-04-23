@@ -15,7 +15,7 @@ import optiland.backend as be
 from optiland.geometries.biconic import BiconicGeometry
 from optiland.materials import IdealMaterial
 from optiland.materials import Material as OptilandMaterial
-from optiland.physical_apertures import RadialAperture
+from optiland.physical_apertures import OffsetRadialAperture, RadialAperture
 from optiland.physical_apertures.radial import configure_aperture
 from optiland.surfaces.factories.geometry_factory import (
     GeometryFactory,
@@ -387,6 +387,80 @@ class SurfaceService:
             surface.aperture = configure_aperture(float(value) * 2.0)
         except (ValueError, TypeError):
             surface.aperture = None
+
+    def get_surface_aperture_config(self, row: int) -> dict:
+        """Return a GUI-friendly physical aperture config for *row*."""
+        if not (0 <= row < self.get_surface_count()):
+            return {"type": "none"}
+        surface = self._connector._optic.surfaces.surfaces[row]
+        aperture = getattr(surface, "aperture", None)
+        if aperture is None:
+            return {"type": "none"}
+        if isinstance(aperture, OffsetRadialAperture):
+            return {
+                "type": (
+                    "offset_annular" if float(aperture.r_min) > 0 else "offset_circular"
+                ),
+                "outer_radius": float(aperture.r_max),
+                "inner_radius": float(aperture.r_min),
+                "offset_x": float(aperture.offset_x),
+                "offset_y": float(aperture.offset_y),
+            }
+        if isinstance(aperture, RadialAperture):
+            return {
+                "type": "annular" if float(aperture.r_min) > 0 else "circular",
+                "outer_radius": float(aperture.r_max),
+                "inner_radius": float(aperture.r_min),
+                "offset_x": 0.0,
+                "offset_y": 0.0,
+            }
+        return {"type": aperture.__class__.__name__}
+
+    def set_surface_aperture_config(self, row: int, config: dict) -> None:
+        """Apply a physical aperture config to *row*."""
+        if not (0 <= row < self.get_surface_count()):
+            return
+        surface = self._connector._optic.surfaces.surfaces[row]
+        aperture_type = str(config.get("type", "none")).strip().lower()
+        if aperture_type == "none":
+            surface.aperture = None
+            self._connector._optic.updater.update()
+            return
+
+        outer_radius = float(config.get("outer_radius", 0.0) or 0.0)
+        inner_radius = float(config.get("inner_radius", 0.0) or 0.0)
+        offset_x = float(config.get("offset_x", 0.0) or 0.0)
+        offset_y = float(config.get("offset_y", 0.0) or 0.0)
+
+        if outer_radius <= 0:
+            raise ValueError("Aperture outer radius must be greater than zero.")
+        if inner_radius < 0:
+            raise ValueError("Aperture inner radius cannot be negative.")
+        if inner_radius >= outer_radius:
+            raise ValueError("Aperture inner radius must be smaller than outer radius.")
+
+        if aperture_type == "circular":
+            surface.aperture = RadialAperture(r_max=outer_radius, r_min=0.0)
+        elif aperture_type == "annular":
+            surface.aperture = RadialAperture(r_max=outer_radius, r_min=inner_radius)
+        elif aperture_type == "offset_circular":
+            surface.aperture = OffsetRadialAperture(
+                r_max=outer_radius,
+                r_min=0.0,
+                offset_x=offset_x,
+                offset_y=offset_y,
+            )
+        elif aperture_type == "offset_annular":
+            surface.aperture = OffsetRadialAperture(
+                r_max=outer_radius,
+                r_min=inner_radius,
+                offset_x=offset_x,
+                offset_y=offset_y,
+            )
+        else:
+            raise ValueError(f"Unsupported aperture type '{aperture_type}'.")
+
+        self._connector._optic.updater.update()
 
     def _set_dynamic_radius_data(self, surface: object, value: str) -> None:
         """Set the radius-column value on *surface*, respecting surface type.

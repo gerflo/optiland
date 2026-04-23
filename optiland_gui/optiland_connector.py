@@ -480,6 +480,14 @@ class OptilandConnector(QObject):
         """
         self._surface_service.set_surface_geometry_params(row, params_dict)
 
+    def get_surface_aperture_config(self, row: int) -> dict:
+        """Return the physical aperture configuration for a surface row."""
+        return self._surface_service.get_surface_aperture_config(row)
+
+    def set_surface_aperture_config(self, row: int, config: dict) -> None:
+        """Apply a physical aperture configuration to a surface row."""
+        self._surface_service.set_surface_aperture_config(row, config)
+
     # ------------------------------------------------------------------
     # SystemService delegation
     # ------------------------------------------------------------------

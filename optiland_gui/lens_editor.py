@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QAbstractItemView,
     QApplication,
+    QComboBox,
     QCompleter,
+    QFrame,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMenu,
     QPushButton,
+    QSizePolicy,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidget,
@@ -50,12 +53,45 @@ class SurfacePropertiesWidget(QWidget):
         self.row = row
         self.connector = connector
         self.setObjectName("SurfacePropertiesWidget")
-        self.setMinimumWidth(750)
-        self.setMinimumHeight(100)
-        self.setMaximumHeight(200)
+        self.setMinimumWidth(0)
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(900)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setStyleSheet(
+            "QWidget#SurfacePropertiesWidget {"
+            "  background: rgba(255, 255, 255, 0.02);"
+            "}"
+            "QFrame[section='true'] {"
+            "  border: 1px solid rgba(255, 255, 255, 0.12);"
+            "  border-radius: 6px;"
+            "  background: rgba(255, 255, 255, 0.03);"
+            "}"
+            "QLabel[sectionTitle='true'] {"
+            "  font-weight: bold;"
+            "}"
+            "QLabel[hint='true'] {"
+            "  color: rgba(255, 255, 255, 0.72);"
+            "}"
+        )
 
         self.input_widgets = {}
+        self.aperture_type_combo: QComboBox | None = None
+        self.aperture_inputs: dict[str, QLineEdit] = {}
+        self._aperture_form_layout: QFormLayout | None = None
         self._populate_properties_form()
+
+    def preferred_height_for_width(self, width: int) -> int:
+        """Return the preferred widget height for a constrained width."""
+        target_width = max(320, int(width))
+        self.setFixedWidth(target_width)
+        layout = self.layout()
+        if layout is not None:
+            layout.activate()
+            hint = layout.sizeHint().height()
+        else:
+            hint = self.sizeHint().height()
+        self.setMaximumWidth(target_width)
+        return max(140, hint + 16)
 
     def _create_parameter_input(self, name, value):
         """Creates a configured QLineEdit for a given surface parameter."""
@@ -76,21 +112,113 @@ class SurfacePropertiesWidget(QWidget):
     def _populate_properties_form(self):
         """Creates and populates the form layout with surface parameter widgets."""
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(15, 8, 15, 8)
-        columns_layout = QHBoxLayout()
-        columns_layout.setSpacing(20)
-        main_layout.addLayout(columns_layout)
+        main_layout.setContentsMargins(12, 10, 12, 10)
+        main_layout.setSpacing(10)
+        self._add_aperture_form(main_layout)
+        self._add_geometry_form(main_layout)
+
+    def _create_aperture_input(self, value: float) -> QLineEdit:
+        """Create a compact numeric line edit for aperture settings."""
+        line_edit = QLineEdit()
+        line_edit.setMaximumWidth(80)
+        line_edit.setText(f"{value:.4f}")
+        line_edit.editingFinished.connect(self.apply_changes)
+        return line_edit
+
+    def _add_aperture_form(self, main_layout: QVBoxLayout) -> None:
+        """Append physical aperture controls to the properties widget."""
+        config = self.connector.get_surface_aperture_config(self.row)
+        section = QFrame()
+        section.setProperty("section", True)
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(12, 10, 12, 10)
+        section_layout.setSpacing(6)
+
+        title = QLabel("Physical Aperture")
+        title.setProperty("sectionTitle", True)
+        hint = QLabel(
+            "For a ring aperture choose Annular and set Inner Radius and Outer Radius."
+        )
+        hint.setProperty("hint", True)
+        section_layout.addWidget(title)
+        section_layout.addWidget(hint)
+
+        self._aperture_form_layout = QFormLayout()
+        self._aperture_form_layout.setHorizontalSpacing(15)
+        self._aperture_form_layout.setVerticalSpacing(5)
+        section_layout.addLayout(self._aperture_form_layout)
+
+        self.aperture_type_combo = QComboBox()
+        self.aperture_type_combo.addItems(
+            [
+                "None",
+                "Circular",
+                "Annular",
+                "Offset Circular",
+                "Offset Annular",
+            ]
+        )
+        type_map = {
+            "none": "None",
+            "circular": "Circular",
+            "annular": "Annular",
+            "offset_circular": "Offset Circular",
+            "offset_annular": "Offset Annular",
+        }
+        self.aperture_type_combo.setCurrentText(
+            type_map.get(str(config.get("type", "none")).lower(), "None")
+        )
+        self.aperture_type_combo.currentTextChanged.connect(self._refresh_aperture_ui)
+        self.aperture_type_combo.currentTextChanged.connect(self._handle_aperture_type_changed)
+        self._aperture_form_layout.addRow("Aperture Type:", self.aperture_type_combo)
+
+        self.aperture_inputs = {
+            "outer_radius": self._create_aperture_input(
+                float(config.get("outer_radius", 0.0) or 0.0)
+            ),
+            "inner_radius": self._create_aperture_input(
+                float(config.get("inner_radius", 0.0) or 0.0)
+            ),
+            "offset_x": self._create_aperture_input(
+                float(config.get("offset_x", 0.0) or 0.0)
+            ),
+            "offset_y": self._create_aperture_input(
+                float(config.get("offset_y", 0.0) or 0.0)
+            ),
+        }
+        self._aperture_form_layout.addRow(
+            "Outer Radius:", self.aperture_inputs["outer_radius"]
+        )
+        self._aperture_form_layout.addRow(
+            "Inner Radius:", self.aperture_inputs["inner_radius"]
+        )
+        self._aperture_form_layout.addRow("Offset X:", self.aperture_inputs["offset_x"])
+        self._aperture_form_layout.addRow("Offset Y:", self.aperture_inputs["offset_y"])
+        main_layout.addWidget(section)
+        self._refresh_aperture_ui()
+
+    def _add_geometry_form(self, main_layout: QVBoxLayout) -> None:
+        """Append geometry-specific parameters below the aperture section."""
+        section = QFrame()
+        section.setProperty("section", True)
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(12, 10, 12, 10)
+        section_layout.setSpacing(6)
+
+        title = QLabel("Surface Geometry")
+        title.setProperty("sectionTitle", True)
+        section_layout.addWidget(title)
 
         params = self.connector.get_surface_geometry_params(self.row)
-
         if not params:
-            form_layout = QFormLayout()
-            form_layout.addRow(
-                QLabel("No additional properties for this surface type.")
-            )
-            columns_layout.addLayout(form_layout)
+            hint = QLabel("This surface type has no additional geometry parameters.")
+            hint.setProperty("hint", True)
+            section_layout.addWidget(hint)
+            main_layout.addWidget(section)
             return
 
+        columns_layout = QHBoxLayout()
+        columns_layout.setSpacing(20)
         items_per_column = 2
         param_items = list(params.items())
         num_columns = (len(param_items) + items_per_column - 1) // items_per_column
@@ -112,14 +240,101 @@ class SurfacePropertiesWidget(QWidget):
             columns_layout.addLayout(form_layout)
 
         columns_layout.addStretch(1)
+        section_layout.addLayout(columns_layout)
+        main_layout.addWidget(section)
+
+    def _refresh_aperture_ui(self) -> None:
+        """Enable aperture-specific fields based on the chosen aperture type."""
+        if self.aperture_type_combo is None or self._aperture_form_layout is None:
+            return
+        aperture_type = self.aperture_type_combo.currentText()
+        enabled = {
+            "outer_radius": aperture_type != "None",
+            "inner_radius": aperture_type in {"Annular", "Offset Annular"},
+            "offset_x": aperture_type in {"Offset Circular", "Offset Annular"},
+            "offset_y": aperture_type in {"Offset Circular", "Offset Annular"},
+        }
+        for key, is_enabled in enabled.items():
+            widget = self.aperture_inputs[key]
+            widget.setEnabled(is_enabled)
+            label = self._aperture_form_layout.labelForField(widget)
+            if label is not None:
+                label.setEnabled(is_enabled)
+
+    def _handle_aperture_type_changed(self) -> None:
+        """Seed sensible defaults before applying a newly selected aperture type."""
+        if self.aperture_type_combo is None:
+            return
+        aperture_type = self.aperture_type_combo.currentText()
+        outer_text = self.aperture_inputs["outer_radius"].text().strip()
+        inner_text = self.aperture_inputs["inner_radius"].text().strip()
+        offset_x_text = self.aperture_inputs["offset_x"].text().strip()
+        offset_y_text = self.aperture_inputs["offset_y"].text().strip()
+
+        if aperture_type != "None":
+            try:
+                outer_value = float(outer_text or "0")
+            except ValueError:
+                outer_value = 0.0
+            if outer_value <= 0:
+                self.aperture_inputs["outer_radius"].setText("1.0000")
+
+        if aperture_type in {"Annular", "Offset Annular"}:
+            try:
+                inner_value = float(inner_text or "0")
+            except ValueError:
+                inner_value = 0.0
+            if inner_value <= 0:
+                try:
+                    outer_value = float(self.aperture_inputs["outer_radius"].text() or "1")
+                except ValueError:
+                    outer_value = 1.0
+                seeded_inner = max(0.1, min(outer_value * 0.25, outer_value - 0.1))
+                self.aperture_inputs["inner_radius"].setText(f"{seeded_inner:.4f}")
+        else:
+            self.aperture_inputs["inner_radius"].setText("0.0000")
+
+        if aperture_type not in {"Offset Circular", "Offset Annular"}:
+            self.aperture_inputs["offset_x"].setText("0.0000")
+            self.aperture_inputs["offset_y"].setText("0.0000")
+        else:
+            if not offset_x_text:
+                self.aperture_inputs["offset_x"].setText("0.0000")
+            if not offset_y_text:
+                self.aperture_inputs["offset_y"].setText("0.0000")
+
+        self.apply_changes()
 
     @Slot()
     def apply_changes(self):
         """Collects data from input fields and sends it to the connector."""
-        params_to_set = {}
-        for name, widget in self.input_widgets.items():
-            params_to_set[name] = widget.text()
-        self.connector.set_surface_geometry_params(self.row, params_to_set)
+        if self.input_widgets:
+            params_to_set = {}
+            for name, widget in self.input_widgets.items():
+                params_to_set[name] = widget.text()
+            self.connector.set_surface_geometry_params(self.row, params_to_set)
+        if self.aperture_type_combo is None:
+            return
+        reverse_type_map = {
+            "None": "none",
+            "Circular": "circular",
+            "Annular": "annular",
+            "Offset Circular": "offset_circular",
+            "Offset Annular": "offset_annular",
+        }
+        try:
+            self.connector.set_surface_aperture_config(
+                self.row,
+                {
+                    "type": reverse_type_map[self.aperture_type_combo.currentText()],
+                    "outer_radius": self.aperture_inputs["outer_radius"].text(),
+                    "inner_radius": self.aperture_inputs["inner_radius"].text(),
+                    "offset_x": self.aperture_inputs["offset_x"].text(),
+                    "offset_y": self.aperture_inputs["offset_y"].text(),
+                },
+            )
+        except ValueError:
+            return
 
 
 class SurfaceTypeWidget(QWidget):
@@ -534,7 +749,9 @@ class LensEditor(QWidget):
 
         # Prevent excessive row resizing
         self.tableWidget.verticalHeader().setMinimumSectionSize(30)
-        self.tableWidget.verticalHeader().setMaximumSectionSize(70)
+        # The properties expander lives inside a dedicated table row and may
+        # need substantially more height than regular data rows.
+        self.tableWidget.verticalHeader().setMaximumSectionSize(2000)
         self.tableWidget.verticalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Interactive
         )
@@ -566,6 +783,9 @@ class LensEditor(QWidget):
         self.settings.setValue(self._settings_key("HeaderState"), header.saveState())
 
     def eventFilter(self, source, event):
+        if source is self.tableWidget.viewport() and event.type() == QEvent.Resize:
+            self._update_properties_widget_geometry()
+            return False
         if source is self.tableWidget.viewport() and event.type() == QEvent.MouseButtonPress:
             pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
             item = self.tableWidget.itemAt(pos)
@@ -1080,7 +1300,7 @@ class LensEditor(QWidget):
         if col_idx == self.connector.COL_TYPE:
             type_info = self.connector.get_surface_type_info(row)
             params = self.connector.get_surface_geometry_params(row)
-            type_info["has_extra_params"] = bool(params)
+            type_info["has_extra_params"] = bool(params) or type_info["is_changeable"]
 
             widget = SurfaceTypeWidget(row, type_info, self.connector)
             widget.surfaceTypeChanged.connect(
@@ -1185,11 +1405,22 @@ class LensEditor(QWidget):
         prop_widget = SurfacePropertiesWidget(source_row, self.connector)
         self.tableWidget.setCellWidget(prop_row_index, 0, prop_widget)
         self.tableWidget.setSpan(prop_row_index, 0, 1, self.tableWidget.columnCount())
-        default_props_height = 150
-        self.tableWidget.setRowHeight(prop_row_index, default_props_height)
         self.tableWidget.verticalHeader().setSectionResizeMode(
             prop_row_index, QHeaderView.ResizeMode.Fixed
         )
+        self._update_properties_widget_geometry()
+
+    def _update_properties_widget_geometry(self) -> None:
+        """Fit the expanded properties row to the current table width and content."""
+        if self.open_prop_source_row < 0:
+            return
+        prop_row_index = self.open_prop_source_row + 1
+        prop_widget = self.tableWidget.cellWidget(prop_row_index, 0)
+        if not isinstance(prop_widget, SurfacePropertiesWidget):
+            return
+        available_width = max(320, self.tableWidget.viewport().width() - 24)
+        preferred_height = prop_widget.preferred_height_for_width(available_width)
+        self.tableWidget.setRowHeight(prop_row_index, preferred_height)
 
     @Slot()
     def update_headers_on_selection(self):
@@ -1199,6 +1430,8 @@ class LensEditor(QWidget):
             if not selected_items
             else selected_items[0].row()
         )
+        if self._is_properties_row(row):
+            row = self.open_prop_source_row
         surface_index = self.map_ui_row_to_surface_index(row)
         headers = self.connector.get_column_headers(surface_index)
         self.tableWidget.setHorizontalHeaderLabels(headers)
@@ -1237,7 +1470,15 @@ class LensEditor(QWidget):
             row = item.row()
             col = item.column()
             text = item.text()
+            if self._is_properties_row(row):
+                return
+            if not (item.flags() & Qt.ItemFlag.ItemIsEditable):
+                return
+            if text == "N/A":
+                return
             surface_index = self.map_ui_row_to_surface_index(row)
+            if surface_index < 0:
+                return
             try:
                 self.connector.set_surface_data(surface_index, col, text)
                 self._flash_cell(row, col, valid=True)
