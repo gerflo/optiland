@@ -1164,7 +1164,21 @@ class AnalysisPanel(QWidget):
 
     def _draw_plot_on_canvas(self, analysis_instance, canvas, view_args):
         """Invokes the analysis's view method to draw the plot on the canvas."""
-        axs = analysis_instance.view(fig_to_plot_on=canvas.figure, **view_args)
+        view_signature = inspect.signature(analysis_instance.view)
+        accepts_var_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in view_signature.parameters.values()
+        )
+        filtered_view_args = (
+            dict(view_args)
+            if accepts_var_kwargs
+            else {
+                key: value
+                for key, value in view_args.items()
+                if key in view_signature.parameters
+            }
+        )
+        axs = analysis_instance.view(fig_to_plot_on=canvas.figure, **filtered_view_args)
 
         # Add summary text overlay if available
         if hasattr(analysis_instance, "get_summary_text"):

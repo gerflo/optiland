@@ -152,3 +152,36 @@ class TestAnalysisErrorsUseToast:
             assert result is False
             conn.toast_manager.notify.assert_called()
             mock_msgbox.warning.assert_not_called()
+
+
+class TestAnalysisViewArgFiltering:
+    def test_draw_plot_filters_unknown_view_args(self, panel):
+        """Canvas draw should not forward unsupported view kwargs to an analysis."""
+
+        class _FakeCanvas:
+            def __init__(self):
+                from matplotlib.figure import Figure
+
+                self.figure = Figure(figsize=(7, 5), dpi=100)
+
+        class _FakeAnalysis:
+            def __init__(self):
+                self.called = None
+
+            def view(self, fig_to_plot_on=None, cmap=None):  # noqa: ANN001
+                self.called = {"fig_to_plot_on": fig_to_plot_on, "cmap": cmap}
+                ax = fig_to_plot_on.add_subplot(111)
+                return ax
+
+        analysis = _FakeAnalysis()
+        canvas = _FakeCanvas()
+
+        panel._draw_plot_on_canvas(
+            analysis,
+            canvas,
+            {"cmap": "viridis", "add_airy_disk": True},
+        )
+
+        assert analysis.called is not None
+        assert analysis.called["fig_to_plot_on"] is canvas.figure
+        assert analysis.called["cmap"] == "viridis"

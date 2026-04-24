@@ -231,7 +231,7 @@ class ZernikeFit:
         ax.set_xlabel("Pupil X")
         ax.set_ylabel("Pupil Y")
         ax.set_title(f"Residuals (RMS={rms:.3f})")
-        cbar = plt.colorbar(sc)
+        cbar = ax.figure.colorbar(sc, ax=ax)
         cbar.ax.set_ylabel(z_label, rotation=270, labelpad=15)
 
         if is_gui_embedding and hasattr(current_fig, "canvas"):
@@ -253,7 +253,7 @@ class ZernikeFit:
         ax.set_xlabel("Pupil X")
         ax.set_ylabel("Pupil Y")
         ax.set_title(f"Zernike {self.zernike_type.capitalize()} Fit")
-        cbar = plt.colorbar(im)
+        cbar = ax.figure.colorbar(im, ax=ax)
         cbar.ax.set_ylabel(z_label, rotation=270, labelpad=15)
 
     def _plot_3d(

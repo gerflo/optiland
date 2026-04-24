@@ -175,7 +175,7 @@ class OPD(Wavefront):
         ax.set_ylabel("Pupil Y")
         ax.set_title(f"OPD Map: RMS={self.rms():.3f} waves")
 
-        cbar = plt.colorbar(im)
+        cbar = ax.figure.colorbar(im, ax=ax)
         cbar.ax.get_yaxis().labelpad = 15
         cbar.ax.set_ylabel("OPD (waves)", rotation=270)
 
