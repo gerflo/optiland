@@ -1,6 +1,6 @@
 # Element Workflows and Table Persistence
 
-Commit: `95141ac0`
+Commit: `7308cabd`
 
 ## What this block changed
 
@@ -31,4 +31,3 @@ Commit: `95141ac0`
   - verifies grouped element behavior after catalog insertion
 - `tests/test_standard_surface.py`
   - covers serialization assumptions used by grouped workflows
-

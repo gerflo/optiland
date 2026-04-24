@@ -1,6 +1,6 @@
 # Element Grouping Operations
 
-Commit: `84e3016e`
+Commit: `ef0ba75e`
 
 ## What this block changed
 
@@ -29,4 +29,3 @@ Commit: `84e3016e`
   - verifies catalog insertions produce the expected grouped behavior
 - `tests/test_standard_surface.py`
   - covers serialization support used by grouped element operations
-

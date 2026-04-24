@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFrame,
     QHeaderView,
     QGroupBox,
     QHBoxLayout,
@@ -37,6 +38,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -159,7 +161,17 @@ class CatalogBrowserPanel(QWidget):
         layout = QVBoxLayout(self)
 
         controls_box = QGroupBox("Catalog Tools")
-        controls_layout = QHBoxLayout(controls_box)
+        controls_box_layout = QVBoxLayout(controls_box)
+        controls_box_layout.setSpacing(6)
+
+        insert_controls_layout = QHBoxLayout()
+        self.insert_before_button = QPushButton("Insert Before Selected Surface")
+        self.insert_after_button = QPushButton("Insert After Selected Surface")
+        insert_controls_layout.addWidget(self.insert_before_button)
+        insert_controls_layout.addWidget(self.insert_after_button)
+        controls_box_layout.addLayout(insert_controls_layout)
+
+        controls_layout = QHBoxLayout()
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Search by part number, name, material...")
         controls_layout.addWidget(QLabel("Search"))
@@ -211,6 +223,7 @@ class CatalogBrowserPanel(QWidget):
         )
         controls_layout.addWidget(self.download_catalog_button)
         controls_layout.addWidget(self.import_busy_indicator)
+        controls_box_layout.addLayout(controls_layout)
         layout.addWidget(controls_box)
 
         self.table_view_scroll = QScrollArea()
@@ -273,8 +286,19 @@ class CatalogBrowserPanel(QWidget):
         self.status_label = QLabel("No catalog entries loaded.")
         layout.addWidget(self.status_label)
 
-        details_box = QGroupBox("Selection Details")
-        details_layout = QVBoxLayout(details_box)
+        self.details_toggle_button = QToolButton()
+        self.details_toggle_button.setObjectName("CatalogDetailsToggleButton")
+        self.details_toggle_button.setText("Selection Details")
+        self.details_toggle_button.setCheckable(True)
+        self.details_toggle_button.setChecked(True)
+        self.details_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.details_toggle_button.setArrowType(Qt.ArrowType.DownArrow)
+        layout.addWidget(self.details_toggle_button)
+
+        self.details_box = QFrame()
+        self.details_box.setObjectName("CatalogSelectionDetailsBox")
+        details_layout = QVBoxLayout(self.details_box)
+        details_layout.setContentsMargins(0, 0, 0, 0)
         self.details_text = QLabel()
         self.details_text.setWordWrap(True)
         self.details_text.setTextFormat(Qt.TextFormat.RichText)
@@ -284,14 +308,7 @@ class CatalogBrowserPanel(QWidget):
         self.details_text.setMinimumHeight(64)
         self.details_text.setMaximumHeight(96)
         details_layout.addWidget(self.details_text)
-
-        insert_row = QHBoxLayout()
-        self.insert_before_button = QPushButton("Insert Before Selected Surface")
-        self.insert_after_button = QPushButton("Insert After Selected Surface")
-        insert_row.addWidget(self.insert_before_button)
-        insert_row.addWidget(self.insert_after_button)
-        details_layout.addLayout(insert_row)
-        layout.addWidget(details_box)
+        layout.addWidget(self.details_box)
 
     def _configure_toolbar_action_button(
         self, button: QPushButton, icon_name: str, tooltip: str
@@ -362,9 +379,17 @@ class CatalogBrowserPanel(QWidget):
         self.insertable_only_button.setIcon(icon)
         self._update_insertable_only_button_state()
 
+    def _set_details_expanded(self, expanded: bool) -> None:
+        """Show or hide the selection details section."""
+        self.details_box.setVisible(expanded)
+        self.details_toggle_button.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+
     def _wire_signals(self) -> None:
         self.search_edit.textChanged.connect(self.refresh)
         self.reset_filters_button.clicked.connect(self._reset_filters)
+        self.details_toggle_button.toggled.connect(self._set_details_expanded)
         self.insertable_only_button.toggled.connect(
             lambda _checked: self._update_insertable_only_button_state()
         )
@@ -766,6 +791,8 @@ class CatalogBrowserPanel(QWidget):
             self,
             "Delete Marked Catalog Entries",
             f"Delete {len(marked)} marked catalog entries from the local cache?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
         )
         if answer != QMessageBox.StandardButton.Yes:
             return

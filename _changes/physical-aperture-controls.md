@@ -1,6 +1,6 @@
 # Physical Aperture Controls in the Lens Editor
 
-Commit: `c9d52952`
+Commit: `9df83813`
 
 ## What this block changed
 
@@ -24,4 +24,3 @@ Commit: `c9d52952`
   - verifies aperture editing interactions in the surface properties panel
 - `tests/gui/test_surface_service.py`
   - verifies aperture configuration is translated correctly to surface data
-

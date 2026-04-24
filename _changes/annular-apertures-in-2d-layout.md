@@ -1,6 +1,6 @@
 # Annular Apertures in 2D Layout
 
-Commit: `8b55e487`
+Commit: `58acd0bd`
 
 ## What this block changed
 
@@ -19,4 +19,3 @@ Commit: `8b55e487`
 
 - `tests/gui/test_viewer_panel.py`
   - verifies 2D viewer behavior for annular aperture display and related rendering paths
-

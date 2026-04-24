@@ -1,6 +1,6 @@
 # Catalog Filters and Viewer Robustness
 
-Commit: `cdfb3ef4`
+Commit: `d0794a63`
 
 ## What this block changed
 
@@ -29,4 +29,3 @@ Commit: `cdfb3ef4`
   - verifies backend robustness paths related to suppressed warning cases
 - `tests/test_optic.py`
   - verifies optic update behavior around invalid/intermediate states
-

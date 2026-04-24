@@ -1,6 +1,6 @@
 # Theme Propagation and Lens Editor Refresh
 
-Commit: `f866ebda`
+Commit: `460baa24`
 
 ## What this block changed
 
@@ -36,4 +36,3 @@ Commit: `f866ebda`
   - verifies existing viewer figures and sag plots re-theme correctly
 - `tests/gui/test_analysis_panel.py`
   - verifies embedded analysis figures re-theme correctly
-

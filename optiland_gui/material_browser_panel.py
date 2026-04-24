@@ -17,6 +17,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
     QFileDialog,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -28,6 +29,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
     QComboBox,
@@ -212,8 +214,19 @@ class MaterialBrowserPanel(QWidget):
         self.status_label = QLabel("No materials loaded.")
         layout.addWidget(self.status_label)
 
-        details_box = QGroupBox("Selection Details")
-        details_layout = QVBoxLayout(details_box)
+        self.details_toggle_button = QToolButton()
+        self.details_toggle_button.setObjectName("MaterialDetailsToggleButton")
+        self.details_toggle_button.setText("Selection Details")
+        self.details_toggle_button.setCheckable(True)
+        self.details_toggle_button.setChecked(True)
+        self.details_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.details_toggle_button.setArrowType(Qt.ArrowType.DownArrow)
+        layout.addWidget(self.details_toggle_button)
+
+        self.details_box = QFrame()
+        self.details_box.setObjectName("MaterialSelectionDetailsBox")
+        details_layout = QVBoxLayout(self.details_box)
+        details_layout.setContentsMargins(0, 0, 0, 0)
         self.details_text = QLabel()
         self.details_text.setWordWrap(True)
         self.details_text.setTextFormat(Qt.TextFormat.RichText)
@@ -227,7 +240,7 @@ class MaterialBrowserPanel(QWidget):
         details_actions.addWidget(self.open_material_file_button)
         details_actions.addStretch(1)
         details_layout.addLayout(details_actions)
-        layout.addWidget(details_box)
+        layout.addWidget(self.details_box)
 
     def _configure_toolbar_action_button(
         self, button: QPushButton, icon_name: str, tooltip: str
@@ -260,9 +273,17 @@ class MaterialBrowserPanel(QWidget):
             self.delete_marked_button, "delete_marks.svg", self.delete_marked_button.toolTip()
         )
 
+    def _set_details_expanded(self, expanded: bool) -> None:
+        """Show or hide the selection details section."""
+        self.details_box.setVisible(expanded)
+        self.details_toggle_button.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+
     def _wire_signals(self) -> None:
         self.search_edit.textChanged.connect(self.refresh)
         self.reset_filters_button.clicked.connect(self._reset_filters)
+        self.details_toggle_button.toggled.connect(self._set_details_expanded)
         self.mark_filtered_button.clicked.connect(self._mark_filtered_results)
         self.clear_marks_button.clicked.connect(self._clear_marked_results)
         self.delete_marked_button.clicked.connect(self._delete_marked_results)
@@ -542,6 +563,8 @@ class MaterialBrowserPanel(QWidget):
                 self,
                 "Delete Marked Materials",
                 "Delete the marked local imported material entries?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
             )
             != QMessageBox.StandardButton.Yes
         ):

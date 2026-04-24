@@ -363,6 +363,21 @@ def test_catalog_browser_uses_download_button_and_filter_row(qapp) -> None:
     assert panel.match_filter.parentWidget() is panel.filter_row_container
     assert panel.filter_row_container.parentWidget() is panel.table_view_content
     assert panel.results_table.parentWidget() is panel.table_view_content
+    assert panel.insert_before_button.parentWidget() is not panel.details_box
+    assert panel.insert_after_button.parentWidget() is not panel.details_box
+    assert panel.details_box.isHidden() is False
+
+
+def test_catalog_browser_selection_details_can_be_collapsed(qapp) -> None:
+    panel = CatalogBrowserPanel(_DummyConnector())
+
+    panel.details_toggle_button.click()
+    assert panel.details_box.isHidden() is True
+    assert panel.details_toggle_button.arrowType() == Qt.ArrowType.RightArrow
+
+    panel.details_toggle_button.click()
+    assert panel.details_box.isHidden() is False
+    assert panel.details_toggle_button.arrowType() == Qt.ArrowType.DownArrow
 
 
 def test_catalog_browser_update_theme_refreshes_toolbar_and_insertable_icons(

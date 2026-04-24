@@ -4,7 +4,7 @@ This folder documents the change blocks that were implemented in this developmen
 
 ## 1. Lens Editor Navigation and Catalog Controls
 File: [lens-editor-navigation-and-catalog-controls.md](./lens-editor-navigation-and-catalog-controls.md)  
-Commit: `9d1223cc`
+Commit: `26444a01`
 
 Effect:
 - fixed several Lens Editor keyboard navigation issues
@@ -17,7 +17,7 @@ How to use it:
 
 ## 2. 2D Viewer Aspect-Preserving Zoom and Pan
 File: [viewer-aspect-preserving-zoom-and-pan.md](./viewer-aspect-preserving-zoom-and-pan.md)  
-Commit: `1740c870`
+Commit: `3384bb05`
 
 Effect:
 - preserved the `X/Y` ratio during rectangle zoom and right-mouse zoom/pan workflows in the 2D viewer
@@ -27,7 +27,7 @@ How to use it:
 
 ## 3. Catalog Filters and Viewer Robustness
 File: [catalog-filters-and-viewer-robustness.md](./catalog-filters-and-viewer-robustness.md)  
-Commit: `cdfb3ef4`
+Commit: `d0794a63`
 
 Effect:
 - added the insertable-only catalog filter
@@ -39,7 +39,7 @@ How to use it:
 
 ## 4. Physical Aperture Controls in the Lens Editor
 File: [physical-aperture-controls.md](./physical-aperture-controls.md)  
-Commit: `c9d52952`
+Commit: `9df83813`
 
 Effect:
 - introduced physical aperture editing in Lens Editor surface properties
@@ -49,7 +49,7 @@ How to use it:
 
 ## 5. Refined Physical Aperture Editing
 File: [refined-physical-aperture-controls.md](./refined-physical-aperture-controls.md)  
-Commit: `916dcfee`
+Commit: `d0c26a2e`
 
 Effect:
 - improved aperture terminology, field relevance, and editor layout behavior
@@ -59,7 +59,7 @@ How to use it:
 
 ## 6. Annular Apertures in 2D Layout
 File: [annular-apertures-in-2d-layout.md](./annular-apertures-in-2d-layout.md)  
-Commit: `8b55e487`
+Commit: `58acd0bd`
 
 Effect:
 - made annular apertures render correctly in the 2D layout ray display
@@ -69,7 +69,7 @@ How to use it:
 
 ## 7. Asphere Editing and Persistence
 File: [asphere-editing-and-persistence.md](./asphere-editing-and-persistence.md)  
-Commit: `241a4b3a`
+Commit: `768c25d3`
 
 Effect:
 - improved even-asphere editing
@@ -81,7 +81,7 @@ How to use it:
 
 ## 8. Element Grouping Operations
 File: [element-grouping-operations.md](./element-grouping-operations.md)  
-Commit: `84e3016e`
+Commit: `ef0ba75e`
 
 Effect:
 - introduced grouped optical elements in the Lens Editor
@@ -91,7 +91,7 @@ How to use it:
 
 ## 9. Collapsible Element Rows
 File: [collapsible-element-rows.md](./collapsible-element-rows.md)  
-Commit: `f509c604`
+Commit: `b49bdee2`
 
 Effect:
 - showed grouped elements as collapsible rows directly in the Lens Editor table
@@ -101,7 +101,7 @@ How to use it:
 
 ## 10. Element Workflows and Table Persistence
 File: [element-workflows-and-table-persistence.md](./element-workflows-and-table-persistence.md)  
-Commit: `95141ac0`
+Commit: `7308cabd`
 
 Effect:
 - refined grouped-element behavior, selection, context menus, and table state persistence
@@ -111,7 +111,7 @@ How to use it:
 
 ## 11. Embedded Analysis Plot Stabilization
 File: [analysis-panel-embedded-figures.md](./analysis-panel-embedded-figures.md)  
-Commit: `2cfba85a`
+Commit: `f2c8f5c9`
 
 Effect:
 - stabilized embedded analysis plotting
@@ -122,7 +122,7 @@ How to use it:
 
 ## 12. Theme Propagation and Lens Editor Refresh
 File: [theme-propagation-and-lens-editor-refresh.md](./theme-propagation-and-lens-editor-refresh.md)  
-Commit: `f866ebda`
+Commit: `460baa24`
 
 Effect:
 - propagated theme changes through GUI panels and existing plots
@@ -133,7 +133,7 @@ How to use it:
 
 ## 13. Unsaved Changes and Save Prompt Handling
 File: [unsaved-changes-and-save-prompts.md](./unsaved-changes-and-save-prompts.md)  
-Commit: `pending`
+Commit: `75c3ec45`
 
 Effect:
 - added real state-based unsaved-change detection
@@ -141,3 +141,17 @@ Effect:
 
 How to use it:
 - trigger `New`, `Open`, `Import`, `Load Sample`, or app close and confirm save/discard/cancel only when there is real unsaved work
+
+## 14. Catalog and Material Browser Usability Improvements
+File: [catalog-and-material-browser-usability-improvements.md](./catalog-and-material-browser-usability-improvements.md)  
+Commit: `this commit`
+
+Effect:
+- made selection details collapsible in the stock and material browsers
+- moved catalog insert actions into the tools area above the search row
+- required explicit confirmation before deleting marked entries in both browsers
+
+How to use it:
+- collapse or expand `Selection Details` when you need more space
+- use the insert buttons from `Catalog Tools`
+- confirm `Delete Marked` before cached records or imported materials are removed

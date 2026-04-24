@@ -1,6 +1,6 @@
 # Refined Physical Aperture Editing
 
-Commit: `916dcfee`
+Commit: `d0c26a2e`
 
 ## What this block changed
 
@@ -23,4 +23,3 @@ Commit: `916dcfee`
 
 - `tests/gui/test_lens_editor.py`
   - verifies relevant-field visibility and editing behavior for aperture types
-

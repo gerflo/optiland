@@ -1,6 +1,6 @@
 # Lens Editor Navigation and Catalog Controls
 
-Commit: `9d1223cc`
+Commit: `26444a01`
 
 ## What this block changed
 
@@ -29,4 +29,3 @@ Commit: `9d1223cc`
   - verifies catalog browser control behavior after UI changes
 - `tests/gui/test_material_browser_panel.py`
   - verifies shared table-copy interactions in another browser-style panel
-

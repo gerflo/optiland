@@ -1,6 +1,6 @@
 # Embedded Analysis Plot Stabilization
 
-Commit: `2cfba85a`
+Commit: `f2c8f5c9`
 
 ## What this block changed
 
@@ -23,4 +23,3 @@ Commit: `2cfba85a`
   - verifies unknown view arguments are filtered before dispatch
 - `tests/test_analysis.py`
   - verifies the broader analysis stack stays healthy with the embedded plotting changes
-

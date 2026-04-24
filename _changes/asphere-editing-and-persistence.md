@@ -1,6 +1,6 @@
 # Asphere Editing and Persistence
 
-Commit: `241a4b3a`
+Commit: `768c25d3`
 
 ## What this block changed
 
@@ -28,4 +28,3 @@ Commit: `241a4b3a`
   - verifies coefficient serialization stays JSON-safe
 - `tests/gui/test_lens_editor.py`
   - verifies the Even Asphere editor and related GUI behavior
-

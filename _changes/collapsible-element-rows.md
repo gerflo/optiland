@@ -1,6 +1,6 @@
 # Collapsible Element Rows
 
-Commit: `f509c604`
+Commit: `b49bdee2`
 
 ## What this block changed
 
@@ -23,4 +23,3 @@ Commit: `f509c604`
   - verifies collapsed default presentation and grouped-row behavior
 - `tests/gui/test_catalog_pipeline.py`
   - verifies grouped catalog insertions cooperate with the table presentation
-

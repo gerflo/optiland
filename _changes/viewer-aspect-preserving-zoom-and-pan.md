@@ -1,6 +1,6 @@
 # 2D Viewer Aspect-Preserving Zoom and Pan
 
-Commit: `1740c870`
+Commit: `3384bb05`
 
 ## What this block changed
 
@@ -23,4 +23,3 @@ Commit: `1740c870`
 - `tests/gui/test_viewer_panel.py`
   - verifies aspect-ratio preservation during rectangle zoom
   - verifies live ratio preservation during pan-mode zoom interactions
-

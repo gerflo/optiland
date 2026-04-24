@@ -114,6 +114,19 @@ def test_material_browser_panel_renders_result_and_details(qapp) -> None:
     assert panel.results_table.item(1, 1).text() == "Hoya"
     assert "N-BK7" in panel.details_text.text()
     assert "Built-in Glass" in panel.details_text.text()
+    assert panel.details_box.isHidden() is False
+
+
+def test_material_browser_selection_details_can_be_collapsed(qapp) -> None:
+    panel = MaterialBrowserPanel(_DummyConnector())
+
+    panel.details_toggle_button.click()
+    assert panel.details_box.isHidden() is True
+    assert panel.details_toggle_button.arrowType() == Qt.ArrowType.RightArrow
+
+    panel.details_toggle_button.click()
+    assert panel.details_box.isHidden() is False
+    assert panel.details_toggle_button.arrowType() == Qt.ArrowType.DownArrow
 
 
 def test_material_browser_update_theme_refreshes_toolbar_icons(qapp) -> None:
