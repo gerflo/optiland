@@ -35,6 +35,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QRegularExpressionValidator
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -53,6 +54,7 @@ from PySide6.QtWidgets import (
     QSpacerItem,
     QSpinBox,
     QTextEdit,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -75,6 +77,8 @@ from optiland.analysis import (
 from optiland.mtf import FFTMTF, GeometricMTF
 
 from . import gui_plot_utils
+from .config import CONTROL_HEIGHT_PX
+from .theme_manager import get_theme
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -112,7 +116,11 @@ class CustomMatplotlibToolbar(NavigationToolbar):
 
     def _toolbar_foreground_color(self) -> QColor:
         """Return the palette color used to tint toolbar icons."""
-        palette = self.palette()
+        app = QApplication.instance()
+        theme_id = app.property("activeThemeId") if app is not None else None
+        if theme_id:
+            return QColor(get_theme(str(theme_id)).palette["text"])
+        palette = app.palette() if app is not None else self.palette()
         color = palette.color(palette.ColorRole.ButtonText)
         if not color.isValid():
             color = palette.color(palette.ColorRole.WindowText)
@@ -220,6 +228,7 @@ class AnalysisPanel(QWidget):
         self.current_plot_page_index = -1
         self.active_mpl_canvas_widget = None
         self.active_mpl_toolbar_widget = None
+        self.active_mpl_toolbar_buttons: list[QToolButton] = []
         self.motion_notify_cid = None
         self.current_settings_widgets = {}
         # Mapping of display name → class, built from the registry at init.
@@ -246,14 +255,17 @@ class AnalysisPanel(QWidget):
             )
         )
 
-        self.btnRun = QPushButton()
+        self.btnRun = QToolButton()
         self.btnRun.setObjectName("RunAnalysisButton")
         self.btnRun.setToolTip("Run Selected Analysis")
-        self.btnRunAll = QPushButton()
+        self.btnRun.setIconSize(QSize(18, 18))
+        self.btnRunAll = QToolButton()
         self.btnRunAll.setObjectName("RunAllAnalysisButton")
-        self.btnStop = QPushButton()
+        self.btnRunAll.setIconSize(QSize(18, 18))
+        self.btnStop = QToolButton()
         self.btnStop.setObjectName("StopAnalysisButton")
         self.btnStop.setToolTip("Stop Analysis")
+        self.btnStop.setIconSize(QSize(18, 18))
 
         top_bar_layout.addWidget(self.btnRun)
         top_bar_layout.addWidget(self.btnRunAll)
@@ -353,6 +365,8 @@ class AnalysisPanel(QWidget):
     def _setup_plot_title_bar(self, parent_layout):
         """Creates the title bar for the plot area."""
         self.plot_area_title_bar_layout = QHBoxLayout()
+        self.plot_area_title_bar_layout.setContentsMargins(0, 2, 0, 2)
+        self.plot_area_title_bar_layout.setSpacing(6)
         self.plotTitleLabel = QLabel("No Analysis Run")
         self.plotTitleLabel.setObjectName("PlotTitleLabel")
         self.plot_area_title_bar_layout.addWidget(self.plotTitleLabel)
@@ -365,18 +379,21 @@ class AnalysisPanel(QWidget):
             self.mpl_toolbar_in_titlebar_container
         )
         self.mpl_toolbar_in_titlebar_layout.setContentsMargins(0, 0, 0, 0)
+        self.mpl_toolbar_in_titlebar_layout.setSpacing(2)
         self.plot_area_title_bar_layout.addWidget(
             self.mpl_toolbar_in_titlebar_container
         )
         self.mpl_toolbar_in_titlebar_container.setVisible(False)
         self.plot_area_title_bar_layout.addStretch()
 
-        self.btnRefreshPlot = QPushButton()
+        self.btnRefreshPlot = QToolButton()
         self.btnRefreshPlot.setObjectName("RefreshPlotButton")
+        self.btnRefreshPlot.setIconSize(QSize(18, 18))
         self.plot_area_title_bar_layout.addWidget(self.btnRefreshPlot)
 
-        self.toggleSettingsButton = QPushButton()
+        self.toggleSettingsButton = QToolButton()
         self.toggleSettingsButton.setObjectName("ToggleSettingsButton")
+        self.toggleSettingsButton.setIconSize(QSize(18, 18))
         self.plot_area_title_bar_layout.addWidget(self.toggleSettingsButton)
 
         parent_layout.addLayout(self.plot_area_title_bar_layout)
@@ -1072,11 +1089,10 @@ class AnalysisPanel(QWidget):
 
         # Clean up old UI widgets
         if self.active_mpl_toolbar_widget:
-            self.mpl_toolbar_in_titlebar_layout.removeWidget(
-                self.active_mpl_toolbar_widget
-            )
             self.active_mpl_toolbar_widget.deleteLater()
             self.active_mpl_toolbar_widget = None
+        self._clear_layout(self.mpl_toolbar_in_titlebar_layout)
+        self.active_mpl_toolbar_buttons = []
 
         self.mpl_toolbar_in_titlebar_container.setVisible(False)
         self.cursor_coord_label.setVisible(False)
@@ -1207,11 +1223,42 @@ class AnalysisPanel(QWidget):
         gui_plot_utils.apply_theme_to_existing_figure(canvas.figure)
 
     def _setup_plot_toolbar(self, canvas):
-        """Creates and attaches a new custom Matplotlib toolbar."""
+        """Create a custom left-aligned button strip backed by Matplotlib actions."""
         self.active_mpl_toolbar_widget = CustomMatplotlibToolbar(
-            canvas, self.mpl_toolbar_in_titlebar_container
+            canvas, self
         )
-        self.mpl_toolbar_in_titlebar_layout.addWidget(self.active_mpl_toolbar_widget)
+        self.active_mpl_toolbar_widget.setObjectName("AnalysisPlotToolbarTitle")
+        self.active_mpl_toolbar_widget.setVisible(False)
+        self.active_mpl_toolbar_widget.update_theme()
+        self.active_mpl_toolbar_buttons = []
+
+        action_order = (
+            "Reset original view",
+            "Back to previous view",
+            "Forward to next view",
+            "Pan axes with left mouse, zoom with right",
+            "Zoom to rectangle",
+            "Configure subplots",
+            "Edit axis, curve and image parameters",
+            "Save the figure",
+        )
+        actions_by_tooltip = {
+            action.toolTip(): action for action in self.active_mpl_toolbar_widget.actions()
+        }
+        for tooltip in action_order:
+            action = actions_by_tooltip.get(tooltip)
+            if action is None:
+                continue
+            button = QToolButton(self.mpl_toolbar_in_titlebar_container)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setAutoRaise(False)
+            button.setFixedSize(QSize(CONTROL_HEIGHT_PX, CONTROL_HEIGHT_PX))
+            button.setIconSize(QSize(18, 18))
+            button.setDefaultAction(action)
+            button.setText("")
+            button.setObjectName(action.iconText() or action.text() or "AnalysisToolbarButton")
+            self.mpl_toolbar_in_titlebar_layout.addWidget(button)
+            self.active_mpl_toolbar_buttons.append(button)
         self.mpl_toolbar_in_titlebar_container.setVisible(True)
 
     def _display_placeholder(self, layout):

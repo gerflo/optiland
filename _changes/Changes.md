@@ -155,3 +155,18 @@ How to use it:
 - collapse or expand `Selection Details` when you need more space
 - use the insert buttons from `Catalog Tools`
 - confirm `Delete Marked` before cached records or imported materials are removed
+
+## 15. GUI Toolbar and Window Polish
+File: [gui-toolbar-and-window-polish.md](./gui-toolbar-and-window-polish.md)  
+Commit: `this commit`
+
+Effect:
+- aligned Analysis toolbar/control button styling and behavior across themes
+- reset viewer framing only on optic load, not on every optic change
+- hardened frameless-window event filtering during teardown paths
+- softened grouped Lens Editor row contrast
+
+How to use it:
+- use the Analysis plot toolbar and right-side Analysis controls with matching hover/press/checked states
+- load a new optic to reframe viewers, then continue editing without losing the current view framing
+- close or refresh GUI windows without deleted-wrapper event-filter errors surfacing

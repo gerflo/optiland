@@ -79,11 +79,11 @@ class FramelessWindow(QMainWindow):
         """Handle resize gestures even when child widgets cover the window edge."""
         try:
             if not self._frameless_enabled:
-                return super().eventFilter(watched, event)
+                return self._delegate_event_filter(watched, event)
             if not isinstance(watched, QWidget):
-                return super().eventFilter(watched, event)
+                return self._delegate_event_filter(watched, event)
             if watched.window() is not self:
-                return super().eventFilter(watched, event)
+                return self._delegate_event_filter(watched, event)
 
             if event.type() == QEvent.MouseMove:
                 local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
@@ -108,9 +108,16 @@ class FramelessWindow(QMainWindow):
                     self.resize_area = None
                     self.setCursor(Qt.ArrowCursor)
                     return True
-        except RuntimeError:
+        except Exception:
             return False
 
+        try:
+            return self._delegate_event_filter(watched, event)
+        except Exception:
+            return False
+
+    def _delegate_event_filter(self, watched: QObject, event: QEvent) -> bool:
+        """Forward to Qt's default event-filter implementation."""
         return super().eventFilter(watched, event)
 
     def _uninstall_global_event_filter(self) -> None:

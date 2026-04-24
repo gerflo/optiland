@@ -92,4 +92,12 @@ QComboBox::drop-down {{
     max-height: {CONTROL_HEIGHT_PX}px;
     padding: {TOOLBUTTON_PADDING_PX}px;
 }}
+
+QToolBar#AnalysisPlotToolbarTitle QToolButton {{
+    min-width: {CONTROL_HEIGHT_PX}px;
+    max-width: {CONTROL_HEIGHT_PX}px;
+    min-height: {CONTROL_HEIGHT_PX}px;
+    max-height: {CONTROL_HEIGHT_PX}px;
+    padding: {TOOLBUTTON_PADDING_PX}px;
+}}
 """

@@ -20,3 +20,20 @@ def test_frameless_window_event_filter_ignores_deleted_widget_wrappers(qapp):
     handled = window.eventFilter(broken, event)
 
     assert handled is False
+
+
+def test_frameless_window_event_filter_ignores_super_path_failures(qapp, monkeypatch):
+    window = FramelessWindow()
+    event = QEvent(QEvent.Type.MouseMove)
+
+    monkeypatch.setattr(
+        window,
+        "_delegate_event_filter",
+        lambda watched, evt: (_ for _ in ()).throw(
+            RuntimeError("Internal C++ object already deleted")
+        ),
+    )
+
+    handled = window.eventFilter(QWidget(), event)
+
+    assert handled is False

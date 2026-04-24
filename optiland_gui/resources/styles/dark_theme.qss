@@ -497,23 +497,6 @@ AnalysisPanel QScrollArea#PageButtonsScrollArea QPushButton:checked {
     /* background-color: #1e90ff; */
     border: 1px solid #005a9e;
 }
-AnalysisPanel QPushButton#ToggleSettingsButton {
-    background-color: transparent; /* Makes the background transparent */
-    border: none;                  /* Removes any border */
-    padding: 0px;                  /* Adjust padding if needed, 0px for minimal space */
-    margin: 0px;                   /* Adjust margin if needed */
-    color: #E0E0E0; 
-}
-AnalysisPanel QPushButton#ToggleSettingsButton:hover {
-    background-color: #5A5A5A; /* Subtle light semi-transparent highlight for dark theme */
-    border-radius: 3px; /* Optional: if you want the highlight to have rounded corners */
-}
-
-AnalysisPanel QPushButton#ToggleSettingsButton:checked { /* If you used checkable state styling before */
-    background-color: transparent;
-    border: none;
-}
-
 AnalysisPanel > QFrame#MainSeparatorLine {
     /* styles */
 }
@@ -546,29 +529,32 @@ AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle { /* New
     border: none;
     padding: 0px; /* Minimal padding for the toolbar itself */
     margin: 0px;
-    min-height: 20px;  /* Attempt to make it thinner */
-    max-height: 20px;
+    min-height: 26px;
+    max-height: 26px;
 }
 
-/* Buttons within the Matplotlib Toolbar */
+/* Buttons within the visible Matplotlib toolbar strip */
+AnalysisPanel QFrame#PlotDisplayFrame QWidget#MPLToolbarInTitlebarContainer QToolButton,
 AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle QToolButton {
-    padding: 0px 1px;   /* Minimal padding: top/bottom 0, left/right 1 */
-    margin: 0px 0px;    /* No margin between buttons for tighter packing */
-    background-color: transparent;
-    border: 1px solid transparent;
-    border-radius: 2px;
-}
-/* ... (hover, pressed, checked states for QToolButton as before) ... */
-AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle QToolButton:hover {
-    background-color: rgba(100, 100, 100, 0.15); 
-    /* background-color: rgba(0, 0, 0, 0.1); */ 
-    border: 1px solid rgba(120, 120, 120, 0.5);
+    padding: 1px;
+    margin: 0px;
+    background-color: #1A222C;
+    border: 1px solid #3A4551;
+    border-radius: 4px;
 }
 
+AnalysisPanel QFrame#PlotDisplayFrame QWidget#MPLToolbarInTitlebarContainer QToolButton:hover,
+AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle QToolButton:hover {
+    background-color: #243140;
+    border: 1px solid #5D7FA4;
+}
+
+AnalysisPanel QFrame#PlotDisplayFrame QWidget#MPLToolbarInTitlebarContainer QToolButton:pressed,
+AnalysisPanel QFrame#PlotDisplayFrame QWidget#MPLToolbarInTitlebarContainer QToolButton:checked,
 AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle QToolButton:pressed,
 AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle QToolButton:checked {
-    background-color: rgba(0, 120, 215, 0.2); 
-    border: 1px solid rgba(0, 120, 215, 0.7);
+    background-color: #2D435C;
+    border: 1px solid #7EA3CC;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -576,17 +562,21 @@ AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle QToolBut
 /* -------------------------------------------------------------------------- */
 
 #ToggleSettingsButton {
-    background-color: transparent;
-    border: 1px solid transparent;
+    background-color: #1A222C;
+    border: 1px solid #3A4551;
+    padding: 1px;
+    border-radius: 4px;
 }
 
 #ToggleSettingsButton:hover {
-    background-color: rgba(255, 255, 255, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.3);
+    background-color: #243140;
+    border: 1px solid #5D7FA4;
 }
 
-#ToggleSettingsButton:pressed {
-    background-color: rgba(255, 255, 255, 0.1);
+#ToggleSettingsButton:pressed,
+#ToggleSettingsButton:checked {
+    background-color: #2D435C;
+    border: 1px solid #7EA3CC;
 }
 /* -------------------------------------------------------------------------- */
 /* Analysis Panel - Fix for Refresh Button Background (Dark Theme)            */
@@ -594,21 +584,23 @@ AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle QToolBut
 
 #RefreshPlotButton, #RunAllAnalysisButton, #StopAnalysisButton,
 #RunAnalysisButton {
-    background-color: transparent;
-    border: 1px solid transparent;
+    background-color: #1A222C;
+    border: 1px solid #3A4551;
     padding: 1px;
     border-radius: 4px;
 }
 
 #RefreshPlotButton:hover, #RunAllAnalysisButton:hover, #StopAnalysisButton:hover,  
 #RunAnalysisButton:hover{
-    background-color: rgba(255, 255, 255, 0.2);
-    border: 1px solid rgba(255, 255, 255, 0.3);
+    background-color: #243140;
+    border: 1px solid #5D7FA4;
 }
 
 #RefreshPlotButton:pressed, #RunAllAnalysisButton:pressed, #StopAnalysisButton:pressed,
-#RunAnalysisButton:pressed  {
-    background-color: rgba(255, 255, 255, 0.1);
+#RunAnalysisButton:pressed, #RefreshPlotButton:checked, #RunAllAnalysisButton:checked,
+#StopAnalysisButton:checked, #RunAnalysisButton:checked {
+    background-color: #2D435C;
+    border: 1px solid #7EA3CC;
 }
 
 QTableWidget QLineEdit {
@@ -1081,6 +1073,11 @@ QToolBar#QuickActionsToolbar QToolButton {
     border: 1px solid #3A4551;
     background-color: #1A222C;
     color: #E6EDF3;
+}
+
+#ViewerToolbarContainer QToolButton {
+    padding: 1px;
+    border-radius: 4px;
 }
 
 #ViewerToolbarContainer QToolButton:hover,

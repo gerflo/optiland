@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QToolButton
 
 
 @pytest.fixture()
@@ -210,3 +213,154 @@ class TestAnalysisViewArgFiltering:
         panel._draw_plot_on_canvas(_FakeAnalysis(), canvas, {})
 
         assert calls == [canvas.figure]
+
+
+class TestAnalysisToolbarThemeing:
+    def test_analysis_icon_only_buttons_match_viewer_button_type(self, panel):
+        """Icon-only analysis controls should use the same tool button class as viewer toolbars."""
+        assert isinstance(panel.btnRun, QToolButton)
+        assert isinstance(panel.btnRunAll, QToolButton)
+        assert isinstance(panel.btnStop, QToolButton)
+        assert isinstance(panel.btnRefreshPlot, QToolButton)
+        assert isinstance(panel.toggleSettingsButton, QToolButton)
+
+    def test_embedded_analysis_toolbar_uses_expected_object_name(self, panel):
+        """Embedded analysis backend toolbar should expose the QSS hook object name."""
+        canvas = panel._create_new_plot_canvas({"figsize": (7, 5)})
+
+        panel._setup_plot_toolbar(canvas)
+
+        assert panel.active_mpl_toolbar_widget is not None
+        assert panel.active_mpl_toolbar_widget.objectName() == "AnalysisPlotToolbarTitle"
+        assert panel.active_mpl_toolbar_widget.isHidden() is True
+
+    def test_embedded_analysis_toolbar_applies_local_fixed_button_geometry(self, panel):
+        """Analysis should render a local left-aligned QToolButton strip for MPL actions."""
+        from optiland_gui.config import CONTROL_HEIGHT_PX
+
+        canvas = panel._create_new_plot_canvas({"figsize": (7, 5)})
+        panel._setup_plot_toolbar(canvas)
+        toolbar = panel.active_mpl_toolbar_widget
+
+        assert toolbar is not None
+        assert panel.active_mpl_toolbar_buttons
+
+        for button in panel.active_mpl_toolbar_buttons:
+            assert button.minimumWidth() == CONTROL_HEIGHT_PX
+            assert button.maximumWidth() == CONTROL_HEIGHT_PX
+            assert button.minimumHeight() == CONTROL_HEIGHT_PX
+            assert button.maximumHeight() == CONTROL_HEIGHT_PX
+            assert button.parent() is panel.mpl_toolbar_in_titlebar_container
+
+    def test_plot_title_bar_layout_uses_vertical_padding(self, panel):
+        """Analysis plot title bar should keep some vertical breathing room."""
+        margins = panel.plot_area_title_bar_layout.contentsMargins()
+
+        assert margins.top() == 2
+        assert margins.bottom() == 2
+        assert panel.plot_area_title_bar_layout.spacing() == 6
+
+    def test_viewer_toolbar_qss_keeps_padding_and_radius_in_final_override(self):
+        """Final viewer-toolbar QSS overrides should preserve the shared button geometry."""
+        styles_dir = (
+            Path(__file__).resolve().parents[2]
+            / "optiland_gui"
+            / "resources"
+            / "styles"
+        )
+
+        for theme_name in ("dark_theme.qss", "light_theme.qss"):
+            content = (styles_dir / theme_name).read_text(encoding="utf-8")
+            final_block = content.rsplit(
+                "#ViewerToolbarContainer QToolButton,\nQToolBar#QuickActionsToolbar QToolButton {",
+                1,
+            )[-1]
+            assert "#ViewerToolbarContainer QToolButton {\n    padding: 1px;\n    border-radius: 4px;\n}" in final_block
+
+    def test_shared_control_override_matches_analysis_and_viewer_toolbar_geometry(self):
+        """The shared control override should enforce identical geometry for viewer and analysis toolbars."""
+        config_path = (
+            Path(__file__).resolve().parents[2] / "optiland_gui" / "config.py"
+        )
+        content = config_path.read_text(encoding="utf-8")
+
+        assert "#ViewerToolbarContainer QToolButton {{" in content
+        assert "QToolBar#AnalysisPlotToolbarTitle QToolButton {{" in content
+
+    def test_dark_analysis_toolbar_qss_uses_full_toolbutton_height(self):
+        """Dark analysis toolbar should not clamp the embedded MPL toolbar too short."""
+        styles_path = (
+            Path(__file__).resolve().parents[2]
+            / "optiland_gui"
+            / "resources"
+            / "styles"
+            / "dark_theme.qss"
+        )
+        content = styles_path.read_text(encoding="utf-8")
+
+        assert "QToolBar#AnalysisPlotToolbarTitle" in content
+        assert "min-height: 26px;" in content
+        assert "max-height: 26px;" in content
+
+    def test_dark_analysis_toolbar_qss_targets_visible_button_strip(self):
+        """Dark MPL toolbar styling must hit the reparented visible buttons."""
+        styles_path = (
+            Path(__file__).resolve().parents[2]
+            / "optiland_gui"
+            / "resources"
+            / "styles"
+            / "dark_theme.qss"
+        )
+        content = styles_path.read_text(encoding="utf-8")
+
+        assert (
+            "QWidget#MPLToolbarInTitlebarContainer QToolButton,\n"
+            "AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle"
+            " QToolButton {"
+        ) in content
+        assert (
+            "QWidget#MPLToolbarInTitlebarContainer QToolButton:hover,\n"
+            "AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle"
+            " QToolButton:hover {"
+        ) in content
+        assert (
+            "QWidget#MPLToolbarInTitlebarContainer QToolButton:checked,\n"
+            "AnalysisPanel QFrame#PlotDisplayFrame QToolBar#AnalysisPlotToolbarTitle"
+            " QToolButton:pressed"
+        ) in content
+
+    def test_light_analysis_toolbar_qss_matches_toolbar_height(self):
+        """Light analysis toolbar should use the same explicit toolbar height."""
+        styles_path = (
+            Path(__file__).resolve().parents[2]
+            / "optiland_gui"
+            / "resources"
+            / "styles"
+            / "light_theme.qss"
+        )
+        content = styles_path.read_text(encoding="utf-8")
+
+        assert "QToolBar#AnalysisPlotToolbarTitle" in content
+        assert "min-height: 26px;" in content
+        assert "max-height: 26px;" in content
+
+    def test_toolbar_uses_application_palette_for_icon_tint(self, qapp):
+        """Toolbar icon tint should follow the live theme's text color."""
+        from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+        from matplotlib.figure import Figure
+
+        from optiland_gui.analysis_panel import CustomMatplotlibToolbar
+
+        figure = Figure(figsize=(4, 3), dpi=100)
+        canvas = FigureCanvas(figure)
+        toolbar = CustomMatplotlibToolbar(canvas)
+
+        qapp.setProperty("activeThemeId", "tokyo_night")
+
+        widget_palette = toolbar.palette()
+        widget_palette.setColor(QPalette.ColorRole.ButtonText, QColor("#050505"))
+        toolbar.setPalette(widget_palette)
+
+        tint = toolbar._toolbar_foreground_color()
+
+        assert tint.name().lower() == "#c0caf5"

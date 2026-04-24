@@ -297,7 +297,7 @@ class ViewerPanel(QWidget):
 
         main_layout.addWidget(self.tabWidget)
 
-        self.connector.opticLoaded.connect(self.update_viewers)
+        self.connector.opticLoaded.connect(self.reset_original_views)
         self.connector.opticChanged.connect(self.update_viewers)
 
     def _settings_key(self, name: str) -> str:
@@ -357,6 +357,17 @@ class ViewerPanel(QWidget):
             self.viewer2D.plot_optic(preserve_zoom=preserve)
         if self.viewer3D:
             self.viewer3D.render_optic()
+
+    @Slot()
+    def reset_original_views(self):
+        """Reset all viewer tabs to their original framing after loading a system."""
+        if self.viewer2D:
+            self.viewer2D.reset_view()
+        if self.viewer3D:
+            self.viewer3D.render_optic()
+        if self.sagViewer:
+            self.sagViewer.update_surface_range()
+            self.sagViewer.plot_sag()
 
     def update_theme(self, theme_name: str):
         """Updates the theme for all viewers in this panel."""

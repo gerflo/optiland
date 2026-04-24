@@ -612,47 +612,45 @@ AnalysisPanel QScrollArea#PageButtonsScrollArea QPushButton:checked {
     border: none;
 }
 
+QToolBar#AnalysisPlotToolbarTitle {
+    min-height: 26px;
+    max-height: 26px;
+}
+
 /* Style all buttons on the MPL toolbar and the refresh button */
 #MPLToolbarInTitlebarContainer QToolButton {
-    background-color: #6C757D;
-    border: 1px solid transparent;
+    background-color: #F7FAFD;
+    border: 1px solid #C8D2DE;
+    padding: 1px;
+    border-radius: 4px;
+}
+
+#RefreshPlotButton, #RunAllAnalysisButton, #StopAnalysisButton,
+#RunAnalysisButton, #ToggleSettingsButton {
+    background-color: #F7FAFD;
+    border: 1px solid #C8D2DE;
     padding: 1px;
     border-radius: 4px;
 }
 
 /* Style for when the mouse is over the buttons */
 #MPLToolbarInTitlebarContainer QToolButton:hover,
-#RefreshPlotButton:hover {
-    background-color: #495057;
-    border: 1px solid rgba(0, 0, 0, 0.15);
-    color: #000000; /* Make icon slightly darker on hover */
+#RefreshPlotButton:hover, #ToggleSettingsButton:hover, #RunAllAnalysisButton:hover,
+#StopAnalysisButton:hover, #RunAnalysisButton:hover {
+    background-color: #E4EFFB;
+    border: 1px solid #97B5D3;
+    color: #12263A;
 }
 
 /* Style for when a toggleable button (like Pan or Zoom) is active */
-#MPLToolbarInTitlebarContainer QToolButton:checked {
-    background-color: #cce7ff; /* A light blue to indicate selection */
-    border: 1px solid #007ACC;
-    color: #005a9e; /* A darker blue for the icon when checked */
-}
-
-
-#RefreshPlotButton, #RunAllAnalysisButton, #StopAnalysisButton,
-#RunAnalysisButton, #ToggleSettingsButton {
-    background-color: transparent;
-    border: 1px solid transparent;
-    padding: 1px;
-    border-radius: 2px;
-}
-
-#RefreshPlotButton:hover,  #ToggleSettingsButton:hover, #RunAllAnalysisButton:hover, #StopAnalysisButton:hover,
-#RunAnalysisButton:hover {
-    background-color: #ADB5BD;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-#RefreshPlotButton:pressed, #RunAllAnalysisButton:pressed, #StopAnalysisButton:pressed, 
+#MPLToolbarInTitlebarContainer QToolButton:checked,
+#RefreshPlotButton:checked, #RunAllAnalysisButton:checked, #StopAnalysisButton:checked,
+#RunAnalysisButton:checked, #ToggleSettingsButton:checked,
+#RefreshPlotButton:pressed, #RunAllAnalysisButton:pressed, #StopAnalysisButton:pressed,
 #RunAnalysisButton:pressed, #ToggleSettingsButton:pressed {
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: #D4E5F9;
+    border: 1px solid #4E87C6;
+    color: #0B4F8A;
 }
 
 #ViewerToolbarContainer,
@@ -1129,6 +1127,11 @@ QToolBar#QuickActionsToolbar QToolButton {
     border: 1px solid #C8D2DE;
     background-color: #F7FAFD;
     color: #1F2D3A;
+}
+
+#ViewerToolbarContainer QToolButton {
+    padding: 1px;
+    border-radius: 4px;
 }
 
 #ViewerToolbarContainer QToolButton:hover,

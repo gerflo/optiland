@@ -370,3 +370,107 @@ def test_sag_viewer_rethemes_existing_figure_after_plot(
     panel.sagViewer.plot_sag()
 
     assert calls
+
+
+def test_viewer_panel_resets_original_views_when_optic_is_loaded(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        panel.viewer2D,
+        "reset_view",
+        lambda: calls.append("2d-reset"),
+    )
+    if panel.viewer3D is not None:
+        monkeypatch.setattr(
+            panel.viewer3D,
+            "render_optic",
+            lambda: calls.append("3d-render"),
+        )
+    monkeypatch.setattr(
+        panel.sagViewer,
+        "update_surface_range",
+        lambda: calls.append("sag-range"),
+    )
+    monkeypatch.setattr(
+        panel.sagViewer,
+        "plot_sag",
+        lambda: calls.append("sag-plot"),
+    )
+
+    panel.connector.opticLoaded.emit()
+
+    assert "2d-reset" in calls
+    assert "sag-range" in calls
+    assert "sag-plot" in calls
+    if panel.viewer3D is not None:
+        assert "3d-render" in calls
+
+
+def test_viewer_panel_optic_changed_updates_without_forcing_view_reset(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        panel.viewer2D,
+        "reset_view",
+        lambda: calls.append("2d-reset"),
+    )
+    monkeypatch.setattr(
+        panel.viewer2D,
+        "plot_optic",
+        lambda preserve_zoom=False: calls.append(("2d-update", preserve_zoom)),
+    )
+    if panel.viewer3D is not None:
+        monkeypatch.setattr(
+            panel.viewer3D,
+            "render_optic",
+            lambda: calls.append("3d-render"),
+        )
+    monkeypatch.setattr(
+        panel.sagViewer,
+        "plot_sag",
+        lambda: calls.append("sag-plot"),
+    )
+
+    panel.connector.opticChanged.emit()
+
+    assert "2d-reset" not in calls
+    assert "sag-plot" not in calls
+    assert ("2d-update", panel.preserve_zoom_checkbox.isChecked()) in calls
+    if panel.viewer3D is not None:
+        assert "3d-render" in calls

@@ -919,7 +919,7 @@ class LensEditor(QWidget):
 
     _material_names_cache: list[str] | None = None
     TABLE_SETTINGS_PREFIX = "LensEditor/Table"
-    ElementRowBackgroundFactor = 150
+    ElementRowBackgroundFactor = 130
 
     def __init__(self, connector: OptilandConnector, parent=None):
         super().__init__(parent)
