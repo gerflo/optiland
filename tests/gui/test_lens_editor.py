@@ -8,7 +8,7 @@ import pytest
 from PySide6.QtCore import QEvent, QPoint, Qt
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QLineEdit
+from PySide6.QtWidgets import QLineEdit, QTableWidgetSelectionRange
 
 
 @pytest.fixture()
@@ -160,7 +160,7 @@ def test_lens_editor_context_menu_contains_copy_actions(qapp, mock_connector, mo
     from optiland_gui.lens_editor import LensEditor
 
     editor = LensEditor(mock_connector)
-    action_texts: list[str] = []
+    action_state: dict[str, bool] = {}
     mock_connector.get_group_rows.return_value = []
 
     class _FakeMenu:
@@ -173,6 +173,13 @@ def test_lens_editor_context_menu_contains_copy_actions(qapp, mock_connector, mo
         def addAction(self, text):  # noqa: ANN001
             action = MagicMock()
             action.text.return_value = text
+            enabled = {"value": True}
+
+            def _set_enabled(value):  # noqa: ANN001
+                enabled["value"] = bool(value)
+
+            action.setEnabled.side_effect = _set_enabled
+            action.isEnabled.side_effect = lambda: enabled["value"]
             self._actions.append(action)
             return action
 
@@ -180,7 +187,7 @@ def test_lens_editor_context_menu_contains_copy_actions(qapp, mock_connector, mo
             return None
 
         def exec(self, *_args, **_kwargs):  # noqa: ANN201
-            action_texts.extend(action.text() for action in self._actions)
+            action_state.update({action.text(): action.isEnabled() for action in self._actions})
             return None
 
     monkeypatch.setattr("optiland_gui.lens_editor.QMenu", _FakeMenu)
@@ -190,14 +197,172 @@ def test_lens_editor_context_menu_contains_copy_actions(qapp, mock_connector, mo
 
     editor.show_context_menu(editor.tableWidget.visualItemRect(target_item).center())
 
-    assert action_texts[:4] == ["Copy Cell", "Cut Cell", "Copy Row", "Paste Cell"]
-    assert "Create Element from Selected Surfaces" in action_texts
-    assert "Select Entire Element" in action_texts
-    assert "Rename Element" in action_texts
-    assert "Ungroup Element" in action_texts
-    assert "Flip Element" in action_texts
-    assert "Duplicate Element" in action_texts
-    assert "Move Element..." in action_texts
+    assert list(action_state)[:4] == ["Copy Cell", "Cut Cell", "Copy Row", "Paste Cell"]
+    assert "Create Element from Selected Surfaces" not in action_state
+    assert "Select Entire Element" not in action_state
+    assert "Rename Element" not in action_state
+    assert "Ungroup Element" not in action_state
+    assert "Flip Element" not in action_state
+    assert "Duplicate Element" not in action_state
+    assert "Move Element..." not in action_state
+
+
+def test_lens_editor_context_menu_shows_create_element_only_for_valid_multi_selection(
+    qapp, mock_connector, monkeypatch
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    action_state = {}
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    editor._select_surface_rows([1, 2])
+
+    class _FakeMenu:
+        def __init__(self, *_args, **_kwargs):
+            self._actions = []
+
+        def setObjectName(self, *_args, **_kwargs):
+            return None
+
+        def addAction(self, text):  # noqa: ANN001
+            action = MagicMock()
+            action.text.return_value = text
+            enabled = {"value": True}
+
+            def _set_enabled(value):  # noqa: ANN001
+                enabled["value"] = bool(value)
+
+            action.setEnabled.side_effect = _set_enabled
+            action.isEnabled.side_effect = lambda: enabled["value"]
+            self._actions.append(action)
+            return action
+
+        def addSeparator(self):
+            return None
+
+        def exec(self, *_args, **_kwargs):  # noqa: ANN201
+            action_state.update({action.text(): action.isEnabled() for action in self._actions})
+            return None
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QMenu", _FakeMenu)
+
+    target_item = editor.tableWidget.item(1, mock_connector.COL_COMMENT)
+    assert target_item is not None
+
+    editor.show_context_menu(editor.tableWidget.visualItemRect(target_item).center())
+
+    assert action_state["Create Element from Selected Surfaces"] is True
+    assert "Select Entire Element" not in action_state
+
+
+def test_lens_editor_context_menu_shows_element_actions_for_grouped_surface(
+    qapp, mock_connector, monkeypatch
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    action_state = {}
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+
+    class _FakeMenu:
+        def __init__(self, *_args, **_kwargs):
+            self._actions = []
+
+        def setObjectName(self, *_args, **_kwargs):
+            return None
+
+        def addAction(self, text):  # noqa: ANN001
+            action = MagicMock()
+            action.text.return_value = text
+            enabled = {"value": True}
+
+            def _set_enabled(value):  # noqa: ANN001
+                enabled["value"] = bool(value)
+
+            action.setEnabled.side_effect = _set_enabled
+            action.isEnabled.side_effect = lambda: enabled["value"]
+            self._actions.append(action)
+            return action
+
+        def addSeparator(self):
+            return None
+
+        def exec(self, *_args, **_kwargs):  # noqa: ANN201
+            action_state.update({action.text(): action.isEnabled() for action in self._actions})
+            return None
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QMenu", _FakeMenu)
+
+    target_item = editor.tableWidget.item(1, mock_connector.COL_COMMENT)
+    assert target_item is not None
+
+    editor.show_context_menu(editor.tableWidget.visualItemRect(target_item).center())
+
+    assert "Select Entire Element" in action_state
+    assert "Rename Element" in action_state
+    assert "Ungroup Element" in action_state
+    assert "Flip Element" in action_state
+    assert "Duplicate Element" in action_state
+    assert "Move Element..." in action_state
+
+
+def test_lens_editor_context_menu_hides_create_element_for_already_grouped_selection(
+    qapp, mock_connector, monkeypatch
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    action_state = {}
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    editor._select_surface_rows([1, 2])
+
+    class _FakeMenu:
+        def __init__(self, *_args, **_kwargs):
+            self._actions = []
+
+        def setObjectName(self, *_args, **_kwargs):
+            return None
+
+        def addAction(self, text):  # noqa: ANN001
+            action = MagicMock()
+            action.text.return_value = text
+            enabled = {"value": True}
+
+            def _set_enabled(value):  # noqa: ANN001
+                enabled["value"] = bool(value)
+
+            action.setEnabled.side_effect = _set_enabled
+            action.isEnabled.side_effect = lambda: enabled["value"]
+            self._actions.append(action)
+            return action
+
+        def addSeparator(self):
+            return None
+
+        def exec(self, *_args, **_kwargs):  # noqa: ANN201
+            action_state.update({action.text(): action.isEnabled() for action in self._actions})
+            return None
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QMenu", _FakeMenu)
+
+    target_item = editor.tableWidget.item(1, mock_connector.COL_COMMENT)
+    assert target_item is not None
+
+    editor.show_context_menu(editor.tableWidget.visualItemRect(target_item).center())
+
+    assert "Create Element from Selected Surfaces" not in action_state
 
 
 def test_lens_editor_ctrl_c_copies_widget_backed_type_cell(qapp, mock_connector):
@@ -264,6 +429,15 @@ def test_lens_editor_grouped_elements_are_collapsed_by_default(qapp, mock_connec
     assert isinstance(type_widget, SurfaceTypeWidget)
     assert type_widget.type_edit.text() == "L1"
     assert editor.tableWidget.item(1, mock_connector.COL_COMMENT).text() == "L1 (2 surfaces, lens)"
+    assert editor.tableWidget.item(1, mock_connector.COL_RADIUS).text() == "..."
+    assert editor.tableWidget.item(1, mock_connector.COL_CONIC).text() == "..."
+    assert editor.tableWidget.item(1, mock_connector.COL_THICKNESS).text() == "45.0"
+    assert editor.tableWidget.item(1, mock_connector.COL_MATERIAL).text() == "N-BK7"
+    assert (
+        editor.tableWidget.item(1, mock_connector.COL_THICKNESS).flags()
+        & Qt.ItemFlag.ItemIsEditable
+    )
+    assert editor.tableWidget.verticalHeaderItem(1).text() == "▸ 1"
 
 
 def test_lens_editor_toggle_group_expanded_reveals_member_rows(qapp, mock_connector):
@@ -282,6 +456,260 @@ def test_lens_editor_toggle_group_expanded_reveals_member_rows(qapp, mock_connec
     editor._toggle_group_expanded(1)
 
     assert editor.tableWidget.isRowHidden(2) is False
+    assert editor.tableWidget.verticalHeaderItem(1).text() == "▾ 1"
+    assert editor.tableWidget.verticalHeaderItem(2).background().color().alpha() > 0
+    assert editor.tableWidget.item(2, mock_connector.COL_COMMENT).background().color().alpha() > 0
+
+
+def test_lens_editor_collapsed_group_material_summary_hides_mixed_glasses(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2, 3] if row in (1, 2, 3) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "ASM1", "group_role": "assembly"}
+        if row in (1, 2, 3)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    mock_connector.get_surface_data.side_effect = lambda row, col: {
+        (1, mock_connector.COL_THICKNESS): "5.0",
+        (2, mock_connector.COL_THICKNESS): "10.0",
+        (3, mock_connector.COL_THICKNESS): "15.0",
+        (1, mock_connector.COL_MATERIAL): "N-BK7",
+        (2, mock_connector.COL_MATERIAL): "N-SF5",
+        (3, mock_connector.COL_MATERIAL): "Air",
+    }.get((row, col), "")
+
+    editor = LensEditor(mock_connector)
+
+    assert editor.tableWidget.item(1, mock_connector.COL_MATERIAL).text() == "..."
+
+
+def test_lens_editor_collapsed_group_thickness_edits_last_surface(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    mock_connector.get_surface_data.side_effect = lambda row, col: {
+        (1, mock_connector.COL_THICKNESS): "5.0",
+        (2, mock_connector.COL_THICKNESS): "45.0",
+        (1, mock_connector.COL_MATERIAL): "N-BK7",
+        (2, mock_connector.COL_MATERIAL): "Air",
+    }.get((row, col), "")
+
+    editor = LensEditor(mock_connector)
+    item = editor.tableWidget.item(1, mock_connector.COL_THICKNESS)
+    assert item is not None
+
+    mock_connector.set_surface_data.reset_mock()
+    item.setText("60.0000")
+
+    mock_connector.set_surface_data.assert_called_once_with(
+        2, mock_connector.COL_THICKNESS, "60.0000"
+    )
+
+
+def test_lens_editor_collapsing_group_reanchors_focus_to_summary_row(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+
+    editor = LensEditor(mock_connector)
+    editor._expanded_group_ids.add("grp1")
+    editor.load_data()
+    editor.tableWidget.setCurrentCell(2, mock_connector.COL_COMMENT)
+    editor._remember_active_cell(2, mock_connector.COL_COMMENT)
+
+    editor._toggle_group_expanded(1)
+
+    assert editor.tableWidget.isRowHidden(2) is True
+    assert editor.tableWidget.currentRow() == 1
+    assert editor._active_cell == (1, mock_connector.COL_TYPE)
+
+
+def test_lens_editor_vertical_header_click_toggles_group(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+
+    editor = LensEditor(mock_connector)
+    assert editor.tableWidget.isRowHidden(2) is True
+
+    editor._handle_vertical_header_clicked(1)
+
+    assert editor.tableWidget.isRowHidden(2) is False
+
+
+def test_lens_editor_selected_surface_rows_fill_gaps_between_selected_rows(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    editor.tableWidget.setRangeSelected(QTableWidgetSelectionRange(1, 0, 1, 6), True)
+    editor.tableWidget.setRangeSelected(QTableWidgetSelectionRange(3, 0, 3, 6), True)
+
+    assert editor._selected_surface_rows() == [1, 2, 3]
+
+
+def test_lens_editor_right_click_keeps_multi_row_selection_on_selected_row(
+    qapp, mock_connector, monkeypatch
+):
+    from optiland_gui.lens_editor import LensEditor
+    from PySide6.QtGui import QContextMenuEvent
+
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    editor.tableWidget.setRangeSelected(QTableWidgetSelectionRange(1, 0, 2, 6), True)
+    selected_before = sorted({index.row() for index in editor.tableWidget.selectedIndexes()})
+    assert selected_before == [1, 2]
+
+    class _FakeMenu:
+        def __init__(self, *_args, **_kwargs):
+            self._actions = []
+
+        def setObjectName(self, *_args, **_kwargs):
+            return None
+
+        def addAction(self, _text):  # noqa: ANN001
+            action = MagicMock()
+            action.text.return_value = _text
+            action.setEnabled.side_effect = lambda _value: None
+            action.isEnabled.side_effect = lambda: True
+            self._actions.append(action)
+            return action
+
+        def addSeparator(self):
+            return None
+
+        def exec(self, *_args, **_kwargs):  # noqa: ANN201
+            return None
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QMenu", _FakeMenu)
+    target_item = editor.tableWidget.item(2, mock_connector.COL_COMMENT)
+    assert target_item is not None
+
+    editor.show_context_menu(editor.tableWidget.visualItemRect(target_item).center())
+
+    selected_after = sorted({index.row() for index in editor.tableWidget.selectedIndexes()})
+    assert selected_after == [1, 2]
+
+    widget = editor.tableWidget.cellWidget(1, mock_connector.COL_TYPE)
+    assert widget is not None
+    editor.eventFilter(
+        widget,
+        QContextMenuEvent(
+            QContextMenuEvent.Reason.Mouse,
+            QPoint(1, 1),
+            editor.tableWidget.viewport().mapToGlobal(
+                editor.tableWidget.visualItemRect(target_item).center()
+            ),
+        ),
+    )
+    selected_after_widget = sorted(
+        {index.row() for index in editor.tableWidget.selectedIndexes()}
+    )
+    assert selected_after_widget == [1, 2]
+
+
+def test_lens_editor_move_element_uses_safe_dialog_parent_and_moves_rows(
+    qapp, mock_connector, monkeypatch
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.return_value = [1, 2]
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+
+    captured = {}
+
+    def _fake_get_int(parent, title, label, value, minimum, maximum):  # noqa: ANN001
+        captured["parent"] = parent
+        captured["title"] = title
+        captured["label"] = label
+        captured["value"] = value
+        captured["minimum"] = minimum
+        captured["maximum"] = maximum
+        return 3, True
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QInputDialog.getInt", _fake_get_int)
+    mock_connector.move_surface_element.return_value = [2, 3]
+
+    editor._move_element(1)
+
+    assert captured["parent"] is editor.window()
+    assert captured["minimum"] == 1
+    assert captured["maximum"] == 3
+    mock_connector.move_surface_element.assert_called_once_with(1, 3)
+
+
+def test_lens_editor_delete_on_collapsed_group_removes_entire_element(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    editor.tableWidget.setCurrentCell(1, mock_connector.COL_COMMENT)
+
+    handled = editor.eventFilter(
+        editor.tableWidget,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier),
+    )
+
+    assert handled is True
+    mock_connector.remove_surface_element.assert_called_once_with(1)
+    mock_connector.remove_surface.assert_not_called()
+
+
+def test_lens_editor_delete_on_expanded_group_removes_only_active_surface(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+
+    editor = LensEditor(mock_connector)
+    editor._expanded_group_ids.add("grp1")
+    editor.load_data()
+    editor.tableWidget.setCurrentCell(2, mock_connector.COL_COMMENT)
+
+    handled = editor.eventFilter(
+        editor.tableWidget,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier),
+    )
+
+    assert handled is True
+    mock_connector.remove_surface.assert_called_once_with(2)
+    mock_connector.remove_surface_element.assert_not_called()
 
 
 def test_lens_editor_ctrl_insert_copies_widget_backed_type_cell(qapp, mock_connector):
@@ -674,6 +1102,58 @@ def test_lens_editor_restores_persisted_column_widths(qapp, mock_connector, monk
 
     assert restored.tableWidget.columnWidth(mock_connector.COL_THICKNESS) == 173
     assert _FakeSettings.sync_calls >= 1
+
+
+def test_lens_editor_hide_persists_explicit_column_widths(qapp, mock_connector, monkeypatch):
+    from optiland_gui.lens_editor import LensEditor
+
+    class _FakeSettings:
+        _store: dict[str, object] = {}
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def value(self, key, defaultValue=None, type=None):  # noqa: ANN001, A002, N803
+            value = self._store.get(key, defaultValue)
+            if type is not None and value is not None:
+                try:
+                    return type(value)
+                except (TypeError, ValueError):
+                    return defaultValue
+            return value
+
+        def setValue(self, key, value):  # noqa: ANN001, N802
+            self._store[key] = value
+
+        def sync(self):
+            return None
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QSettings", _FakeSettings)
+
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    editor.tableWidget.setColumnWidth(mock_connector.COL_RADIUS, 211)
+    editor.hide()
+
+    restored = LensEditor(mock_connector)
+    restored.load_data()
+
+    assert restored.tableWidget.columnWidth(mock_connector.COL_RADIUS) == 211
+    stored_widths = _FakeSettings._store.get("LensEditor/Table/ColumnWidths")
+    assert isinstance(stored_widths, list)
+    assert stored_widths[mock_connector.COL_RADIUS] == 211
+
+
+def test_lens_editor_table_allows_wide_columns_with_horizontal_scrollbar(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    editor = LensEditor(mock_connector)
+    header = editor.tableWidget.horizontalHeader()
+
+    assert editor.tableWidget.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    assert header.maximumSectionSize() >= 1_000_000
 
 
 def test_surface_properties_widget_applies_annular_aperture(qapp, mock_connector):

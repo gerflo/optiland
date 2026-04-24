@@ -667,6 +667,33 @@ class SurfaceService:
         except Exception:
             self._connector._restore_optic_state(old_state)
 
+    def remove_surface_element(self, row: int) -> None:
+        """Remove the full logical element containing *row* in one operation."""
+        rows = self.get_group_rows(row)
+        if not rows:
+            self.remove_surface(row)
+            return
+
+        removable_rows = [
+            group_row
+            for group_row in rows
+            if 0 < group_row < self.get_surface_count() - 1
+        ]
+        if not removable_rows:
+            logger.warning("SurfaceService: Cannot remove Object or Image surface.")
+            return
+
+        old_state = self._connector._capture_optic_state()
+        try:
+            for group_row in reversed(removable_rows):
+                self._connector._optic.surfaces.remove(group_row)
+            self._connector._optic.updater.update()
+            self._connector._undo_redo_manager.add_state(old_state)
+            self._connector.set_modified(True)
+            self._connector.opticChanged.emit()
+        except Exception:
+            self._connector._restore_optic_state(old_state)
+
     def insert_surface_sequence(
         self,
         index: int,
@@ -840,6 +867,15 @@ class SurfaceService:
             return None
         if cleaned_rows != list(range(cleaned_rows[0], cleaned_rows[-1] + 1)):
             raise ValueError("Element groups must be created from contiguous surfaces.")
+        existing_group_ids = {
+            str(group_id)
+            for row in cleaned_rows
+            if (group_id := getattr(self._connector._optic.surfaces.surfaces[row], "group_id", None))
+        }
+        if existing_group_ids:
+            raise ValueError(
+                "Surfaces already assigned to an element cannot be grouped again."
+            )
 
         old_state = self._connector._capture_optic_state()
         group_id = uuid.uuid4().hex

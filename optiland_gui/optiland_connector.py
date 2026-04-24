@@ -528,6 +528,10 @@ class OptilandConnector(QObject):
         """Flip the logical element containing *row* in optical direction."""
         return self._surface_service.flip_surface_element(row)
 
+    def remove_surface_element(self, row: int) -> None:
+        """Remove the logical element containing *row*."""
+        self._surface_service.remove_surface_element(row)
+
     # ------------------------------------------------------------------
     # SystemService delegation
     # ------------------------------------------------------------------

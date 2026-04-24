@@ -110,6 +110,19 @@ class TestSurfaceService:
         assert mock_connector._optic.surfaces.surfaces[1].group_id is None
         assert mock_connector._optic.surfaces.surfaces[2].group_name is None
 
+    def test_create_surface_group_rejects_rows_already_in_existing_element(
+        self, service, mock_connector
+    ):
+        service.add_surface()
+        original_group_id = service.create_surface_group([1, 2], "L1", "lens")
+
+        with pytest.raises(ValueError, match="already assigned to an element"):
+            service.create_surface_group([2, 3], "L2", "lens")
+
+        assert mock_connector._optic.surfaces.surfaces[1].group_id == original_group_id
+        assert mock_connector._optic.surfaces.surfaces[2].group_id == original_group_id
+        assert mock_connector._optic.surfaces.surfaces[3].group_id is None
+
     def test_insert_surface_sequence_assigns_group_metadata(self, service):
         service.insert_surface_sequence(
             2,
@@ -213,3 +226,13 @@ class TestSurfaceService:
         assert flipped[0].material_post.to_dict()["name"] == "N-SF5"
         assert flipped[1].material_post.to_dict()["name"] == "N-BK7"
         assert flipped[2].material_post.to_dict()["type"] == "IdealMaterial"
+
+    def test_remove_surface_element_removes_group_in_one_operation(
+        self, service, mock_connector
+    ):
+        service.create_surface_group([1, 2], "L1", "lens")
+
+        service.remove_surface_element(1)
+
+        assert service.get_surface_count() == 2
+        assert mock_connector._undo_redo_manager.add_state.called
