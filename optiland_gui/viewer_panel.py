@@ -243,6 +243,7 @@ class SagViewer(QWidget):
             max_extent=self.maxExtentSpinBox.value(),
             fig_to_plot_on=self.figure,
         )
+        gui_plot_utils.apply_theme_to_existing_figure(self.figure)
 
         # Redraw our canvas
         self.canvas.draw()
@@ -667,6 +668,10 @@ class MatplotlibViewer(QWidget):
             self.current_theme = theme
             gui_plot_utils.apply_gui_matplotlib_styles(theme=self.current_theme)
             self.plot_optic()
+        else:
+            gui_plot_utils.apply_gui_matplotlib_styles(theme=self.current_theme)
+            gui_plot_utils.apply_theme_to_existing_figure(self.figure)
+            self.canvas.draw_idle()
         self.settings_toggle_btn.setIcon(QIcon(f":/icons/{theme}/settings.svg"))
         self.toolbar.update_theme()
 
@@ -794,6 +799,7 @@ class MatplotlibViewer(QWidget):
                     left=0.06, right=0.995, top=0.92, bottom=0.12
                 )
 
+            gui_plot_utils.apply_theme_to_existing_figure(self.figure)
             self.canvas.draw()
         finally:
             self._is_plotting = False
@@ -864,9 +870,10 @@ class VTKViewer(QWidget):
         from optiland.visualization.themes import get_active_theme, set_theme
 
         set_theme(theme)
-        theme = get_active_theme()
-        background = to_rgb(theme.parameters["axes.facecolor"])
+        active_theme = get_active_theme()
+        background = to_rgb(active_theme.parameters["axes.facecolor"])
         self.renderer.SetBackground(*background)
+        self.render_optic()
         self.vtkWidget.GetRenderWindow().Render()
 
     def _notify_missing_stop_surface(self) -> None:

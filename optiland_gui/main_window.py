@@ -36,6 +36,7 @@ from PySide6.QtGui import (
     QShortcut,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QDockWidget,
@@ -711,6 +712,15 @@ class MainWindow(FramelessWindow):
         style_str += "\n" + build_palette_override(theme)
         style_str += "\n" + build_control_size_override()
         self.setStyleSheet(style_str)
+        if hasattr(self, "_native_menu_bar_instance") and self._native_menu_bar_instance:
+            self._native_menu_bar_instance.setStyleSheet(style_str)
+        if (
+            hasattr(self, "_fullscreen_menu_bar_instance")
+            and self._fullscreen_menu_bar_instance
+        ):
+            self._fullscreen_menu_bar_instance.setStyleSheet(style_str)
+        QApplication.instance().setProperty("activeThemeId", theme.theme_id)
+        QApplication.instance().setProperty("activeThemeMode", theme.mode)
 
         is_dark = theme.mode == "dark"
         theme_name = theme.mode

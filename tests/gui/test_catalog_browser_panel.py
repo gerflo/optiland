@@ -365,6 +365,29 @@ def test_catalog_browser_uses_download_button_and_filter_row(qapp) -> None:
     assert panel.results_table.parentWidget() is panel.table_view_content
 
 
+def test_catalog_browser_update_theme_refreshes_toolbar_and_insertable_icons(
+    qapp,
+) -> None:
+    panel = CatalogBrowserPanel(_DummyConnector())
+    calls: list[tuple[str, str]] = []
+
+    def _capture_toolbar(button, icon_name, tooltip):  # noqa: ANN001
+        calls.append((icon_name, tooltip))
+
+    panel._configure_toolbar_action_button = _capture_toolbar  # type: ignore[method-assign]
+    refreshed: list[bool] = []
+    panel._update_insertable_only_button_state = lambda: refreshed.append(True)  # type: ignore[method-assign]
+
+    panel.update_theme("light")
+
+    assert calls == [
+        ("mark_all.svg", panel.mark_filtered_button.toolTip()),
+        ("clear_marks.svg", panel.clear_marks_button.toolTip()),
+        ("delete_marks.svg", panel.delete_marked_button.toolTip()),
+    ]
+    assert refreshed == [True]
+
+
 def test_catalog_browser_import_folder_passes_directory_to_connector(monkeypatch, qapp) -> None:
     connector = _DummyConnector()
     panel = CatalogBrowserPanel(connector)

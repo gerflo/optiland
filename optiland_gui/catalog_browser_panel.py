@@ -297,8 +297,7 @@ class CatalogBrowserPanel(QWidget):
         self, button: QPushButton, icon_name: str, tooltip: str
     ) -> None:
         """Apply compact icon-only styling for catalog action buttons."""
-        theme = self.settings.value("Appearance/ThemeId", "dark", type=str) or "dark"
-        icon_theme = get_icon_theme_id(theme)
+        icon_theme = self._icon_theme()
         button.setIcon(QIcon(f":/icons/{icon_theme}/{icon_name}"))
         button.setIconSize(QSize(16, 16))
         button.setText("")
@@ -308,8 +307,7 @@ class CatalogBrowserPanel(QWidget):
 
     def _update_insertable_only_button_state(self) -> None:
         """Refresh the insertable filter button to make its state obvious."""
-        theme = self.settings.value("Appearance/ThemeId", "dark", type=str) or "dark"
-        icon_theme = get_icon_theme_id(theme)
+        icon_theme = self._icon_theme()
         checked = self.insertable_only_button.isChecked()
         icon_name = "check_apply.svg" if checked else "dash.svg"
         tooltip = (
@@ -331,6 +329,38 @@ class CatalogBrowserPanel(QWidget):
         self.insertable_only_button.setAccessibleName(
             f"Insertable filter {'on' if checked else 'off'}"
         )
+
+    def _icon_theme(self, theme_name: str | None = None) -> str:
+        """Resolve the light/dark icon family for the active theme."""
+        if theme_name in {"dark", "light"}:
+            return theme_name
+        theme = self.settings.value("Appearance/ThemeId", "dark", type=str) or "dark"
+        return get_icon_theme_id(theme)
+
+    def update_theme(self, theme_name: str) -> None:
+        """Refresh toolbar icons after an application theme change."""
+        self._configure_toolbar_action_button(
+            self.mark_filtered_button, "mark_all.svg", self.mark_filtered_button.toolTip()
+        )
+        self._configure_toolbar_action_button(
+            self.clear_marks_button, "clear_marks.svg", self.clear_marks_button.toolTip()
+        )
+        self._configure_toolbar_action_button(
+            self.delete_marked_button, "delete_marks.svg", self.delete_marked_button.toolTip()
+        )
+        icon_theme = self._icon_theme(theme_name)
+        checked = self.insertable_only_button.isChecked()
+        icon_name = "check_apply.svg" if checked else "dash.svg"
+        icon = QIcon(f":/icons/{icon_theme}/{icon_name}")
+        if icon.isNull():
+            fallback = (
+                QStyle.StandardPixmap.SP_DialogApplyButton
+                if checked
+                else QStyle.StandardPixmap.SP_TitleBarShadeButton
+            )
+            icon = self.style().standardIcon(fallback)
+        self.insertable_only_button.setIcon(icon)
+        self._update_insertable_only_button_state()
 
     def _wire_signals(self) -> None:
         self.search_edit.textChanged.connect(self.refresh)

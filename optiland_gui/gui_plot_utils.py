@@ -9,10 +9,12 @@ Author: Manuel Fragata Mendes, 2025
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 import logging
 
 import matplotlib
+from matplotlib.figure import Figure
 
 from optiland.visualization.themes import get_active_theme, set_theme
 
@@ -35,6 +37,62 @@ def apply_gui_matplotlib_styles(theme: str = "light") -> None:
         k: v for k, v in active_theme.parameters.items() if k in matplotlib.rcParams
     }
     matplotlib.rcParams.update(valid_params)
+
+
+def apply_theme_to_existing_figure(fig: Figure) -> None:
+    """Apply the currently active Optiland plot theme to an existing figure."""
+    active_theme = get_active_theme()
+    params = active_theme.parameters
+    figure_face = params.get("figure.facecolor")
+    axes_face = params.get("axes.facecolor")
+    edge_color = params.get("axes.edgecolor")
+    label_color = params.get("axes.labelcolor")
+    text_color = params.get("text.color")
+    tick_x_color = params.get("xtick.color", label_color)
+    tick_y_color = params.get("ytick.color", label_color)
+    grid_color = params.get("grid.color")
+    grid_alpha = params.get("grid.alpha", 0.25)
+
+    if figure_face:
+        fig.set_facecolor(figure_face)
+        fig.set_edgecolor(figure_face)
+
+    suptitle = getattr(fig, "_suptitle", None)
+    if suptitle is not None and text_color:
+        suptitle.set_color(text_color)
+
+    for ax in fig.get_axes():
+        if axes_face:
+            ax.set_facecolor(axes_face)
+        if edge_color:
+            for spine in ax.spines.values():
+                spine.set_color(edge_color)
+        if label_color:
+            ax.xaxis.label.set_color(label_color)
+            ax.yaxis.label.set_color(label_color)
+            if hasattr(ax, "zaxis"):
+                with contextlib.suppress(AttributeError):
+                    ax.zaxis.label.set_color(label_color)
+        if text_color:
+            ax.title.set_color(text_color)
+        ax.tick_params(axis="x", colors=tick_x_color)
+        ax.tick_params(axis="y", colors=tick_y_color)
+        with contextlib.suppress(Exception):
+            ax.tick_params(axis="z", colors=tick_y_color)
+        if grid_color:
+            for line in [*ax.get_xgridlines(), *ax.get_ygridlines()]:
+                line.set_color(grid_color)
+                line.set_alpha(grid_alpha)
+        legend = ax.get_legend()
+        if legend is not None:
+            frame = legend.get_frame()
+            if axes_face:
+                frame.set_facecolor(axes_face)
+            if edge_color:
+                frame.set_edgecolor(edge_color)
+            if text_color:
+                for text in legend.get_texts():
+                    text.set_color(text_color)
 
 
 _SKIP_PARAMS = frozenset({"self", "cls", "optic", "optical_system"})

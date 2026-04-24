@@ -33,3 +33,10 @@ class CatalogsPanel(QWidget):
     def show_material_tab(self) -> None:
         """Activate the material database tab."""
         self.tab_widget.setCurrentWidget(self.material_browser)
+
+    def update_theme(self, theme_name: str) -> None:
+        """Forward a live theme change to child browser panels."""
+        if hasattr(self.catalog_browser, "update_theme"):
+            self.catalog_browser.update_theme(theme_name)
+        if hasattr(self.material_browser, "update_theme"):
+            self.material_browser.update_theme(theme_name)

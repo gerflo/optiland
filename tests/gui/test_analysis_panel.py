@@ -185,3 +185,28 @@ class TestAnalysisViewArgFiltering:
         assert analysis.called is not None
         assert analysis.called["fig_to_plot_on"] is canvas.figure
         assert analysis.called["cmap"] == "viridis"
+
+    def test_draw_plot_rethemes_existing_figure(self, panel, monkeypatch):
+        """Embedded analysis draws should retheme an existing figure after plotting."""
+
+        class _FakeCanvas:
+            def __init__(self):
+                from matplotlib.figure import Figure
+
+                self.figure = Figure(figsize=(7, 5), dpi=100)
+
+        class _FakeAnalysis:
+            def view(self, fig_to_plot_on=None):  # noqa: ANN001
+                ax = fig_to_plot_on.add_subplot(111)
+                return ax
+
+        calls: list[object] = []
+        monkeypatch.setattr(
+            "optiland_gui.analysis_panel.gui_plot_utils.apply_theme_to_existing_figure",
+            lambda figure: calls.append(figure),
+        )
+
+        canvas = _FakeCanvas()
+        panel._draw_plot_on_canvas(_FakeAnalysis(), canvas, {})
+
+        assert calls == [canvas.figure]

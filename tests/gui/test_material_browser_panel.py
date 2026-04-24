@@ -116,6 +116,24 @@ def test_material_browser_panel_renders_result_and_details(qapp) -> None:
     assert "Built-in Glass" in panel.details_text.text()
 
 
+def test_material_browser_update_theme_refreshes_toolbar_icons(qapp) -> None:
+    panel = MaterialBrowserPanel(_DummyConnector())
+    calls: list[tuple[str, str]] = []
+
+    def _capture_toolbar(button, icon_name, tooltip):  # noqa: ANN001
+        calls.append((icon_name, tooltip))
+
+    panel._configure_toolbar_action_button = _capture_toolbar  # type: ignore[method-assign]
+
+    panel.update_theme("light")
+
+    assert calls == [
+        ("mark_all.svg", panel.mark_filtered_button.toolTip()),
+        ("clear_marks.svg", panel.clear_marks_button.toolTip()),
+        ("delete_marks.svg", panel.delete_marked_button.toolTip()),
+    ]
+
+
 def test_material_browser_sorts_and_shows_arrow_on_active_column(qapp) -> None:
     panel = MaterialBrowserPanel(_DummyConnector())
     header = panel.results_table.horizontalHeader()

@@ -281,7 +281,11 @@ class PanelManager:
             theme_name: Either ``"dark"`` or ``"light"``.
         """
         self.sidebar_content_widget.update_icons(theme_name)
+        self.lens_editor.update_theme(theme_name)
+        self.catalogs_panel.update_theme(theme_name)
         self.analysis_panel.update_theme(theme_name)
         self.viewer_panel.update_theme(theme_name)
         self.python_terminal.set_theme(theme_name)
         self.optimization_panel.update_theme(theme_name)
+        if hasattr(self.system_properties, "update_theme"):
+            self.system_properties.update_theme(theme_name)

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from PySide6.QtCore import QEvent, QPoint, Qt
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QColor, QKeyEvent
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QLineEdit, QTableWidgetSelectionRange
 
@@ -433,6 +433,8 @@ def test_lens_editor_grouped_elements_are_collapsed_by_default(qapp, mock_connec
     assert editor.tableWidget.item(1, mock_connector.COL_CONIC).text() == "..."
     assert editor.tableWidget.item(1, mock_connector.COL_THICKNESS).text() == "45.0"
     assert editor.tableWidget.item(1, mock_connector.COL_MATERIAL).text() == "N-BK7"
+    assert editor.tableWidget.item(1, mock_connector.COL_COMMENT).font().bold() is True
+    assert type_widget.type_edit.font().bold() is True
     assert (
         editor.tableWidget.item(1, mock_connector.COL_THICKNESS).flags()
         & Qt.ItemFlag.ItemIsEditable
@@ -712,6 +714,28 @@ def test_lens_editor_delete_on_expanded_group_removes_only_active_surface(
     mock_connector.remove_surface_element.assert_not_called()
 
 
+def test_lens_editor_delete_in_active_text_editor_does_not_remove_surface(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    text_editor = QLineEdit(editor.tableWidget)
+    text_editor.setProperty("lens_row", 2)
+    text_editor.setProperty("lens_col", mock_connector.COL_THICKNESS)
+    text_editor.setProperty("lens_table_editor", True)
+
+    handled = editor.eventFilter(
+        text_editor,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier),
+    )
+
+    assert handled is False
+    mock_connector.remove_surface.assert_not_called()
+    mock_connector.remove_surface_element.assert_not_called()
+
+
 def test_lens_editor_ctrl_insert_copies_widget_backed_type_cell(qapp, mock_connector):
     from optiland_gui.lens_editor import LensEditor
 
@@ -781,6 +805,92 @@ def test_lens_editor_current_type_cell_widget_gets_separate_highlight(
     editor.tableWidget.setCurrentCell(2, mock_connector.COL_COMMENT)
 
     assert widget.property("currentCell") is False
+
+
+def test_lens_editor_collapsed_element_summary_row_rejects_type_changes(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor, SurfaceTypeWidget
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+
+    widget = editor.tableWidget.cellWidget(1, mock_connector.COL_TYPE)
+    assert isinstance(widget, SurfaceTypeWidget)
+    assert widget.type_edit.isReadOnly() is True
+
+    mock_connector.set_surface_type.reset_mock()
+    widget.surfaceTypeChanged.emit("aspheric")
+
+    mock_connector.set_surface_type.assert_not_called()
+
+
+def test_lens_editor_update_theme_reapplies_group_row_presentation_without_crashing(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+
+    editor.update_theme("light")
+
+    comment_item = editor.tableWidget.item(1, mock_connector.COL_COMMENT)
+    assert comment_item is not None
+    assert "L1" in comment_item.text()
+
+
+def test_lens_editor_summary_row_rebuilds_deleted_items_during_theme_refresh(
+    qapp, mock_connector, monkeypatch
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    class _BrokenItem:
+        def setText(self, _text):
+            return None
+
+        def setBackground(self, _brush):
+            return None
+
+        def setData(self, _role, _value):
+            raise RuntimeError("Internal C++ object already deleted")
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+
+    original_ensure = editor._ensure_table_item
+
+    def flaky_ensure(row, col_idx, *, create=True):
+        if row == 1 and col_idx == mock_connector.COL_COMMENT and create:
+            monkeypatch.setattr(editor, "_ensure_table_item", original_ensure)
+            return _BrokenItem()
+        return original_ensure(row, col_idx, create=create)
+
+    monkeypatch.setattr(editor, "_ensure_table_item", flaky_ensure)
+
+    editor.update_theme("light")
+
+    comment_item = editor.tableWidget.item(1, mock_connector.COL_COMMENT)
+    assert comment_item is not None
+    assert "L1" in comment_item.text()
 
 
 def test_lens_editor_ctrl_c_copies_last_clicked_table_cell_not_stale_type_focus(
@@ -1065,6 +1175,78 @@ def test_lens_editor_arrow_keys_move_active_cell_when_not_editing_text(qapp, moc
     assert editor._active_cell == (1, mock_connector.COL_MATERIAL)
 
 
+def test_lens_editor_tab_skips_hidden_member_rows_for_collapsed_elements(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    editor._remember_active_cell(1, mock_connector.COL_SEMI_DIAMETER)
+
+    handled = editor.eventFilter(
+        editor.tableWidget,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Tab, Qt.NoModifier),
+    )
+
+    assert handled is True
+    assert editor._active_cell == (3, mock_connector.COL_TYPE)
+
+
+def test_lens_editor_down_arrow_skips_hidden_member_rows_for_collapsed_elements(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    editor._remember_active_cell(1, mock_connector.COL_COMMENT)
+
+    handled = editor.eventFilter(
+        editor.tableWidget,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Down, Qt.NoModifier),
+    )
+
+    assert handled is True
+    assert editor._active_cell == (3, mock_connector.COL_COMMENT)
+
+
+def test_lens_editor_enter_on_collapsed_summary_row_skips_hidden_member_rows(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    editor._remember_active_cell(1, mock_connector.COL_SEMI_DIAMETER)
+
+    handled = editor.eventFilter(
+        editor.tableWidget,
+        QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.NoModifier),
+    )
+
+    assert handled is True
+    assert editor._active_cell == (3, mock_connector.COL_TYPE)
+
+
 def test_lens_editor_restores_persisted_column_widths(qapp, mock_connector, monkeypatch):
     from optiland_gui.lens_editor import LensEditor
 
@@ -1154,6 +1336,88 @@ def test_lens_editor_table_allows_wide_columns_with_horizontal_scrollbar(
 
     assert editor.tableWidget.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
     assert header.maximumSectionSize() >= 1_000_000
+
+
+def test_lens_editor_collapsed_element_row_uses_theme_aware_summary_color(
+    qapp, mock_connector, monkeypatch
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    class _FakeSettings:
+        _store = {"Appearance/ThemeId": "test-light"}
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def value(self, key, defaultValue=None, type=None):  # noqa: ANN001, A002, N803
+            value = self._store.get(key, defaultValue)
+            if type is not None and value is not None:
+                try:
+                    return type(value)
+                except (TypeError, ValueError):
+                    return defaultValue
+            return value
+
+        def setValue(self, key, value):  # noqa: ANN001, N802
+            self._store[key] = value
+
+        def sync(self):
+            return None
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QSettings", _FakeSettings)
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    qapp.setProperty("activeThemeMode", "light")
+
+    editor = LensEditor(mock_connector)
+    comment_item = editor.tableWidget.item(1, mock_connector.COL_COMMENT)
+
+    assert comment_item is not None
+    base_color = editor.tableWidget.palette().base().color()
+    expected = base_color.darker(editor.ElementRowBackgroundFactor)
+    assert comment_item.data(editor._focus_delegate._ROW_ACCENT_ROLE).name().lower() == expected.name().lower()
+
+
+def test_lens_editor_prefers_live_application_theme_mode_over_settings(
+    qapp, mock_connector, monkeypatch
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    class _FakeSettings:
+        _store = {"Appearance/ThemeId": "test-light"}
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def value(self, key, defaultValue=None, type=None):  # noqa: ANN001, A002, N803
+            value = self._store.get(key, defaultValue)
+            if type is not None and value is not None:
+                try:
+                    return type(value)
+                except (TypeError, ValueError):
+                    return defaultValue
+            return value
+
+        def setValue(self, key, value):  # noqa: ANN001, N802
+            self._store[key] = value
+
+        def sync(self):
+            return None
+
+    class _FakeTheme:
+        mode = "light"
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QSettings", _FakeSettings)
+    monkeypatch.setattr("optiland_gui.lens_editor.get_theme", lambda _theme_id: _FakeTheme())
+    qapp.setProperty("activeThemeMode", "dark")
+
+    editor = LensEditor(mock_connector)
+
+    assert editor._theme_mode() == "dark"
 
 
 def test_surface_properties_widget_applies_annular_aperture(qapp, mock_connector):
@@ -1344,3 +1608,15 @@ def test_surface_properties_widget_apply_and_close_emits_close_request(
 
     assert closed == [True]
     mock_connector.set_surface_aperture_config.assert_called()
+
+
+def test_surface_properties_widget_update_theme_restyles_sections(qapp, mock_connector):
+    from optiland_gui.lens_editor import SurfacePropertiesWidget
+
+    widget = SurfacePropertiesWidget(1, mock_connector)
+
+    widget.update_theme("light")
+    assert "rgba(0, 0, 0, 0.62)" in widget.styleSheet()
+
+    widget.update_theme("dark")
+    assert "rgba(255, 255, 255, 0.72)" in widget.styleSheet()

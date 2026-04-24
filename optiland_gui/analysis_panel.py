@@ -1204,6 +1204,7 @@ class AnalysisPanel(QWidget):
                 )
 
         canvas.figure.tight_layout(rect=[0, 0.05, 1, 1])
+        gui_plot_utils.apply_theme_to_existing_figure(canvas.figure)
 
     def _setup_plot_toolbar(self, canvas):
         """Creates and attaches a new custom Matplotlib toolbar."""

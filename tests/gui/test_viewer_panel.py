@@ -340,3 +340,33 @@ def test_viewer_without_stop_surface_keeps_layout_and_warns(
     assert connector.toast_manager.calls
     assert "No stop surface is defined" in connector.toast_manager.calls[0][0]
     assert connector.toast_manager.calls[0][1] == "warning"
+
+
+def test_sag_viewer_rethemes_existing_figure_after_plot(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    calls: list[object] = []
+    monkeypatch.setattr(
+        "optiland_gui.viewer_panel.gui_plot_utils.apply_theme_to_existing_figure",
+        lambda figure: calls.append(figure),
+    )
+
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    panel.sagViewer.plot_sag()
+
+    assert calls

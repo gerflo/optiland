@@ -51,6 +51,7 @@ from shiboken6 import isValid
 
 from optiland.materials.material import Material
 from .config import APPLICATION_NAME, ORGANIZATION_NAME
+from .theme_manager import get_theme
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -95,7 +96,52 @@ class SurfacePropertiesWidget(QWidget):
         self._aperture_form_layout: QFormLayout | None = None
         self._aperture_labels: dict[str, QLabel] = {}
         self._suspend_dirty_tracking = False
+        self._apply_theme_style()
         self._populate_properties_form()
+
+    def _theme_mode(self) -> str:
+        """Return the live application theme mode for this properties widget."""
+        app = QApplication.instance()
+        if app is not None:
+            active_mode = app.property("activeThemeMode")
+            if isinstance(active_mode, str) and active_mode in {"dark", "light"}:
+                return active_mode
+        return "dark" if self.palette().window().color().lightness() < 128 else "light"
+
+    def _apply_theme_style(self, theme_name: str | None = None) -> None:
+        """Apply a lightweight theme-aware local style for section blocks."""
+        mode = theme_name if theme_name in {"dark", "light"} else self._theme_mode()
+        if mode == "dark":
+            widget_bg = "rgba(255, 255, 255, 0.02)"
+            section_border = "rgba(255, 255, 255, 0.12)"
+            section_bg = "rgba(255, 255, 255, 0.03)"
+            hint_color = "rgba(255, 255, 255, 0.72)"
+        else:
+            widget_bg = "rgba(0, 0, 0, 0.015)"
+            section_border = "rgba(0, 0, 0, 0.10)"
+            section_bg = "rgba(0, 0, 0, 0.025)"
+            hint_color = "rgba(0, 0, 0, 0.62)"
+        self.setStyleSheet(
+            "QWidget#SurfacePropertiesWidget {"
+            f"  background: {widget_bg};"
+            "}"
+            "QFrame[section='true'] {"
+            f"  border: 1px solid {section_border};"
+            "  border-radius: 6px;"
+            f"  background: {section_bg};"
+            "}"
+            "QLabel[sectionTitle='true'] {"
+            "  font-weight: bold;"
+            "}"
+            "QLabel[hint='true'] {"
+            f"  color: {hint_color};"
+            "}"
+        )
+
+    def update_theme(self, theme_name: str) -> None:
+        """Refresh the widget-local styling after an application theme switch."""
+        self._apply_theme_style(theme_name)
+        self.update()
 
     def preferred_height_for_width(self, width: int) -> int:
         """Return the preferred widget height for a constrained width."""
@@ -546,40 +592,11 @@ class SurfaceTypeWidget(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(2)
         self.setObjectName("SurfaceTypeCell")
-        self.setStyleSheet(
-            "QWidget#SurfaceTypeCell {"
-            "  border: 1px solid transparent;"
-            "  border-radius: 3px;"
-            "  background: transparent;"
-            "}"
-            "QWidget#SurfaceTypeCell[currentCell='true'] {"
-            "  border: 2px solid #FFD166;"
-            "  background: rgba(255, 209, 102, 0.22);"
-            "}"
-            "QWidget#SurfaceTypeCell[groupSummary='true'] {"
-            "  border: 1px solid rgba(100, 136, 234, 0.45);"
-            "  background: rgba(100, 136, 234, 0.16);"
-            "}"
-            "QWidget#SurfaceTypeCell[groupMember='true'] {"
-            "  border: 1px solid rgba(100, 136, 234, 0.18);"
-            "  background: rgba(100, 136, 234, 0.08);"
-            "}"
-            "QLineEdit#SurfaceTypeLineEdit {"
-            "  border: none;"
-            "  margin: 0px;"
-            "  padding: 0px 4px;"
-            "  background: transparent;"
-            "}"
-            "QToolButton#SurfaceTypeButton {"
-            "  border: none;"
-            "  margin: 0px;"
-            "  padding: 0px;"
-            "}"
-            "QToolButton#SurfaceTypeButton::menu-indicator {"
-            "  image: none;"
-            "  width: 0px;"
-            "}"
-        )
+        self._summary_bg_css = "transparent"
+        self._summary_border_css = "transparent"
+        self._member_bg_css = "transparent"
+        self._member_border_css = "transparent"
+        self._refresh_style()
         self.type_button = QToolButton()
         self.type_button.setObjectName("SurfaceTypeButton")
         self.type_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -639,6 +656,45 @@ class SurfaceTypeWidget(QWidget):
         )
         self._var_badge.setVisible(False)
         self.layout.insertWidget(0, self._var_badge)
+        self._base_type_font = self.type_edit.font()
+
+    def _refresh_style(self) -> None:
+        """Rebuild the widget stylesheet from the current group-accent colors."""
+        self.setStyleSheet(
+            "QWidget#SurfaceTypeCell {"
+            "  border: 1px solid transparent;"
+            "  border-radius: 3px;"
+            "  background: transparent;"
+            "}"
+            "QWidget#SurfaceTypeCell[currentCell='true'] {"
+            "  border: 2px solid #FFD166;"
+            "  background: rgba(255, 209, 102, 0.22);"
+            "}"
+            "QWidget#SurfaceTypeCell[groupSummary='true'] {"
+            f"  border: 1px solid {self._summary_border_css};"
+            f"  background: {self._summary_bg_css};"
+            "}"
+            "QWidget#SurfaceTypeCell[groupMember='true'] {"
+            f"  border: 1px solid {self._member_border_css};"
+            f"  background: {self._member_bg_css};"
+            "}"
+            "QLineEdit#SurfaceTypeLineEdit {"
+            "  border: none;"
+            "  margin: 0px;"
+            "  padding: 0px 4px;"
+            "  background: transparent;"
+            "}"
+            "QToolButton#SurfaceTypeButton {"
+            "  border: none;"
+            "  margin: 0px;"
+            "  padding: 0px;"
+            "  background: transparent;"
+            "}"
+            "QToolButton#SurfaceTypeButton::menu-indicator {"
+            "  image: none;"
+            "  width: 0px;"
+            "}"
+        )
 
     def setHasVariables(self, types: list[str]) -> None:
         """Show or hide the variable badge for non-standard variable types.
@@ -660,13 +716,28 @@ class SurfaceTypeWidget(QWidget):
         self.style().polish(self)
         self.update()
 
-    def setGroupSummaryMode(self, label: str, expanded: bool) -> None:
+    def setGroupSummaryMode(
+        self,
+        label: str,
+        expanded: bool,
+        *,
+        background_css: str | None = None,
+        border_css: str | None = None,
+    ) -> None:
         """Render this cell as the summary row for a collapsed/expanded element."""
         self._summary_mode = True
         self.setProperty("groupSummary", True)
         self.setProperty("groupMember", False)
+        if background_css is not None:
+            self._summary_bg_css = background_css
+        if border_css is not None:
+            self._summary_border_css = border_css
         self.type_edit.setText(label)
         self.type_edit.setReadOnly(True)
+        self.type_edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        summary_font = self._base_type_font
+        summary_font.setBold(True)
+        self.type_edit.setFont(summary_font)
         self.type_button.setVisible(True)
         self.type_button.setEnabled(True)
         self.type_button.setMenu(None)
@@ -675,15 +746,28 @@ class SurfaceTypeWidget(QWidget):
         self.type_button.setToolTip("Expand/Collapse Element")
         self.props_button.hide()
         self._var_badge.hide()
+        self._refresh_style()
         self.style().unpolish(self)
         self.style().polish(self)
         self.update()
 
-    def setGroupMemberMode(self) -> None:
+    def setGroupMemberMode(
+        self,
+        *,
+        background_css: str | None = None,
+        border_css: str | None = None,
+    ) -> None:
         """Apply a subtle shared accent to grouped member rows."""
         self._summary_mode = False
         self.setProperty("groupSummary", False)
         self.setProperty("groupMember", True)
+        if background_css is not None:
+            self._member_bg_css = background_css
+        if border_css is not None:
+            self._member_border_css = border_css
+        self.type_edit.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.type_edit.setFont(self._base_type_font)
+        self._refresh_style()
         self.style().unpolish(self)
         self.style().polish(self)
         self.update()
@@ -715,6 +799,7 @@ class _AccentFocusDelegate(QStyledItemDelegate):
 
     _ACCENT = QColor("#FFD166")
     _FILL = QColor(255, 209, 102, 80)
+    _ROW_ACCENT_ROLE = int(Qt.ItemDataRole.UserRole) + 101
 
     def __init__(self, owner, parent=None):
         super().__init__(parent)
@@ -726,6 +811,11 @@ class _AccentFocusDelegate(QStyledItemDelegate):
         option: QStyleOptionViewItem,
         index,
     ) -> None:
+        row_accent = index.data(self._ROW_ACCENT_ROLE)
+        if isinstance(row_accent, QColor):
+            painter.save()
+            painter.fillRect(option.rect, row_accent)
+            painter.restore()
         active_row, active_col = self._owner._active_cell
         if active_row == index.row() and active_col == index.column():
             active_option = QStyleOptionViewItem(option)
@@ -829,6 +919,7 @@ class LensEditor(QWidget):
 
     _material_names_cache: list[str] | None = None
     TABLE_SETTINGS_PREFIX = "LensEditor/Table"
+    ElementRowBackgroundFactor = 150
 
     def __init__(self, connector: OptilandConnector, parent=None):
         super().__init__(parent)
@@ -1067,6 +1158,16 @@ class LensEditor(QWidget):
         self._save_table_state()
         super().hideEvent(event)
 
+    def update_theme(self, theme_name: str) -> None:
+        """Refresh theme-dependent visuals after the application theme changes."""
+        for row in range(self.tableWidget.rowCount()):
+            widget = self.tableWidget.cellWidget(row, 0)
+            if isinstance(widget, SurfacePropertiesWidget):
+                widget.update_theme(theme_name)
+        self._apply_group_row_presentation()
+        self._refresh_current_cell_highlight()
+        self.tableWidget.viewport().update()
+
     def eventFilter(self, source, event):
         if source is self.tableWidget.viewport() and event.type() == QEvent.Resize:
             self._update_properties_widget_geometry()
@@ -1119,10 +1220,15 @@ class LensEditor(QWidget):
             if (
                 is_text_input
                 and (
-                    (has_ctrl and event.key() in (Qt.Key_C, Qt.Key_V, Qt.Key_X, Qt.Key_Insert))
+                    (
+                        has_ctrl
+                        and event.key() in (Qt.Key_C, Qt.Key_V, Qt.Key_X, Qt.Key_Insert)
+                    )
                     or (has_shift and event.key() == Qt.Key_Insert)
                 )
             ):
+                return False
+            if is_key_press and is_text_input and event.key() == Qt.Key_Delete:
                 return False
             if (
                 has_ctrl
@@ -1178,6 +1284,16 @@ class LensEditor(QWidget):
                     return True
             if (
                 is_key_press
+                and not is_table_editor
+                and is_table_focus_target
+                and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+            ):
+                row, _col = self._get_navigation_origin(source)
+                if self._collapsed_group_rows_for_summary_row(row):
+                    if self._handle_tab_navigation(source, backwards=False):
+                        return True
+            if (
+                is_key_press
                 and
                 not is_table_editor
                 and event.key()
@@ -1209,6 +1325,24 @@ class LensEditor(QWidget):
         previous_col: int,
     ) -> None:
         """Keep widget-backed cells visually highlighted when they are current."""
+        self._apply_current_cell_highlight(
+            current_row, current_col, previous_row, previous_col
+        )
+
+    def _refresh_current_cell_highlight(self) -> None:
+        """Refresh current-cell highlighting without needing a Qt signal payload."""
+        current_row = self.tableWidget.currentRow()
+        current_col = self.tableWidget.currentColumn()
+        self._apply_current_cell_highlight(current_row, current_col, -1, -1)
+
+    def _apply_current_cell_highlight(
+        self,
+        current_row: int,
+        current_col: int,
+        previous_row: int,
+        previous_col: int,
+    ) -> None:
+        """Apply the active-cell highlight state to affected widget-backed cells."""
         active_row, active_col = self._active_cell
         if active_row < 0 or active_col < 0:
             active_row, active_col = current_row, current_col
@@ -1349,7 +1483,7 @@ class LensEditor(QWidget):
         """Return all regular table cells in row-major order."""
         positions: list[tuple[int, int]] = []
         for row in range(self.tableWidget.rowCount()):
-            if self._is_properties_row(row):
+            if self._is_properties_row(row) or self.tableWidget.isRowHidden(row):
                 continue
             for col in range(self.tableWidget.columnCount()):
                 item = self.tableWidget.item(row, col)
@@ -1360,6 +1494,8 @@ class LensEditor(QWidget):
 
     def _first_navigable_in_row(self, row: int) -> tuple[int, int] | None:
         """Return the first visible cell in *row*."""
+        if row < 0 or row >= self.tableWidget.rowCount() or self.tableWidget.isRowHidden(row):
+            return None
         for col in range(self.tableWidget.columnCount()):
             item = self.tableWidget.item(row, col)
             widget = self.tableWidget.cellWidget(row, col)
@@ -1406,7 +1542,24 @@ class LensEditor(QWidget):
 
     def _focus_relative(self, row: int, col: int, row_delta: int, col_delta: int) -> bool:
         """Move to a nearby visible cell while clamping to the table bounds."""
-        target_row = min(max(0, row + row_delta), self.tableWidget.rowCount() - 1)
+        if row_delta == 0:
+            target_row = min(max(0, row), self.tableWidget.rowCount() - 1)
+        else:
+            visible_rows = [
+                ui_row
+                for ui_row in range(self.tableWidget.rowCount())
+                if not self._is_properties_row(ui_row) and not self.tableWidget.isRowHidden(ui_row)
+            ]
+            if not visible_rows:
+                return False
+            current_row = row if row in visible_rows else visible_rows[0]
+            current_index = visible_rows.index(current_row)
+            step = 1 if row_delta > 0 else -1
+            target_index = min(
+                max(0, current_index + abs(row_delta) * step),
+                len(visible_rows) - 1,
+            )
+            target_row = visible_rows[target_index]
         target_col = min(max(0, col + col_delta), self.tableWidget.columnCount() - 1)
         return self._focus_cell(target_row, target_col, edit=False)
 
@@ -1605,7 +1758,7 @@ class LensEditor(QWidget):
 
             widget = SurfaceTypeWidget(row, type_info, self.connector)
             widget.surfaceTypeChanged.connect(
-                lambda nt, r=row: self.connector.set_surface_type(r, nt)
+                lambda nt, r=row: self._handle_surface_type_change_request(r, nt)
             )
             widget.propertiesIconClicked.connect(
                 lambda r=row: self.toggle_properties_widget(r)
@@ -1744,6 +1897,50 @@ class LensEditor(QWidget):
             info["rows"].append(row)
         return groups
 
+    def _theme_mode(self) -> str:
+        """Return the actively applied application theme mode."""
+        app = QApplication.instance()
+        if app is not None:
+            active_mode = app.property("activeThemeMode")
+            if isinstance(active_mode, str) and active_mode in {"dark", "light"}:
+                return active_mode
+        theme_id = self.settings.value("Appearance/ThemeId", "dark", type=str) or "dark"
+        return get_theme(str(theme_id)).mode
+
+    def _table_base_color(self) -> QColor:
+        """Return the effective base color used for table rows."""
+        return QColor(self.tableWidget.palette().base().color())
+
+    def _collapsed_element_brush(self) -> QBrush:
+        """Return a theme-aware fill used for collapsed element summary rows."""
+        base = self._table_base_color()
+        factor = self.ElementRowBackgroundFactor
+        color = base.lighter(factor) if self._theme_mode() == "dark" else base.darker(factor)
+        return QBrush(color)
+
+    def _collapsed_element_css_colors(self) -> tuple[str, str]:
+        """Return CSS colors for the collapsed element type-cell accent."""
+        fill = self._collapsed_element_brush().color()
+        factor = self.ElementRowBackgroundFactor
+        border = fill.lighter(factor) if self._theme_mode() == "dark" else fill.darker(factor)
+        return fill.name(), border.name()
+
+    def _expanded_element_brush(self) -> QBrush:
+        """Return a theme-aware fill used for expanded element member rows."""
+        base = self._table_base_color()
+        color = base.lighter(105) if self._theme_mode() == "dark" else base.darker(105)
+        return QBrush(color)
+
+    def _expanded_element_css_colors(self) -> tuple[str, str]:
+        """Return CSS colors for expanded grouped member type cells."""
+        fill = self._expanded_element_brush().color()
+        border = fill.lighter(108) if self._theme_mode() == "dark" else fill.darker(108)
+        return fill.name(), border.name()
+
+    def _element_header_brush(self, *, expanded: bool) -> QBrush:
+        """Return a theme-aware row-header brush for grouped element rows."""
+        return self._expanded_element_brush() if expanded else self._collapsed_element_brush()
+
     def _apply_group_row_presentation(self) -> None:
         """Show grouped elements as compact rows by default with expand/collapse."""
         groups = self._group_infos()
@@ -1782,39 +1979,134 @@ class LensEditor(QWidget):
         """Turn the first row of a group into the compact element summary row."""
         widget = self.tableWidget.cellWidget(row, self.connector.COL_TYPE)
         if isinstance(widget, SurfaceTypeWidget):
-            widget.setGroupSummaryMode(group_name, expanded)
+            summary_bg_css, summary_border_css = self._collapsed_element_css_colors()
+            widget.setGroupSummaryMode(
+                group_name,
+                expanded,
+                background_css=summary_bg_css,
+                border_css=summary_border_css,
+            )
             widget.groupToggleClicked.connect(lambda r=row: self._toggle_group_expanded(r))
 
-        summary_bg = QBrush(QColor(100, 136, 234, 38))
+        summary_bg = self._collapsed_element_brush()
+        summary_color = summary_bg.color()
         summary_texts = self._build_group_summary_texts(rows, group_name, group_role, expanded)
+        summary_font = self.font()
+        summary_font.setBold(True)
         for col_idx, text in summary_texts.items():
-            item = self.tableWidget.item(row, col_idx)
-            if item is None:
-                item = QTableWidgetItem("")
-                self.tableWidget.setItem(row, col_idx, item)
-            item.setText(text)
-            item.setBackground(summary_bg)
-            if not expanded and col_idx == self.connector.COL_THICKNESS:
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-            else:
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._replace_summary_row_item(
+                row,
+                col_idx,
+                text,
+                summary_bg,
+                summary_color,
+                summary_font,
+                editable=not expanded and col_idx == self.connector.COL_THICKNESS,
+            )
 
     def _apply_group_member_accent(self, row: int) -> None:
         """Apply a shared visual accent to expanded member rows."""
-        accent = QBrush(QColor(100, 136, 234, 32))
+        accent = self._expanded_element_brush()
+        accent_color = accent.color()
         type_widget = self.tableWidget.cellWidget(row, self.connector.COL_TYPE)
         if isinstance(type_widget, SurfaceTypeWidget):
-            type_widget.setGroupMemberMode()
+            member_bg_css, member_border_css = self._expanded_element_css_colors()
+            type_widget.setGroupMemberMode(
+                background_css=member_bg_css,
+                border_css=member_border_css,
+            )
         for col_idx in range(self.tableWidget.columnCount()):
             if col_idx == self.connector.COL_TYPE:
                 continue
-            item = self.tableWidget.item(row, col_idx)
+            item = self._ensure_table_item(row, col_idx, create=False)
             if item is not None:
-                item.setBackground(accent)
+                try:
+                    item.setBackground(accent)
+                    item.setData(_AccentFocusDelegate._ROW_ACCENT_ROLE, accent_color)
+                except RuntimeError:
+                    item = self._rebuild_table_item(row, col_idx)
+                    if item is not None:
+                        try:
+                            item.setBackground(accent)
+                            item.setData(_AccentFocusDelegate._ROW_ACCENT_ROLE, accent_color)
+                        except RuntimeError:
+                            fresh_item = self._create_table_item_for_cell(row, col_idx)
+                            if fresh_item is not None:
+                                fresh_item.setBackground(accent)
+                                fresh_item.setData(
+                                    _AccentFocusDelegate._ROW_ACCENT_ROLE, accent_color
+                                )
+                                self.tableWidget.setItem(row, col_idx, fresh_item)
+
+    def _ensure_table_item(
+        self, row: int, col_idx: int, *, create: bool = True
+    ) -> QTableWidgetItem | None:
+        """Return a live table item for a cell, recreating it if Qt deleted the old one."""
+        try:
+            item = self.tableWidget.item(row, col_idx)
+        except RuntimeError:
+            item = None
+        if item is not None:
+            try:
+                if isValid(item):
+                    item.flags()
+                    return item
+            except RuntimeError:
+                item = None
+        if not create:
+            return None
+        item = QTableWidgetItem("")
+        self.tableWidget.setItem(row, col_idx, item)
+        return item
+
+    def _rebuild_table_item(self, row: int, col_idx: int) -> QTableWidgetItem | None:
+        """Recreate a cell item from connector data when Qt deleted the old wrapper."""
+        if col_idx == self.connector.COL_TYPE:
+            return None
+        try:
+            self.tableWidget.takeItem(row, col_idx)
+        except RuntimeError:
+            pass
+        headers = self.connector.get_column_headers()
+        if 0 <= col_idx < len(headers):
+            self._process_table_cell(row, col_idx, headers[col_idx])
+        return self._ensure_table_item(row, col_idx, create=False)
+
+    def _create_table_item_for_cell(self, row: int, col_idx: int) -> QTableWidgetItem | None:
+        """Create a fresh non-type table item populated from connector data."""
+        if col_idx == self.connector.COL_TYPE:
+            return None
+        item_data = self.connector.get_surface_data(row, col_idx)
+        return QTableWidgetItem(str(item_data) if item_data is not None else "")
+
+    def _replace_summary_row_item(
+        self,
+        row: int,
+        col_idx: int,
+        text: str,
+        background: QBrush,
+        accent_color: QColor,
+        font: QFont,
+        *,
+        editable: bool,
+    ) -> None:
+        """Replace a summary-row cell with a freshly configured item."""
+        item = self._create_table_item_for_cell(row, col_idx)
+        if item is None:
+            return
+        item.setText(text)
+        item.setBackground(background)
+        item.setData(_AccentFocusDelegate._ROW_ACCENT_ROLE, accent_color)
+        item.setFont(font)
+        if editable:
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+        else:
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.tableWidget.setItem(row, col_idx, item)
 
     def _decorate_group_headers(self, rows: list[int], *, expanded: bool) -> None:
         """Show the expand/collapse affordance in the row header."""
-        header_bg = QBrush(QColor(100, 136, 234, 44 if expanded else 26))
+        header_bg = self._element_header_brush(expanded=expanded)
         first_row = rows[0]
         icon = "▾" if expanded else "▸"
         self._set_row_header(
@@ -1882,6 +2174,23 @@ class LensEditor(QWidget):
             and group_rows[0] == surface_index
         )
         return group_rows if is_collapsed_summary else []
+
+    def _is_collapsed_summary_surface_row(self, surface_index: int) -> bool:
+        """Return whether *surface_index* is currently shown as a collapsed element row."""
+        if surface_index < 0:
+            return False
+        group_rows = self.connector.get_group_rows(surface_index)
+        if not group_rows or group_rows[0] != surface_index:
+            return False
+        meta = self.connector.get_surface_group_metadata(surface_index)
+        group_id = meta.get("group_id")
+        return bool(group_id and str(group_id) not in self._expanded_group_ids)
+
+    def _handle_surface_type_change_request(self, surface_index: int, new_type: str) -> None:
+        """Apply a surface type change unless the row is a collapsed element summary."""
+        if self._is_collapsed_summary_surface_row(surface_index):
+            return
+        self.connector.set_surface_type(surface_index, new_type)
 
     def _toggle_group_expanded(self, surface_index: int) -> None:
         """Toggle a grouped element between compact and expanded table display."""
