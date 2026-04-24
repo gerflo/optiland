@@ -138,7 +138,7 @@ class FileService:
             self._connector._optic, is_specific_new_system=True
         )
         self._current_filepath = None
-        self._connector.set_modified(False)
+        self._connector.mark_current_state_clean()
         self._connector.opticLoaded.emit()
         self._connector.opticChanged.emit()
 
@@ -168,7 +168,10 @@ class FileService:
             self._connector._initialize_optic_structure(
                 self._connector._optic, is_specific_new_system=False
             )
-            self._connector.set_modified(False)
+            if extension.lower() == ".zmx":
+                self._connector.mark_current_state_requires_save_as()
+            else:
+                self._connector.mark_current_state_clean()
             self._connector.opticLoaded.emit()
             self._toast(f"Opened \u2014 {os.path.basename(filepath)}", "info")
         except Exception as e:
@@ -189,7 +192,7 @@ class FileService:
             with open(filepath, "w") as f:
                 json.dump(data, f, indent=4, cls=SpecialFloatEncoder)
             self._current_filepath = filepath
-            self._connector.set_modified(False)
+            self._connector.mark_current_state_clean()
             self._toast(f"Saved \u2014 {os.path.basename(filepath)}", "success")
         except Exception as e:
             self._toast(f"Save failed: {e}", "error", sub=filepath)
@@ -210,7 +213,7 @@ class FileService:
             self._connector._optic = Optic.from_dict(optic_data)
             self._current_filepath = None
             self._connector._initialize_optic_structure(self._connector._optic)
-            self._connector.set_modified(True)
+            self._connector.mark_current_state_requires_save_as()
             self._connector.opticLoaded.emit()
             self._connector.opticChanged.emit()
         except Exception as e:
@@ -233,7 +236,7 @@ class FileService:
             self._connector._initialize_optic_structure(
                 self._connector._optic, is_specific_new_system=False
             )
-            self._connector.set_modified(True)
+            self._connector.mark_current_state_requires_save_as()
             self._connector.opticLoaded.emit()
             self._connector.opticChanged.emit()
         except Exception as e:
@@ -255,7 +258,7 @@ class FileService:
             self._connector._initialize_optic_structure(
                 self._connector._optic, is_specific_new_system=False
             )
-            self._connector.set_modified(True)
+            self._connector.mark_current_state_requires_save_as()
             self._connector.opticLoaded.emit()
             self._connector.opticChanged.emit()
         except Exception as e:

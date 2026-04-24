@@ -555,6 +555,10 @@ class MainWindow(FramelessWindow):
 
     def _open_system_from_path(self, filepath: str) -> None:
         """Load a system file and update related UI state."""
+        if not self._maybe_save_changes_before_destructive_action(
+            f"opening '{os.path.basename(filepath)}'"
+        ):
+            return
         self._remember_dialog_path("Paths/LastOpenDir", filepath)
         self._remember_recent_file(filepath)
         self.connector.load_optic_from_file(filepath)
@@ -753,13 +757,10 @@ class MainWindow(FramelessWindow):
         if hasattr(self, "custom_title_bar_widget") and self.custom_title_bar_widget:
             display_name = "UnnamedProject.json"
             current_file = self.connector.get_current_filepath()
-            is_modified = self.connector.is_modified()
+            is_modified = self.connector.has_unsaved_changes()
 
             if current_file:
                 display_name = os.path.basename(current_file)
-
-            if not current_file:
-                is_modified = True
 
             if is_modified:
                 display_name += "*"
@@ -968,6 +969,8 @@ class MainWindow(FramelessWindow):
     @Slot()
     def new_system_action(self) -> None:
         """Slot for the *New System* action."""
+        if not self._maybe_save_changes_before_destructive_action("creating a new system"):
+            return
         self.connector.new_system()
         self._update_project_name_in_title_bar()
         logger.debug("New System action triggered")
@@ -1016,30 +1019,31 @@ class MainWindow(FramelessWindow):
             self._update_project_name_in_title_bar()
             logger.debug("Save System As action triggered: %s", filepath)
 
-    def _confirm_discard_changes(self) -> bool:
-        """Prompt the user to confirm discarding unsaved changes.
-
-        Returns:
-            ``True`` if the user confirms (or there are no unsaved changes),
-            ``False`` if the user cancels.
-        """
-        if not self.connector.is_modified():
+    def _maybe_save_changes_before_destructive_action(self, action_label: str) -> bool:
+        """Offer Save/Discard/Cancel before replacing or closing the current system."""
+        if not self.connector.has_unsaved_changes():
             return True
-        reply = QMessageBox.question(
+        current_path = self.connector.get_current_filepath()
+        display_name = os.path.basename(current_path) if current_path else "Untitled system"
+        reply = QMessageBox.warning(
             self,
             "Unsaved Changes",
-            "The current system has unsaved changes. "
-            "Importing will replace it. Continue?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            f"Save changes to '{display_name}' before {action_label}?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
         )
-        return reply == QMessageBox.StandardButton.Yes
+        if reply == QMessageBox.StandardButton.Save:
+            self.save_system_action()
+            return not self.connector.has_unsaved_changes()
+        if reply == QMessageBox.StandardButton.Discard:
+            return True
+        return False
 
     @Slot()
     def import_zemax_action(self):
         """Show a file dialog and import a Zemax .zmx file."""
-        if not self._confirm_discard_changes():
-            return
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "Import Zemax File",
@@ -1047,6 +1051,10 @@ class MainWindow(FramelessWindow):
             "Zemax Files (*.zmx);;All Files (*)",
         )
         if filepath:
+            if not self._maybe_save_changes_before_destructive_action(
+                f"importing '{os.path.basename(filepath)}'"
+            ):
+                return
             self._remember_dialog_path("Paths/LastOpenDir", filepath)
             self.connector.import_zemax(filepath)
             self._update_project_name_in_title_bar()
@@ -1054,8 +1062,6 @@ class MainWindow(FramelessWindow):
     @Slot()
     def import_codev_action(self):
         """Show a file dialog and import a CODE V .seq file."""
-        if not self._confirm_discard_changes():
-            return
         filepath, _ = QFileDialog.getOpenFileName(
             self,
             "Import CODE V File",
@@ -1063,6 +1069,10 @@ class MainWindow(FramelessWindow):
             "CODE V Files (*.seq);;All Files (*)",
         )
         if filepath:
+            if not self._maybe_save_changes_before_destructive_action(
+                f"importing '{os.path.basename(filepath)}'"
+            ):
+                return
             self._remember_dialog_path("Paths/LastOpenDir", filepath)
             self.connector.import_codev(filepath)
             self._update_project_name_in_title_bar()
@@ -1468,6 +1478,9 @@ class MainWindow(FramelessWindow):
     def closeEvent(self, event: QEvent) -> None:
         """Shut down the Jupyter kernel and accept the close event."""
         logger.debug("Closing application.")
+        if not self._maybe_save_changes_before_destructive_action("closing the application"):
+            event.ignore()
+            return
         self._save_window_placement()
         self._save_current_layout_state()
         if hasattr(self, "panel_manager") and self.panel_manager.python_terminal:
@@ -1652,6 +1665,10 @@ class MainWindow(FramelessWindow):
             optic_class: The sample :class:`~optiland.optic.Optic` subclass to load.
         """
         try:
+            if not self._maybe_save_changes_before_destructive_action(
+                f"loading sample '{optic_class.__name__}'"
+            ):
+                return
             optic_instance = optic_class()
             self.connector.load_optic_from_object(optic_instance)
             print(f"Loaded sample: {optic_class.__name__}")

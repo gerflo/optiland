@@ -106,6 +106,8 @@ class OptilandConnector(QObject):
 
         self._initialize_optic_structure(self._optic, is_specific_new_system=True)
         self._is_modified = False
+        self._clean_state_snapshot = self._capture_optic_state()
+        self._requires_save_as = False
 
         self._undo_redo_manager.undoStackAvailabilityChanged.connect(
             self.undoStackAvailabilityChanged
@@ -127,9 +129,10 @@ class OptilandConnector(QObject):
         Args:
             modified: New modified state.
         """
-        if self._is_modified != modified:
-            self._is_modified = modified
-            self.modifiedStateChanged.emit(self._is_modified)
+        if modified:
+            self._sync_modified_state()
+        else:
+            self.mark_current_state_clean()
 
     def is_modified(self) -> bool:
         """Return whether the current design has unsaved changes.
@@ -137,7 +140,42 @@ class OptilandConnector(QObject):
         Returns:
             ``True`` if the optic has been modified since last save/load.
         """
-        return self._is_modified
+        return self.has_unsaved_changes()
+
+    def has_unsaved_changes(self) -> bool:
+        """Return whether closing/replacing the current system would lose work."""
+        return self._requires_save_as or self._current_state_differs_from_clean_snapshot()
+
+    def mark_current_state_clean(self) -> None:
+        """Update the clean snapshot to the current state and clear unsaved status."""
+        self._clean_state_snapshot = self._capture_optic_state()
+        self._requires_save_as = False
+        self._set_modified_flag(False)
+
+    def mark_current_state_requires_save_as(self) -> None:
+        """Mark the current state as intentionally unsaved despite being internally stable."""
+        self._clean_state_snapshot = self._capture_optic_state()
+        self._requires_save_as = True
+        self._set_modified_flag(True)
+
+    def _set_modified_flag(self, modified: bool) -> None:
+        """Store *modified* and emit the change signal when the value changes."""
+        if self._is_modified != modified:
+            self._is_modified = modified
+            self.modifiedStateChanged.emit(self._is_modified)
+
+    def _current_state_differs_from_clean_snapshot(self) -> bool:
+        """Compare the live optic state against the last clean snapshot."""
+        if self._clean_state_snapshot is None:
+            return True
+        try:
+            return self._capture_optic_state() != self._clean_state_snapshot
+        except Exception:
+            return self._is_modified
+
+    def _sync_modified_state(self) -> None:
+        """Recompute the modified flag from the clean snapshot and save-as requirement."""
+        self._set_modified_flag(self.has_unsaved_changes())
 
     def get_optic(self) -> Optic:
         """Return the active :class:`~optiland.optic.Optic` instance.
@@ -281,6 +319,7 @@ class OptilandConnector(QObject):
             state = self._undo_redo_manager.undo(self._capture_optic_state())
             if state:
                 self._restore_optic_state(state)
+                self._sync_modified_state()
 
     def redo(self) -> None:
         """Re-apply the next design state."""
@@ -288,6 +327,7 @@ class OptilandConnector(QObject):
             state = self._undo_redo_manager.redo(self._capture_optic_state())
             if state:
                 self._restore_optic_state(state)
+                self._sync_modified_state()
 
     # ------------------------------------------------------------------
     # FileService delegation

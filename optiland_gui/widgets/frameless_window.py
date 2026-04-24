@@ -11,6 +11,8 @@ Refactored by: Jules, 2025
 
 from __future__ import annotations
 
+import contextlib
+
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, Qt
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
@@ -28,7 +30,9 @@ class FramelessWindow(QMainWindow):
         self._frameless_enabled = False
         self.setWindowFlags(Qt.Window)
         self.setMouseTracking(True)
-        QApplication.instance().installEventFilter(self)
+        self._app_instance = QApplication.instance()
+        if self._app_instance is not None:
+            self._app_instance.installEventFilter(self)
 
         self.grip_size = 8
         self.is_resizing = False
@@ -73,38 +77,53 @@ class FramelessWindow(QMainWindow):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         """Handle resize gestures even when child widgets cover the window edge."""
-        if not self._frameless_enabled:
-            return super().eventFilter(watched, event)
-        if not isinstance(watched, QWidget):
-            return super().eventFilter(watched, event)
-        if watched.window() is not self:
-            return super().eventFilter(watched, event)
+        try:
+            if not self._frameless_enabled:
+                return super().eventFilter(watched, event)
+            if not isinstance(watched, QWidget):
+                return super().eventFilter(watched, event)
+            if watched.window() is not self:
+                return super().eventFilter(watched, event)
 
-        if event.type() == QEvent.MouseMove:
-            local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
-            self.updateCursorShape(local_pos)
-            if self.is_resizing and not self.isMaximized() and not self.isFullScreen():
-                self._perform_resize(event.globalPosition().toPoint())
-                return True
+            if event.type() == QEvent.MouseMove:
+                local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+                self.updateCursorShape(local_pos)
+                if self.is_resizing and not self.isMaximized() and not self.isFullScreen():
+                    self._perform_resize(event.globalPosition().toPoint())
+                    return True
 
-        if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
-            local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
-            resize_area = self._get_resize_area(local_pos)
-            if resize_area and not self.isMaximized() and not self.isFullScreen():
-                self.resize_area = resize_area
-                self.is_resizing = True
-                self.start_geometry = self.geometry()
-                self.start_pos = event.globalPosition().toPoint()
-                return True
+            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
+                resize_area = self._get_resize_area(local_pos)
+                if resize_area and not self.isMaximized() and not self.isFullScreen():
+                    self.resize_area = resize_area
+                    self.is_resizing = True
+                    self.start_geometry = self.geometry()
+                    self.start_pos = event.globalPosition().toPoint()
+                    return True
 
-        if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-            if self.is_resizing:
-                self.is_resizing = False
-                self.resize_area = None
-                self.setCursor(Qt.ArrowCursor)
-                return True
+            if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                if self.is_resizing:
+                    self.is_resizing = False
+                    self.resize_area = None
+                    self.setCursor(Qt.ArrowCursor)
+                    return True
+        except RuntimeError:
+            return False
 
         return super().eventFilter(watched, event)
+
+    def _uninstall_global_event_filter(self) -> None:
+        """Detach the application-level event filter during shutdown."""
+        if self._app_instance is not None:
+            with contextlib.suppress(RuntimeError):
+                self._app_instance.removeEventFilter(self)
+            self._app_instance = None
+
+    def closeEvent(self, event: QEvent):
+        """Detach the global event filter before the window closes."""
+        self._uninstall_global_event_filter()
+        super().closeEvent(event)
 
     def mousePressEvent(self, event: QEvent):
         """Handle mouse press events for window dragging and resizing."""
