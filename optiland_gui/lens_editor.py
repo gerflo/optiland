@@ -536,6 +536,7 @@ class SurfaceTypeWidget(QWidget):
 
     surfaceTypeChanged = Signal(str)
     propertiesIconClicked = Signal()
+    groupToggleClicked = Signal()
 
     def __init__(self, row, current_type_info, connector, parent=None):
         super().__init__(parent)
@@ -554,6 +555,14 @@ class SurfaceTypeWidget(QWidget):
             "QWidget#SurfaceTypeCell[currentCell='true'] {"
             "  border: 2px solid #FFD166;"
             "  background: rgba(255, 209, 102, 0.22);"
+            "}"
+            "QWidget#SurfaceTypeCell[groupSummary='true'] {"
+            "  border: 1px solid rgba(100, 136, 234, 0.45);"
+            "  background: rgba(100, 136, 234, 0.16);"
+            "}"
+            "QWidget#SurfaceTypeCell[groupMember='true'] {"
+            "  border: 1px solid rgba(100, 136, 234, 0.18);"
+            "  background: rgba(100, 136, 234, 0.08);"
             "}"
             "QLineEdit#SurfaceTypeLineEdit {"
             "  border: none;"
@@ -577,6 +586,7 @@ class SurfaceTypeWidget(QWidget):
         self.type_button.setAutoRaise(True)
         self.type_button.setArrowType(Qt.DownArrow)
         self.type_button.setContextMenuPolicy(Qt.PreventContextMenu)
+        self.type_button.clicked.connect(self._handle_type_button_clicked)
 
         # properties button
         self.props_button = QToolButton()
@@ -611,6 +621,7 @@ class SurfaceTypeWidget(QWidget):
         self.type_button.setEnabled(is_editable)
         self.type_button.setVisible(is_editable)
         self.type_edit.setReadOnly(not is_editable)
+        self._summary_mode = False
 
         # Badge label shown when non-standard variable types are registered
         self._var_badge = QLabel("V")
@@ -649,9 +660,42 @@ class SurfaceTypeWidget(QWidget):
         self.style().polish(self)
         self.update()
 
+    def setGroupSummaryMode(self, label: str, expanded: bool) -> None:
+        """Render this cell as the summary row for a collapsed/expanded element."""
+        self._summary_mode = True
+        self.setProperty("groupSummary", True)
+        self.setProperty("groupMember", False)
+        self.type_edit.setText(label)
+        self.type_edit.setReadOnly(True)
+        self.type_button.setVisible(True)
+        self.type_button.setEnabled(True)
+        self.type_button.setMenu(None)
+        self.type_button.setPopupMode(QToolButton.ToolButtonPopupMode.DelayedPopup)
+        self.type_button.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self.type_button.setToolTip("Expand/Collapse Element")
+        self.props_button.hide()
+        self._var_badge.hide()
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def setGroupMemberMode(self) -> None:
+        """Apply a subtle shared accent to grouped member rows."""
+        self._summary_mode = False
+        self.setProperty("groupSummary", False)
+        self.setProperty("groupMember", True)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
     def type_selected(self, new_type):
         self.type_edit.setText(new_type.title())
         self.surfaceTypeChanged.emit(new_type)
+
+    def _handle_type_button_clicked(self) -> None:
+        """Route the type button either to the menu or to element toggle mode."""
+        if self._summary_mode:
+            self.groupToggleClicked.emit()
 
     def text_changed(self):
         new_type = self.type_edit.text()
@@ -796,6 +840,7 @@ class LensEditor(QWidget):
         self._pending_insert_ui_row: int | None = None
         self._active_cell: tuple[int, int] = (-1, -1)
         self._restoring_table_state = False
+        self._expanded_group_ids: set[str] = set()
 
         self._init_ui()
         self.setup_table()
@@ -914,6 +959,7 @@ class LensEditor(QWidget):
         self.tableWidget.itemChanged.connect(self.on_item_changed_handler)
         self.tableWidget.cellPressed.connect(self._remember_active_cell)
         self.tableWidget.cellClicked.connect(self._remember_active_cell)
+        self.tableWidget.cellDoubleClicked.connect(self._handle_cell_double_clicked)
         self.tableWidget.customContextMenuRequested.connect(self.show_context_menu)
         self.tableWidget.itemSelectionChanged.connect(self.update_headers_on_selection)
         self.tableWidget.currentCellChanged.connect(self._sync_current_cell_highlight)
@@ -1590,12 +1636,15 @@ class LensEditor(QWidget):
     @Slot()
     def load_data(self):
         self.tableWidget.blockSignals(True)
+        self._prune_group_expansion_state()
         self.tableWidget.setRowCount(0)
         num_surfaces = self.connector.get_surface_count()
         self.tableWidget.setRowCount(num_surfaces)
 
         for r in range(num_surfaces):
             self._process_table_row(r)
+
+        self._apply_group_row_presentation()
 
         if self.open_prop_source_row != -1 and self.open_prop_source_row < num_surfaces:
             self._insert_properties_widget(self.open_prop_source_row)
@@ -1607,6 +1656,163 @@ class LensEditor(QWidget):
             -1,
             -1,
         )
+
+    def _prune_group_expansion_state(self) -> None:
+        """Drop expansion state entries that no longer exist in the optic."""
+        active_group_ids = {
+            meta.get("group_id")
+            for row in range(self.connector.get_surface_count())
+            if (meta := self.connector.get_surface_group_metadata(row)).get("group_id")
+        }
+        self._expanded_group_ids.intersection_update(active_group_ids)
+
+    def _group_infos(self) -> dict[str, dict[str, object]]:
+        """Collect grouped-row metadata keyed by group id."""
+        groups: dict[str, dict[str, object]] = {}
+        for row in range(self.connector.get_surface_count()):
+            meta = self.connector.get_surface_group_metadata(row)
+            group_id = meta.get("group_id")
+            if not group_id:
+                continue
+            info = groups.setdefault(
+                str(group_id),
+                {
+                    "rows": [],
+                    "group_name": meta.get("group_name"),
+                    "group_role": meta.get("group_role"),
+                },
+            )
+            info["rows"].append(row)
+        return groups
+
+    def _apply_group_row_presentation(self) -> None:
+        """Show grouped elements as compact rows by default with expand/collapse."""
+        groups = self._group_infos()
+        for info in groups.values():
+            rows = list(info["rows"])
+            if not rows:
+                continue
+            expanded = str(self.connector.get_surface_group_metadata(rows[0]).get("group_id")) in self._expanded_group_ids
+            first_row = rows[0]
+            if expanded:
+                for row in rows:
+                    self.tableWidget.setRowHidden(row, False)
+                    self._apply_group_member_accent(row)
+            else:
+                self._decorate_element_summary_row(
+                    first_row,
+                    rows,
+                    str(info.get("group_name") or f"Element {first_row}"),
+                    str(info.get("group_role") or "element"),
+                    expanded,
+                )
+                for row in rows[1:]:
+                    self.tableWidget.setRowHidden(row, True)
+                self.tableWidget.setRowHidden(first_row, False)
+
+    def _decorate_element_summary_row(
+        self,
+        row: int,
+        rows: list[int],
+        group_name: str,
+        group_role: str,
+        expanded: bool,
+    ) -> None:
+        """Turn the first row of a group into the compact element summary row."""
+        widget = self.tableWidget.cellWidget(row, self.connector.COL_TYPE)
+        if isinstance(widget, SurfaceTypeWidget):
+            widget.setGroupSummaryMode(group_name, expanded)
+            widget.groupToggleClicked.connect(lambda r=row: self._toggle_group_expanded(r))
+
+        summary_bg = QBrush(QColor(100, 136, 234, 38))
+        summary_texts = self._build_group_summary_texts(rows, group_name, group_role, expanded)
+        for col_idx, text in summary_texts.items():
+            item = self.tableWidget.item(row, col_idx)
+            if item is None:
+                item = QTableWidgetItem("")
+                self.tableWidget.setItem(row, col_idx, item)
+            item.setText(text)
+            item.setBackground(summary_bg)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+
+    def _apply_group_member_accent(self, row: int) -> None:
+        """Apply a shared visual accent to expanded member rows."""
+        accent = QBrush(QColor(100, 136, 234, 22))
+        type_widget = self.tableWidget.cellWidget(row, self.connector.COL_TYPE)
+        if isinstance(type_widget, SurfaceTypeWidget):
+            type_widget.setGroupMemberMode()
+        for col_idx in range(self.tableWidget.columnCount()):
+            if col_idx == self.connector.COL_TYPE:
+                continue
+            item = self.tableWidget.item(row, col_idx)
+            if item is not None:
+                item.setBackground(accent)
+
+    def _build_group_summary_texts(
+        self, rows: list[int], group_name: str, group_role: str, expanded: bool
+    ) -> dict[int, str]:
+        """Build compact summary strings for a grouped element row."""
+        first_radius = self.connector.get_surface_data(rows[0], self.connector.COL_RADIUS)
+        last_radius = self.connector.get_surface_data(rows[-1], self.connector.COL_RADIUS)
+        internal_length = 0.0
+        for group_row in rows[:-1]:
+            thickness = self.connector.get_surface_data(group_row, self.connector.COL_THICKNESS)
+            try:
+                internal_length += float(thickness)
+            except (TypeError, ValueError):
+                pass
+        materials: list[str] = []
+        max_semi = 0.0
+        for group_row in rows:
+            material = str(self.connector.get_surface_data(group_row, self.connector.COL_MATERIAL) or "")
+            if material and material not in materials:
+                materials.append(material)
+            semi = self.connector.get_surface_data(group_row, self.connector.COL_SEMI_DIAMETER)
+            try:
+                max_semi = max(max_semi, float(semi))
+            except (TypeError, ValueError):
+                continue
+        return {
+            self.connector.COL_COMMENT: f"{group_name} ({len(rows)} surfaces, {group_role})",
+            self.connector.COL_RADIUS: f"{first_radius} ... {last_radius}" if len(rows) > 1 else str(first_radius),
+            self.connector.COL_THICKNESS: f"{internal_length:.4f}",
+            self.connector.COL_MATERIAL: ", ".join(materials[:2]) + (" ..." if len(materials) > 2 else ""),
+            self.connector.COL_CONIC: "Expanded" if expanded else "Collapsed",
+            self.connector.COL_SEMI_DIAMETER: f"{max_semi:.4f}" if max_semi else "Auto",
+        }
+
+    def _toggle_group_expanded(self, surface_index: int) -> None:
+        """Toggle a grouped element between compact and expanded table display."""
+        meta = self.connector.get_surface_group_metadata(surface_index)
+        group_id = meta.get("group_id")
+        if not group_id:
+            return
+        group_id = str(group_id)
+        if group_id in self._expanded_group_ids:
+            self._expanded_group_ids.remove(group_id)
+            if self.open_prop_source_row in self.connector.get_group_rows(surface_index):
+                self.open_prop_source_row = -1
+        else:
+            self._expanded_group_ids.add(group_id)
+        self.load_data()
+
+    def _expand_group_for_row(self, surface_index: int) -> None:
+        """Ensure the group containing *surface_index* is currently expanded."""
+        meta = self.connector.get_surface_group_metadata(surface_index)
+        group_id = meta.get("group_id")
+        if group_id:
+            self._expanded_group_ids.add(str(group_id))
+
+    @Slot(int, int)
+    def _handle_cell_double_clicked(self, row: int, _column: int) -> None:
+        """Expand or collapse an element when its compact summary row is double-clicked."""
+        surface_index = self.map_ui_row_to_surface_index(row)
+        group_rows = self.connector.get_group_rows(surface_index)
+        meta = self.connector.get_surface_group_metadata(surface_index)
+        group_id = meta.get("group_id")
+        is_expanded = bool(group_id and str(group_id) in self._expanded_group_ids)
+        if group_rows and group_rows[0] == surface_index and not is_expanded:
+            self._toggle_group_expanded(surface_index)
 
     def _insert_properties_widget(self, source_row):
         prop_row_index = source_row + 1
@@ -1748,6 +1954,7 @@ class LensEditor(QWidget):
 
     @Slot()
     def toggle_properties_widget(self, source_row):
+        self._expand_group_for_row(source_row)
         # Check if we're closing the currently open properties
         if self.open_prop_source_row == source_row:
             # Restore interactive resize mode for the rows that were fixed
@@ -1850,6 +2057,15 @@ class LensEditor(QWidget):
             ungroup_element_action.triggered.connect(
                 lambda _=False, si=surface_index: self._ungroup_element(si)
             )
+            group_meta = self.connector.get_surface_group_metadata(surface_index)
+            group_id = group_meta.get("group_id")
+            is_group_expanded = bool(group_id and str(group_id) in self._expanded_group_ids)
+            toggle_element_action = menu.addAction(
+                "Collapse Element" if is_group_expanded else "Expand Element"
+            )
+            toggle_element_action.triggered.connect(
+                lambda _=False, si=surface_index: self._toggle_group_expanded(si)
+            )
             flip_element_action = menu.addAction("Flip Element")
             flip_element_action.triggered.connect(
                 lambda _=False, si=surface_index: self._flip_element(si)
@@ -1886,6 +2102,7 @@ class LensEditor(QWidget):
                 select_element_action.setEnabled(False)
                 rename_element_action.setEnabled(False)
                 ungroup_element_action.setEnabled(False)
+                toggle_element_action.setEnabled(False)
                 flip_element_action.setEnabled(False)
                 duplicate_element_action.setEnabled(False)
                 move_element_action.setEnabled(False)
@@ -1896,6 +2113,7 @@ class LensEditor(QWidget):
                 select_element_action.setEnabled(False)
                 rename_element_action.setEnabled(False)
                 ungroup_element_action.setEnabled(False)
+                toggle_element_action.setEnabled(False)
                 flip_element_action.setEnabled(False)
                 duplicate_element_action.setEnabled(False)
                 move_element_action.setEnabled(False)
@@ -1943,6 +2161,8 @@ class LensEditor(QWidget):
         group_rows = self.connector.get_group_rows(surface_index)
         if not group_rows:
             return
+        self._expand_group_for_row(surface_index)
+        self.load_data()
         self._select_surface_rows(group_rows)
 
     def _select_surface_rows(self, surface_rows: list[int]) -> None:
@@ -1974,7 +2194,10 @@ class LensEditor(QWidget):
         )
         if not accepted:
             return
-        self.connector.create_surface_group(rows, name or None, "assembly")
+        group_id = self.connector.create_surface_group(rows, name or None, "assembly")
+        if group_id:
+            self._expanded_group_ids.add(str(group_id))
+            self.load_data()
         self._select_entire_element(rows[0])
 
     def _rename_element(self, surface_index: int) -> None:
@@ -1994,16 +2217,27 @@ class LensEditor(QWidget):
 
     def _ungroup_element(self, surface_index: int) -> None:
         """Remove logical grouping metadata from the selected element."""
+        meta = self.connector.get_surface_group_metadata(surface_index)
         self.connector.ungroup_surface_element(surface_index)
+        group_id = meta.get("group_id")
+        if group_id:
+            self._expanded_group_ids.discard(str(group_id))
+            self.load_data()
 
     def _duplicate_element(self, surface_index: int) -> None:
         """Duplicate the grouped element containing *surface_index*."""
         new_rows = self.connector.duplicate_surface_element(surface_index)
+        if new_rows:
+            self._expand_group_for_row(new_rows[0])
+            self.load_data()
         self._select_surface_rows(new_rows)
 
     def _flip_element(self, surface_index: int) -> None:
         """Flip the grouped element containing *surface_index*."""
         flipped_rows = self.connector.flip_surface_element(surface_index)
+        if flipped_rows:
+            self._expand_group_for_row(flipped_rows[0])
+            self.load_data()
         self._select_surface_rows(flipped_rows)
 
     def _move_element(self, surface_index: int) -> None:
@@ -2022,4 +2256,7 @@ class LensEditor(QWidget):
         if not accepted:
             return
         moved_rows = self.connector.move_surface_element(surface_index, target_row)
+        if moved_rows:
+            self._expand_group_for_row(moved_rows[0])
+            self.load_data()
         self._select_surface_rows(moved_rows)

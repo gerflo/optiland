@@ -37,6 +37,12 @@ def mock_connector(minimal_optic, qapp):
     conn.get_surface_aperture_config.return_value = {"type": "none"}
     conn.get_surface_data.return_value = ""
     conn.get_available_surface_types.return_value = ["standard", "aspheric"]
+    conn.get_surface_group_metadata.return_value = {
+        "group_id": None,
+        "group_name": None,
+        "group_role": None,
+    }
+    conn.get_group_rows.return_value = []
     return conn
 
 
@@ -217,6 +223,11 @@ def test_lens_editor_select_entire_element_selects_group_rows(qapp, mock_connect
     from optiland_gui.lens_editor import LensEditor
 
     mock_connector.get_group_rows.return_value = [1, 2]
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
     editor = LensEditor(mock_connector)
     editor.load_data()
 
@@ -224,6 +235,53 @@ def test_lens_editor_select_entire_element_selects_group_rows(qapp, mock_connect
 
     selected_rows = sorted({index.row() for index in editor.tableWidget.selectedIndexes()})
     assert selected_rows == [1, 2]
+
+
+def test_lens_editor_grouped_elements_are_collapsed_by_default(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor, SurfaceTypeWidget
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    mock_connector.get_surface_data.side_effect = lambda row, col: {
+        (1, mock_connector.COL_RADIUS): "50.0",
+        (2, mock_connector.COL_RADIUS): "-50.0",
+        (1, mock_connector.COL_THICKNESS): "5.0",
+        (2, mock_connector.COL_THICKNESS): "45.0",
+        (1, mock_connector.COL_MATERIAL): "N-BK7",
+        (2, mock_connector.COL_MATERIAL): "Air",
+        (1, mock_connector.COL_SEMI_DIAMETER): "12.7",
+        (2, mock_connector.COL_SEMI_DIAMETER): "12.7",
+    }.get((row, col), "")
+
+    editor = LensEditor(mock_connector)
+
+    assert editor.tableWidget.isRowHidden(2) is True
+    type_widget = editor.tableWidget.cellWidget(1, mock_connector.COL_TYPE)
+    assert isinstance(type_widget, SurfaceTypeWidget)
+    assert type_widget.type_edit.text() == "L1"
+    assert editor.tableWidget.item(1, mock_connector.COL_COMMENT).text() == "L1 (2 surfaces, lens)"
+
+
+def test_lens_editor_toggle_group_expanded_reveals_member_rows(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+
+    editor = LensEditor(mock_connector)
+    assert editor.tableWidget.isRowHidden(2) is True
+
+    editor._toggle_group_expanded(1)
+
+    assert editor.tableWidget.isRowHidden(2) is False
 
 
 def test_lens_editor_ctrl_insert_copies_widget_backed_type_cell(qapp, mock_connector):
