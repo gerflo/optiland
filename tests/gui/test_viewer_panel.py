@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import optiland.backend as be
 from PySide6.QtCore import QObject, Signal
@@ -116,19 +117,41 @@ def test_viewer_panel_restores_persistent_2d_settings(
     assert settings_store["Viewer2D/NumRays"] == 7
 
 
-def test_rays2d_annular_line_y_skips_blocked_center(minimal_optic) -> None:
+def test_rays2d_annular_line_y_uses_one_uniform_real_trace() -> None:
+    from optiland.optic import Optic
     from optiland.physical_apertures import RadialAperture
 
-    minimal_optic.surfaces.surfaces[1].aperture = RadialAperture(r_max=3.8, r_min=2.4)
-    minimal_optic.updater.update()
-    rays = Rays2D(minimal_optic)
+    optic = Optic()
+    optic.surfaces.add(index=0, radius=be.inf, thickness=be.inf)
+    optic.surfaces.add(
+        index=1,
+        radius=be.inf,
+        thickness=20.0,
+        is_stop=True,
+        aperture=RadialAperture(r_max=3.6, r_min=2.44),
+    )
+    optic.surfaces.add(index=2, radius=be.inf, thickness=0.0)
+    optic.set_aperture(aperture_type="EPD", value=20.0)
+    optic.fields.set_type("angle")
+    optic.fields.add(y=0.0)
+    optic.wavelengths.add(value=0.55, is_primary=True)
+    optic.updater.update()
 
-    rays._trace((0.0, 0.0), 0.55, 8, "line_y")
+    rays = Rays2D(optic)
+    num_rays = 31
+    rays._trace((0.0, 0.0), 0.55, num_rays, "line_y")
 
-    start_y = rays.y[0]
-    finite_start_y = start_y[~be.isnan(start_y)]
-    assert finite_start_y.size == 8
-    assert all(abs(float(value)) >= (2.4 / 3.8) - 1e-9 for value in finite_start_y)
+    stop_y = be.to_numpy(rays.y[1])
+    image_i = be.to_numpy(rays.i[2])
+    expected_stop_y = np.linspace(-10.0, 10.0, num_rays)
+
+    transmitted = (np.abs(stop_y) >= 2.44) & (np.abs(stop_y) <= 3.6)
+
+    assert stop_y.size == num_rays
+    assert np.allclose(stop_y, expected_stop_y)
+    assert np.any(transmitted)
+    assert np.all(image_i[transmitted] > 0)
+    assert np.all(image_i[~transmitted] == 0)
 
 
 def test_viewer_pan_does_not_start_while_toolbar_zoom_mode_is_active(
