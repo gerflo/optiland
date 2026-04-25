@@ -11,11 +11,12 @@ plots and `VTKViewer` for 3D rendering.
 from __future__ import annotations
 
 import logging
+import math
 
 import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import QSettings, Qt, Slot
+from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -275,6 +276,7 @@ class ViewerPanel(QWidget):
         super().__init__(parent)
         self.connector = connector
         self.settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
+        self.current_theme = "dark"
 
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -282,23 +284,67 @@ class ViewerPanel(QWidget):
 
         # Create 2D Viewer Tab
         self.viewer2D = MatplotlibViewer(self.connector)
+        self.viewer2D.settingsApplied.connect(self._render_3d_from_2d_settings)
         viewer2d_container = self._create_2d_viewer_tab()
         self.tabWidget.addTab(viewer2d_container, "2D Layout")
 
         # Create 3D Viewer Tab
         self.viewer3D = None
+        self._pending_3d_render = False
+        self._creating_3d_viewer = False
+        self._rendering_3d = False
+        self._scheduled_3d_activation = False
+        self._viewer3d_tab_index = -1
+        self._viewer3d_placeholder = None
         if VTK_AVAILABLE:
-            self.viewer3D = VTKViewer(self.connector)
-            self.tabWidget.addTab(self.viewer3D, "3D Layout")
+            self._viewer3d_placeholder = self._create_3d_placeholder_tab()
+            self._viewer3d_tab_index = self.tabWidget.addTab(
+                self._viewer3d_placeholder, "3D Layout"
+            )
 
         # Create Sag Viewer Tab
         self.sagViewer = SagViewer(self.connector, self)
         self.tabWidget.addTab(self.sagViewer, "Sag")
 
         main_layout.addWidget(self.tabWidget)
+        self.tabWidget.currentChanged.connect(self._render_pending_3d_if_visible)
 
         self.connector.opticLoaded.connect(self.reset_original_views)
         self.connector.opticChanged.connect(self.update_viewers)
+
+    def _create_3d_placeholder_tab(self) -> QWidget:
+        """Create the lightweight tab shown until the 3D viewer is opened."""
+        placeholder = QWidget()
+        layout = QVBoxLayout(placeholder)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(QLabel("3D view is prepared when this tab is opened."))
+        return placeholder
+
+    def _ensure_3d_viewer(self) -> bool:
+        """Create the VTK viewer lazily when the 3D tab is activated."""
+        if self.viewer3D is not None:
+            return True
+        if self._creating_3d_viewer:
+            return False
+        if not VTK_AVAILABLE or self._viewer3d_tab_index < 0:
+            return False
+
+        self._creating_3d_viewer = True
+        try:
+            viewer3d = VTKViewer(self.connector)
+            viewer3d.update_theme(self.current_theme, render=False)
+            blocker = QSignalBlocker(self.tabWidget)
+            try:
+                self.tabWidget.removeTab(self._viewer3d_tab_index)
+                self.tabWidget.insertTab(self._viewer3d_tab_index, viewer3d, "3D Layout")
+                self.tabWidget.setCurrentIndex(self._viewer3d_tab_index)
+            finally:
+                del blocker
+            self.viewer3D = viewer3d
+            self._viewer3d_placeholder = None
+            return True
+        finally:
+            self._creating_3d_viewer = False
 
     def _settings_key(self, name: str) -> str:
         """Return the persistent-settings key for a 2D viewer panel option."""
@@ -355,26 +401,84 @@ class ViewerPanel(QWidget):
         if self.viewer2D:
             preserve = self.preserve_zoom_checkbox.isChecked()
             self.viewer2D.plot_optic(preserve_zoom=preserve)
-        if self.viewer3D:
-            self.viewer3D.render_optic()
+        self._render_3d_from_2d_settings()
 
     @Slot()
     def reset_original_views(self):
         """Reset all viewer tabs to their original framing after loading a system."""
         if self.viewer2D:
             self.viewer2D.reset_view()
-        if self.viewer3D:
-            self.viewer3D.render_optic()
+        self._render_3d_from_2d_settings()
         if self.sagViewer:
             self.sagViewer.update_surface_range()
             self.sagViewer.plot_sag()
 
+    @Slot()
+    def _render_3d_from_2d_settings(self):
+        """Render 3D rays with sampling derived from the 2D view settings."""
+        if not self.viewer2D:
+            return
+        if not self._is_3d_tab_active():
+            self._pending_3d_render = True
+            return
+        self._render_3d_now()
+
+    def _is_3d_tab_active(self) -> bool:
+        """Return whether the VTK viewer tab is currently visible."""
+        return bool(
+            self._viewer3d_tab_index >= 0
+            and self.tabWidget.currentIndex() == self._viewer3d_tab_index
+        )
+
+    def _render_3d_now(self) -> None:
+        """Render the 3D view immediately from the current 2D sampling state."""
+        if self._rendering_3d:
+            self._pending_3d_render = True
+            return
+        if not (self.viewer2D and self._ensure_3d_viewer() and self.viewer3D):
+            return
+        num_rays, distribution = self.viewer2D.ray_sampling_for_3d()
+        self._rendering_3d = True
+        try:
+            self.viewer3D.render_optic(
+                num_rays=num_rays,
+                distribution=distribution,
+            )
+            self._pending_3d_render = False
+        finally:
+            self._rendering_3d = False
+
+    @Slot(int)
+    def _render_pending_3d_if_visible(self, _index: int) -> None:
+        """Render delayed 3D updates once the 3D tab becomes visible."""
+        if self._is_3d_tab_active() and (self._pending_3d_render or not self.viewer3D):
+            self._schedule_3d_activation()
+
+    def _schedule_3d_activation(self) -> None:
+        """Queue 3D creation/render after the tab-change event returns."""
+        if self._scheduled_3d_activation:
+            return
+        self._scheduled_3d_activation = True
+        QTimer.singleShot(0, self._activate_3d_view)
+
+    @Slot()
+    def _activate_3d_view(self) -> None:
+        """Create and render the 3D view outside the tab-change signal stack."""
+        self._scheduled_3d_activation = False
+        if self._is_3d_tab_active():
+            self._render_3d_now()
+
     def update_theme(self, theme_name: str):
         """Updates the theme for all viewers in this panel."""
+        self.current_theme = theme_name
         if self.viewer2D:
             self.viewer2D.update_theme(theme_name)
         if self.viewer3D:
-            self.viewer3D.update_theme(theme_name)
+            self.viewer3D.update_theme(theme_name, render=self._is_3d_tab_active())
+            if not self._is_3d_tab_active():
+                self._pending_3d_render = True
+        elif VTK_AVAILABLE:
+            self._pending_3d_render = True
         if self.sagViewer:
             self.sagViewer.update_theme(theme_name)
 
@@ -393,6 +497,8 @@ class MatplotlibViewer(QWidget):
         toolbar (CustomMatplotlibToolbar): The toolbar for plot navigation.
         settings_area (QWidget): The panel for viewer-specific settings.
     """
+
+    settingsApplied = Signal()
 
     def __init__(self, connector: OptilandConnector, parent=None):
         """
@@ -478,7 +584,7 @@ class MatplotlibViewer(QWidget):
         self.settings_form_layout.addRow("Distribution:", self.dist_combo)
 
         apply_button = QPushButton("Apply")
-        apply_button.clicked.connect(self.plot_optic)
+        apply_button.clicked.connect(self.apply_settings)
 
         settings_layout.addLayout(self.settings_form_layout)
         settings_layout.addStretch()
@@ -691,6 +797,42 @@ class MatplotlibViewer(QWidget):
         self._preserve_xy_ratio = bool(preserve)
         self.plot_optic()
 
+    def ray_count(self) -> int:
+        """Return the currently selected 2D layout ray count."""
+        return int(self.num_rays_spinbox.value())
+
+    def ray_distribution(self) -> str:
+        """Return the currently selected 2D layout ray distribution."""
+        return self.dist_combo.currentText()
+
+    def ray_distribution_for_3d(self) -> str:
+        """Return a full-pupil distribution for the 3D layout."""
+        distribution = self.ray_distribution()
+        if distribution in {"line_x", "line_y"}:
+            return "hexapolar"
+        return distribution
+
+    def ray_sampling_for_3d(self) -> tuple[int, str]:
+        """Return 3D layout sampling without changing distribution semantics."""
+        distribution = self.ray_distribution_for_3d()
+        num_rays = self.ray_count()
+        if self.ray_distribution() in {"line_x", "line_y"}:
+            return self._hexapolar_rings_for_target_ray_count(num_rays), distribution
+        return num_rays, distribution
+
+    @staticmethod
+    def _hexapolar_rings_for_target_ray_count(target_count: int) -> int:
+        """Map a desired total ray count to hexapolar rings."""
+        target_count = max(1, int(target_count))
+        rings = round((math.sqrt(12 * target_count - 3) - 3) / 6)
+        return max(1, int(rings))
+
+    @Slot()
+    def apply_settings(self) -> None:
+        """Apply 2D layout settings and notify coupled viewers."""
+        self.plot_optic()
+        self.settingsApplied.emit()
+
     def _apply_equal_xy_limits(
         self, xlim: tuple[float, float], ylim: tuple[float, float]
     ) -> None:
@@ -840,6 +982,8 @@ class VTKViewer(QWidget):
         super().__init__(parent)
 
         self.connector = connector
+        self._last_num_rays = 24
+        self._last_distribution = "ring"
         if not VTK_AVAILABLE:
             self.layout = QVBoxLayout(self)
             self.layout.addWidget(QLabel("VTK is not available."))
@@ -868,7 +1012,7 @@ class VTKViewer(QWidget):
             camera.Elevation(0)
             camera.Azimuth(150)
 
-    def update_theme(self, theme="dark"):
+    def update_theme(self, theme="dark", render: bool = True):
         """
         Updates the background color of the VTK renderer based on the theme.
 
@@ -884,8 +1028,10 @@ class VTKViewer(QWidget):
         active_theme = get_active_theme()
         background = to_rgb(active_theme.parameters["axes.facecolor"])
         self.renderer.SetBackground(*background)
-        self.render_optic()
-        self.vtkWidget.GetRenderWindow().Render()
+        if render:
+            self.render_optic()
+        else:
+            self.vtkWidget.GetRenderWindow().Render()
 
     def _notify_missing_stop_surface(self) -> None:
         """Warn once that 3D rays cannot be shown until a stop surface is defined."""
@@ -901,13 +1047,21 @@ class VTKViewer(QWidget):
         else:
             logger.warning(message)
 
-    def render_optic(self):
+    def render_optic(
+        self, num_rays: int | None = None, distribution: str | None = None
+    ):
         """
         Clears the current scene and re-renders the optical system in 3D.
 
         This method retrieves the current optical system and uses Optiland's
         VTK plotting utilities to generate the 3D visualization.
         """
+        if num_rays is None:
+            num_rays = self._last_num_rays
+        if distribution is None:
+            distribution = self._last_distribution
+        self._last_num_rays = int(num_rays)
+        self._last_distribution = distribution
         if not VTK_AVAILABLE:
             return
 
@@ -935,8 +1089,8 @@ class VTKViewer(QWidget):
                         self.renderer,
                         fields="all",
                         wavelengths="primary",
-                        num_rays=24,
-                        distribution="ring",
+                        num_rays=num_rays,
+                        distribution=distribution,
                         theme=theme,
                     )
                     setattr(self.connector, "_missing_stop_surface_warned", False)

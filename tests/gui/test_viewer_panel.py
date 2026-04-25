@@ -421,11 +421,10 @@ def test_viewer_panel_resets_original_views_when_optic_is_loaded(
         "reset_view",
         lambda: calls.append("2d-reset"),
     )
-    if panel.viewer3D is not None:
+    if panel._viewer3d_tab_index >= 0:
         monkeypatch.setattr(
-            panel.viewer3D,
-            "render_optic",
-            lambda: calls.append("3d-render"),
+            "optiland_gui.viewer_panel.VTKViewer.render_optic",
+            lambda self, *args, **kwargs: calls.append(("3d-render", args, kwargs)),
         )
     monkeypatch.setattr(
         panel.sagViewer,
@@ -443,8 +442,14 @@ def test_viewer_panel_resets_original_views_when_optic_is_loaded(
     assert "2d-reset" in calls
     assert "sag-range" in calls
     assert "sag-plot" in calls
-    if panel.viewer3D is not None:
-        assert "3d-render" in calls
+    if panel._viewer3d_tab_index >= 0:
+        assert not any(
+            call[0] == "3d-render" for call in calls if isinstance(call, tuple)
+        )
+        assert panel._pending_3d_render is True
+        panel.tabWidget.setCurrentIndex(panel._viewer3d_tab_index)
+        panel._activate_3d_view()
+        assert any(call[0] == "3d-render" for call in calls if isinstance(call, tuple))
 
 
 def test_viewer_panel_optic_changed_updates_without_forcing_view_reset(
@@ -478,11 +483,10 @@ def test_viewer_panel_optic_changed_updates_without_forcing_view_reset(
         "plot_optic",
         lambda preserve_zoom=False: calls.append(("2d-update", preserve_zoom)),
     )
-    if panel.viewer3D is not None:
+    if panel._viewer3d_tab_index >= 0:
         monkeypatch.setattr(
-            panel.viewer3D,
-            "render_optic",
-            lambda: calls.append("3d-render"),
+            "optiland_gui.viewer_panel.VTKViewer.render_optic",
+            lambda self, *args, **kwargs: calls.append(("3d-render", args, kwargs)),
         )
     monkeypatch.setattr(
         panel.sagViewer,
@@ -495,5 +499,122 @@ def test_viewer_panel_optic_changed_updates_without_forcing_view_reset(
     assert "2d-reset" not in calls
     assert "sag-plot" not in calls
     assert ("2d-update", panel.preserve_zoom_checkbox.isChecked()) in calls
-    if panel.viewer3D is not None:
-        assert "3d-render" in calls
+    if panel._viewer3d_tab_index >= 0:
+        assert not any(
+            call[0] == "3d-render" for call in calls if isinstance(call, tuple)
+        )
+        assert panel._pending_3d_render is True
+        panel.tabWidget.setCurrentIndex(panel._viewer3d_tab_index)
+        panel._activate_3d_view()
+        assert any(call[0] == "3d-render" for call in calls if isinstance(call, tuple))
+
+
+def test_viewer_panel_passes_2d_ray_count_and_full_pupil_distribution_to_3d_renderer(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    if panel._viewer3d_tab_index < 0:
+        pytest.skip("VTK is not available")
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "optiland_gui.viewer_panel.VTKViewer.render_optic",
+        lambda self, **kwargs: calls.append(kwargs),
+    )
+    panel.tabWidget.setCurrentIndex(panel._viewer3d_tab_index)
+    panel._activate_3d_view()
+    calls.clear()
+
+    panel.viewer2D.num_rays_spinbox.setValue(17)
+    panel.viewer2D.dist_combo.setCurrentText("line_x")
+    panel._render_3d_from_2d_settings()
+
+    assert calls[-1] == {"num_rays": 2, "distribution": "hexapolar"}
+
+
+def test_viewer_panel_apply_2d_settings_refreshes_coupled_3d_renderer(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    if panel._viewer3d_tab_index < 0:
+        pytest.skip("VTK is not available")
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "optiland_gui.viewer_panel.VTKViewer.render_optic",
+        lambda self, **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr(panel.viewer2D, "plot_optic", lambda *args, **kwargs: None)
+    panel.tabWidget.setCurrentIndex(panel._viewer3d_tab_index)
+    panel._activate_3d_view()
+    calls.clear()
+
+    panel.viewer2D.num_rays_spinbox.setValue(23)
+    panel.viewer2D.dist_combo.setCurrentText("random")
+    panel.viewer2D.apply_settings()
+
+    assert calls[-1] == {"num_rays": 23, "distribution": "random"}
+
+
+def test_viewer_panel_maps_2d_line_sections_to_full_pupil_3d_distribution(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    class _DefaultSettings:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+            if type is bool:
+                return bool(default)
+            if type is int:
+                return int(default)
+            return default
+
+        def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+            return None
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+
+    panel.viewer2D.dist_combo.setCurrentText("line_y")
+    assert panel.viewer2D.ray_distribution() == "line_y"
+    assert panel.viewer2D.ray_distribution_for_3d() == "hexapolar"
+    panel.viewer2D.num_rays_spinbox.setValue(30)
+    assert panel.viewer2D.ray_sampling_for_3d() == (3, "hexapolar")
+
+    panel.viewer2D.dist_combo.setCurrentText("line_x")
+    assert panel.viewer2D.ray_distribution_for_3d() == "hexapolar"
+    panel.viewer2D.num_rays_spinbox.setValue(100)
+    assert panel.viewer2D.ray_sampling_for_3d() == (5, "hexapolar")
+
+    panel.viewer2D.dist_combo.setCurrentText("random")
+    assert panel.viewer2D.ray_distribution_for_3d() == "random"
+    assert panel.viewer2D.ray_sampling_for_3d() == (100, "random")

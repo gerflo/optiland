@@ -349,12 +349,10 @@ class MainWindow(FramelessWindow):
         self._normalize_all_docks()
         self.panel_manager.setup_default_layout()
 
-        # Initial plot/render
+        # Initial 2D plot. The 3D view renders lazily when its tab is opened.
         viewer_panel = self.panel_manager.viewer_panel
         if viewer_panel.viewer2D and hasattr(viewer_panel.viewer2D, "plot_optic"):
             viewer_panel.viewer2D.plot_optic()
-        if viewer_panel.viewer3D and hasattr(viewer_panel.viewer3D, "render_optic"):
-            viewer_panel.viewer3D.render_optic()
 
     def _normalize_all_docks(self) -> None:
         """Clear transient animation state so docks return to normal Qt sizing."""
