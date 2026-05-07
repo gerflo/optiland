@@ -10,14 +10,18 @@ from .schema import CatalogLensRecord
 
 def record_to_insert_specs(record: CatalogLensRecord) -> tuple[list[dict], int | None]:
     """Convert a catalog record into generic surface-sequence dicts."""
+    fallback_semi = record.diameter_mm / 2.0 if record.diameter_mm is not None else None
     sequence: list[dict] = []
     for surface in record.surfaces:
+        semi_diameter = surface.semi_diameter
+        if semi_diameter in (None, "") and fallback_semi is not None:
+            semi_diameter = fallback_semi
         formatted_comment = _format_catalog_surface_comment(record.part_number, surface.comment)
         spec = {
             "surface_type": surface.surface_type,
             "thickness": surface.thickness,
             "material": surface.material,
-            "semi_diameter": surface.semi_diameter,
+            "semi_diameter": semi_diameter,
             "comment": formatted_comment,
         }
         material_reference = str(

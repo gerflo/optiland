@@ -1697,6 +1697,37 @@ class LensEditor(QWidget):
         self.on_item_changed_handler(item)
         self._remember_active_cell(row, col)
 
+    def _paste_clipboard_into_current_row(self) -> None:
+        """Paste a tab-separated clipboard line into the current row, cell by cell."""
+        text = QApplication.clipboard().text()
+        if not text:
+            return
+        row = self.tableWidget.currentRow()
+        if row < 0:
+            return
+        values = text.split("\t")
+        col_count = self.tableWidget.columnCount()
+        for col, value in enumerate(values):
+            if col >= col_count:
+                break
+            widget = self.tableWidget.cellWidget(row, col)
+            if isinstance(widget, SurfaceTypeWidget):
+                if not widget.type_edit.isReadOnly():
+                    pasted_type = value.strip().lower()
+                    if pasted_type in widget.connector.get_available_surface_types():
+                        widget.type_selected(pasted_type)
+                    else:
+                        widget.type_edit.setText(value)
+                        widget.text_changed()
+                continue
+            item = self.tableWidget.item(row, col)
+            if item is None or not (item.flags() & Qt.ItemFlag.ItemIsEditable):
+                continue
+            self.tableWidget.blockSignals(True)
+            item.setText(value)
+            self.tableWidget.blockSignals(False)
+            self.on_item_changed_handler(item)
+
     def _request_add_optimization_variable(self) -> None:
         """Emit requestAddOptimizationVariable for the currently focused cell."""
         ui_row = self.tableWidget.currentRow()
@@ -2485,6 +2516,7 @@ class LensEditor(QWidget):
             copy_cell_action = menu.addAction("Copy Cell")
             cut_cell_action = menu.addAction("Cut Cell")
             copy_row_action = menu.addAction("Copy Row")
+            paste_row_action = menu.addAction("Paste Row")
             paste_cell_action = menu.addAction("Paste Cell")
             menu.addSeparator()
             add_above = menu.addAction("Add Surface Above")
@@ -2610,6 +2642,8 @@ class LensEditor(QWidget):
                 self._cut_current_cell_to_clipboard()
             elif chosen == copy_row_action:
                 self._copy_selected_row_to_clipboard()
+            elif chosen == paste_row_action:
+                self._paste_clipboard_into_current_row()
             elif chosen == paste_cell_action:
                 self._paste_clipboard_into_current_cell()
 
