@@ -148,6 +148,55 @@ class Rays2D:
         """
         self.optic.trace(*field, wavelength, num_rays, distribution)
         self._process_traced_rays()
+        self._ensure_display_rays(field, wavelength, num_rays, distribution)
+
+    def _ensure_display_rays(self, field, wavelength, num_rays, distribution):
+        """Resample with a denser fan when no rays survive to the image.
+
+        Some systems contain annular apertures (r_min > 0) or other aperture
+        combinations where a coarse ray fan happens to miss the transmitted
+        pupil zone entirely.  When this occurs, trace a denser fan, use it to
+        update the surface extents accurately, then down-select to *num_rays*
+        representative rays (survivors first, then a few blocked rays for
+        context) for display.
+        """
+        if self.i is None or self.i.size == 0:
+            return
+        n_survivors = int(np.sum(be.to_numpy(self.i[-1, :]) != 0))
+        if n_survivors > 0:
+            return
+
+        dense_n = max(51, num_rays * 10)
+        self.optic.trace(*field, wavelength, dense_n, distribution)
+        self._process_traced_rays()  # r_extent updated from dense fan
+
+        intensity_last = be.to_numpy(self.i[-1, :])
+        survivors = np.where(intensity_last != 0)[0]
+        non_survivors = np.where(intensity_last == 0)[0]
+
+        if len(survivors) == 0:
+            # System is genuinely opaque; just downsample for display
+            step = max(1, dense_n // num_rays)
+            selected = np.arange(0, dense_n, step)[:num_rays]
+        else:
+            # Fill slots with survivors first, then blocked rays for context
+            n_surv = min(len(survivors), num_rays)
+            idx = np.round(np.linspace(0, len(survivors) - 1, n_surv)).astype(int)
+            surv_sel = survivors[idx]
+            n_other = num_rays - n_surv
+            if n_other > 0 and len(non_survivors) > 0:
+                idx2 = np.round(
+                    np.linspace(0, len(non_survivors) - 1, n_other)
+                ).astype(int)
+                other_sel = non_survivors[idx2]
+                selected = np.sort(np.concatenate([surv_sel, other_sel]))
+            else:
+                selected = surv_sel
+
+        self.x = self.x[:, selected]
+        self.y = self.y[:, selected]
+        self.z = self.z[:, selected]
+        self.i = self.i[:, selected]
 
     def _trace_reference(self, field, wavelength, reference):
         """Traces reference rays through the optical system.
