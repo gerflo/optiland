@@ -67,7 +67,9 @@ try:
 
     ndarray = (_np.ndarray, _torch.Tensor)
     _torch_importable = True
-except (ImportError, OSError):
+except (ImportError, OSError, KeyboardInterrupt, Exception):
+    # KeyboardInterrupt is raised by torch's CUDA/asyncio init on Windows
+    # with Python 3.12 when _overlapped is imported during torch startup.
     ndarray = _np.ndarray  # type: ignore[assignment]
     _torch_importable = False
 
@@ -106,7 +108,7 @@ try:
 
     _backends["torch"] = TorchBackend()
     _torch_available = True
-except (ImportError, OSError):
+except (ImportError, OSError, KeyboardInterrupt, Exception):
     _torch_available = False
 
 _current_backend: str = "numpy"
