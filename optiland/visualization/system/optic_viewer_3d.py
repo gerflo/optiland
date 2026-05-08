@@ -58,6 +58,7 @@ class OpticViewer3D(BaseViewer):
         dark_mode=False,
         reference=None,
         hide_vignetted=False,
+        show_apertures=True,
     ):
         """Visualizes the optical system in 3D.
 
@@ -97,7 +98,7 @@ class OpticViewer3D(BaseViewer):
             reference=reference,
             hide_vignetted=hide_vignetted,
         )
-        self.system.plot(renderer)
+        self.system.plot(renderer, show_apertures=show_apertures)
 
         renderer.GradientBackgroundOn()
         renderer.SetGradientMode(vtk.vtkViewport.GradientModes.VTK_GRADIENT_VERTICAL)

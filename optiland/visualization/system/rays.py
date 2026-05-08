@@ -175,9 +175,11 @@ class Rays2D:
         non_survivors = np.where(intensity_last == 0)[0]
 
         if len(survivors) == 0:
-            # System is genuinely opaque; just downsample for display
-            step = max(1, dense_n // num_rays)
-            selected = np.arange(0, dense_n, step)[:num_rays]
+            # System is genuinely opaque - prefer rays that survive deepest
+            intensity_np = be.to_numpy(self.i)
+            survival_depth = np.sum(intensity_np != 0, axis=0)  # [dense_n]
+            order = np.argsort(survival_depth)[::-1]
+            selected = np.sort(order[:num_rays])
         else:
             # Fill slots with survivors first, then blocked rays for context
             n_surv = min(len(survivors), num_rays)

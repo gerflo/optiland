@@ -11,7 +11,7 @@ import optiland.backend as be
 from optiland.visualization.system.lens import Lens2D, Lens3D
 from optiland.visualization.system.mirror import Mirror3D
 from optiland.visualization.system.surface import Surface2D, Surface3D
-from optiland.visualization.system.utils import transform
+from optiland.visualization.system.utils import transform, transform_3d
 
 
 class OpticalSystem:
@@ -66,9 +66,14 @@ class OpticalSystem:
             component_artists = component.plot(ax, theme=theme, projection=projection)
             if component_artists:
                 artists.update(component_artists)
-        if show_apertures and self.projection == "2d":
-            aperture_artists = self._plot_apertures(ax, projection=projection)
-            artists.update(aperture_artists)
+        if show_apertures:
+            if self.projection == "2d":
+                aperture_artists = self._plot_apertures(
+                    ax, theme=theme, projection=projection
+                )
+                artists.update(aperture_artists)
+            else:
+                self._plot_apertures_3d(ax, theme=theme)
         return artists
 
     def _identify_components(self):
@@ -139,14 +144,32 @@ class OpticalSystem:
         surface_class = self.component_registry["surface"][self.projection]
         return surface_class(surface, *args)
 
-    def _plot_apertures(self, ax, projection="YZ"):
+    def _aperture_radius(self, idx, surface):
+        """Return the semi-aperture radius for *surface* at *idx*, or None."""
+        if surface.aperture is not None:
+            x_min, x_max, y_min, y_max = surface.aperture.extent
+            return float(max(abs(x_min), abs(x_max), abs(y_min), abs(y_max)))
+        if surface.semi_aperture is not None:
+            return float(be.to_numpy(surface.semi_aperture))
+        if (
+            surface.is_stop
+            and self.optic.aperture is not None
+            and self.optic.aperture.ap_type == "float_by_stop_size"
+        ):
+            return float(0.5 * self.optic.aperture.value)
+        if surface.is_stop and self.rays is not None:
+            r = float(be.to_numpy(self.rays.r_extent[idx]).item())
+            return r if r > 0 else None
+        return None
+
+    def _plot_apertures(self, ax, theme=None, projection="YZ"):
         if projection == "XY":
             return {}
         if projection not in ("XZ", "YZ"):
             raise ValueError("Invalid projection type. Must be 'XY', 'XZ', or 'YZ'.")
 
-        stop_color = "black"  # arrow color for stop apertures
-        aperture_color = "grey"  # arrow color for other apertures
+        stop_color = "#FF8C00"      # amber-orange: visible on both dark and light
+        aperture_color = "#CC6600"  # darker orange for non-stop apertures
 
         artists = {}
         n = self.optic.surfaces.n(self.optic.primary_wavelength)
@@ -193,20 +216,27 @@ class OpticalSystem:
             y_global = be.to_numpy(y_global)
             z_global = be.to_numpy(z_global)
 
+            facecolor = stop_color if surface.is_stop else aperture_color
+
             # Draw line for aperture edge
             axis_vals = x_global if projection == "XZ" else y_global
             (line,) = ax.plot(
                 z_global,
                 axis_vals,
-                color="black",
-                linewidth=0.3,
+                color=facecolor,
+                linewidth=1.5,
             )
             artists[line] = surface
 
             # Add arrows to indicate aperture extent
             eps = 1e-6
-            facecolor = stop_color if surface.is_stop else aperture_color
-            arrowprops = {"arrowstyle": "-|>", "facecolor": facecolor, "linewidth": 0}
+            arrowprops = {
+                "arrowstyle": "-|>",
+                "facecolor": facecolor,
+                "edgecolor": facecolor,
+                "linewidth": 0,
+                "mutation_scale": 8,
+            }
             axis_vals = x_global if projection == "XZ" else y_global
             for z_val, axis_val, sign in (
                 (z_global[1], axis_vals[1], 1),  # top
@@ -220,3 +250,58 @@ class OpticalSystem:
                 )
 
         return artists
+
+    def _plot_apertures_3d(self, renderer, theme=None):
+        """Add translucent aperture disk actors to the 3D renderer."""
+        import vtk
+
+        stop_color = (1.0, 0.55, 0.0)      # orange
+        aperture_color = (0.8, 0.44, 0.0)  # darker orange for non-stop apertures
+        if theme:
+            from matplotlib.colors import to_rgb
+
+            stop_hex = theme.parameters.get("aperture.stop_color", "#FF8C00")
+            ap_hex = theme.parameters.get("aperture.color", "#CC6600")
+            stop_color = to_rgb(stop_hex)
+            aperture_color = to_rgb(ap_hex)
+
+        n = self.optic.surfaces.n(self.optic.primary_wavelength)
+        for idx, surface in enumerate(self.optic.surfaces):
+            if idx > 0:
+                is_lens_surface = n[idx] > 1 or (n[idx] == 1 and n[idx - 1] > 1)
+            else:
+                is_lens_surface = n[idx] > 1
+            if is_lens_surface and not surface.is_stop:
+                continue
+            if surface.aperture is None and not surface.is_stop:
+                continue
+
+            r_inner = self._aperture_radius(idx, surface)
+            if r_inner is None or r_inner <= 0:
+                continue
+            r_outer = r_inner * 1.5
+
+            disk = vtk.vtkDiskSource()
+            disk.SetInnerRadius(r_inner)
+            disk.SetOuterRadius(r_outer)
+            disk.SetRadialResolution(1)
+            disk.SetCircumferentialResolution(64)
+            disk.Update()
+
+            mapper = vtk.vtkPolyDataMapper()
+            mapper.SetInputConnection(disk.GetOutputPort())
+
+            actor = vtk.vtkActor()
+            actor.SetMapper(mapper)
+            actor = transform_3d(actor, surface)
+
+            color = stop_color if surface.is_stop else aperture_color
+            prop = actor.GetProperty()
+            prop.SetColor(*color)
+            prop.SetOpacity(0.65)
+            prop.SetAmbient(0.6)
+            prop.SetDiffuse(0.4)
+            prop.SetSpecular(0.2)
+            prop.SetSpecularPower(20.0)
+
+            renderer.AddActor(actor)

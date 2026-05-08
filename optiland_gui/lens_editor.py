@@ -975,12 +975,7 @@ class LensEditor(QWidget):
         )
         self.cut_shortcut = QShortcut(QKeySequence.Cut, self.tableWidget)
         self.paste_shortcut = QShortcut(QKeySequence.Paste, self.tableWidget)
-        self.paste_insert_shortcut = QShortcut(
-            QKeySequence("Shift+Insert"), self.tableWidget
-        )
-        self.paste_insert_viewport_shortcut = QShortcut(
-            QKeySequence("Shift+Insert"), self.tableWidget.viewport()
-        )
+        # Shift+Insert is reserved for "insert surface after" — not paste.
         self.copy_cell_shortcut.setContext(
             Qt.ShortcutContext.WidgetWithChildrenShortcut
         )
@@ -994,12 +989,6 @@ class LensEditor(QWidget):
             Qt.ShortcutContext.WidgetWithChildrenShortcut
         )
         self.paste_shortcut.setContext(
-            Qt.ShortcutContext.WidgetWithChildrenShortcut
-        )
-        self.paste_insert_shortcut.setContext(
-            Qt.ShortcutContext.WidgetWithChildrenShortcut
-        )
-        self.paste_insert_viewport_shortcut.setContext(
             Qt.ShortcutContext.WidgetWithChildrenShortcut
         )
 
@@ -1042,12 +1031,6 @@ class LensEditor(QWidget):
         )
         self.cut_shortcut.activated.connect(self._cut_current_cell_to_clipboard)
         self.paste_shortcut.activated.connect(self._paste_clipboard_into_current_cell)
-        self.paste_insert_shortcut.activated.connect(
-            self._paste_clipboard_into_current_cell
-        )
-        self.paste_insert_viewport_shortcut.activated.connect(
-            self._paste_clipboard_into_current_cell
-        )
         self.tableWidget.itemChanged.connect(self.on_item_changed_handler)
         self.tableWidget.cellPressed.connect(self._remember_active_cell)
         self.tableWidget.cellClicked.connect(self._remember_active_cell)
@@ -1057,6 +1040,12 @@ class LensEditor(QWidget):
         self.tableWidget.currentCellChanged.connect(self._sync_current_cell_highlight)
         self.tableWidget.verticalHeader().sectionClicked.connect(
             self._handle_vertical_header_clicked
+        )
+        self.tableWidget.verticalHeader().setContextMenuPolicy(
+            Qt.ContextMenuPolicy.CustomContextMenu
+        )
+        self.tableWidget.verticalHeader().customContextMenuRequested.connect(
+            self._show_header_context_menu
         )
         self.tableWidget.horizontalHeader().sectionResized.connect(self._save_table_state)
         self.tableWidget.horizontalHeader().sectionMoved.connect(self._save_table_state)
@@ -1260,6 +1249,7 @@ class LensEditor(QWidget):
                 or (
                     event.key() == Qt.Key_Insert
                     and has_shift
+                    and not is_table_focus_target
                 )
             ) and (
                 is_table_focus_target
@@ -1269,7 +1259,10 @@ class LensEditor(QWidget):
                 self._paste_clipboard_into_current_cell()
                 return True
             if is_key_press and is_table_focus_target and event.key() == Qt.Key_Insert:
-                self.add_surface_handler()
+                if event.modifiers() & Qt.ShiftModifier:
+                    self.smart_insert_surface(before=False)
+                else:
+                    self.smart_insert_surface(before=True)
                 return True
             if is_key_press and is_table_focus_target and event.key() == Qt.Key_Delete:
                 self.remove_surface_handler()
@@ -2265,13 +2258,26 @@ class LensEditor(QWidget):
 
     @Slot(int)
     def _handle_vertical_header_clicked(self, row: int) -> None:
-        """Toggle an element when its first grouped row header is clicked."""
+        """Select row on header click; toggle element group if applicable."""
         if self._is_properties_row(row):
             return
+        self.tableWidget.setCurrentCell(row, self.tableWidget.currentColumn())
         surface_index = self.map_ui_row_to_surface_index(row)
         group_rows = self.connector.get_group_rows(surface_index)
         if group_rows and group_rows[0] == surface_index:
             self._toggle_group_expanded(surface_index)
+
+    @Slot("QPoint")
+    def _show_header_context_menu(self, pos) -> None:
+        """Show the same context menu when right-clicking a row header."""
+        row = self.tableWidget.verticalHeader().logicalIndexAt(pos)
+        if row < 0:
+            return
+        self.tableWidget.setCurrentCell(row, self.tableWidget.currentColumn())
+        viewport_pos = self.tableWidget.viewport().mapFromGlobal(
+            self.tableWidget.verticalHeader().mapToGlobal(pos)
+        )
+        self.show_context_menu(viewport_pos)
 
     def _insert_properties_widget(self, source_row):
         prop_row_index = source_row + 1
@@ -2404,6 +2410,39 @@ class LensEditor(QWidget):
             self._pending_insert_surface_index = insert_pos
             self.connector.add_surface(index=insert_pos)
 
+    def smart_insert_surface(self, before: bool = True, surface_index: int | None = None) -> None:
+        """Insert a surface intelligently based on selection state and direction.
+
+        Group collapsed + before=True  → insert before group, material Air, 10 mm gap.
+        Group collapsed + before=False → insert after group, material Air, 10 mm gap.
+        Individual surface + before=True  → insert before, inheriting preceding material, 10 mm gap.
+        Individual surface + before=False → insert after, material Air, 10 mm gap.
+        """
+        if surface_index is None:
+            ui_row = self.tableWidget.currentRow()
+            if ui_row < 0 or self._is_properties_row(ui_row):
+                return
+            surface_index = self.map_ui_row_to_surface_index(ui_row)
+
+        is_collapsed = self._is_collapsed_summary_surface_row(surface_index)
+        if is_collapsed:
+            group_rows = self.connector.get_group_rows(surface_index)
+            if before:
+                insert_at = group_rows[0] if group_rows else surface_index
+                self._pending_insert_surface_index = insert_at
+                self.connector.insert_surface_before(insert_at, "Air", 10.0)
+            else:
+                insert_after_idx = group_rows[-1] if group_rows else surface_index
+                self._pending_insert_surface_index = insert_after_idx + 1
+                self.connector.insert_surface_after(insert_after_idx, "Air", 10.0)
+        else:
+            if before:
+                self._pending_insert_surface_index = surface_index
+                self.connector.insert_surface_before(surface_index, None, 10.0)
+            else:
+                self._pending_insert_surface_index = surface_index + 1
+                self.connector.insert_surface_after(surface_index, "Air", 10.0)
+
     @Slot()
     def remove_surface_handler(self, surface_index_to_remove=None):
         if surface_index_to_remove is None:
@@ -2519,8 +2558,17 @@ class LensEditor(QWidget):
             paste_row_action = menu.addAction("Paste Row")
             paste_cell_action = menu.addAction("Paste Cell")
             menu.addSeparator()
-            add_above = menu.addAction("Add Surface Above")
-            add_above.triggered.connect(lambda: self.add_surface_handler(surface_index))
+            is_collapsed_row = self._is_collapsed_summary_surface_row(surface_index)
+            insert_before_label = "Insert Before Element" if is_collapsed_row else "Insert Before  Ins"
+            insert_after_label = "Insert After Element" if is_collapsed_row else "Insert After  Shift+Ins"
+            add_before = menu.addAction(insert_before_label)
+            add_before.triggered.connect(
+                lambda _=False, si=surface_index: self.smart_insert_surface(before=True, surface_index=si)
+            )
+            add_after = menu.addAction(insert_after_label)
+            add_after.triggered.connect(
+                lambda _=False, si=surface_index: self.smart_insert_surface(before=False, surface_index=si)
+            )
             remove_action = menu.addAction("Remove Current Surface")
             remove_action.triggered.connect(
                 lambda: self.remove_surface_handler(surface_index)
@@ -2600,7 +2648,8 @@ class LensEditor(QWidget):
 
             if is_obj_or_img:
                 if surface_index == 0:
-                    add_above.setEnabled(False)
+                    add_before.setEnabled(False)
+                add_after.setEnabled(False)
                 remove_action.setEnabled(False)
                 props_action.setEnabled(False)
                 make_stop_action.setEnabled(False)

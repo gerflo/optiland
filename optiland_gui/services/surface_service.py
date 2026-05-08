@@ -619,24 +619,30 @@ class SurfaceService:
             logger.warning("SurfaceService: Error setting surface type: %s", exc)
             self._connector._restore_optic_state(old_state)
 
-    def add_surface(self, index: int = -1) -> None:
-        """Insert a new standard surface before the image surface.
+    def _infer_material(self, insert_idx: int):
+        """Return the material to use when inserting at *insert_idx*.
 
-        Args:
-            index: Insertion index in the surface list. ``-1`` (default) inserts
-                before the image surface.
+        Inherits the preceding surface's glass so that inserting inside a
+        cemented doublet doesn't introduce an unintended air gap.
         """
-        old_state = self._connector._capture_optic_state()
-        num_rows = self.get_surface_count()
-        insert_idx = num_rows - 1 if index == -1 or index >= num_rows else index
-        if insert_idx <= 0:
-            insert_idx = 1
+        surfaces = self._connector._optic.surfaces.surfaces
+        if insert_idx <= 0 or insert_idx > len(surfaces):
+            return "Air"
+        preceding_mat = surfaces[insert_idx - 1].material_post
+        wavelength = self._connector._optic.primary_wavelength
+        try:
+            n = float(preceding_mat.n(wavelength))
+        except Exception:
+            n = 1.0
+        return preceding_mat if n > 1.0 else "Air"
 
+    def _do_insert(self, insert_idx: int, material, thickness: float, old_state) -> None:
+        """Low-level helper: insert one surface and emit change signals."""
         self._connector._optic.surfaces.add(
             surface_type="standard",
             radius=float("inf"),
-            thickness=0.0,
-            material="Air",
+            thickness=thickness,
+            material=material,
             comment="New Surface",
             index=insert_idx,
         )
@@ -644,6 +650,80 @@ class SurfaceService:
         self._connector._undo_redo_manager.add_state(old_state)
         self._connector.set_modified(True)
         self._connector.opticChanged.emit()
+
+    def add_surface(self, index: int = -1) -> None:
+        """Insert a new standard surface (simple, 0-thickness, glass-inheriting).
+
+        Args:
+            index: Insertion index. ``-1`` inserts before the image surface.
+        """
+        old_state = self._connector._capture_optic_state()
+        num_rows = self.get_surface_count()
+        insert_idx = num_rows - 1 if index == -1 or index >= num_rows else index
+        if insert_idx <= 0:
+            insert_idx = 1
+        self._do_insert(insert_idx, self._infer_material(insert_idx), 0.0, old_state)
+
+    def insert_surface_before(
+        self, surface_index: int, material=None, gap: float = 0.0
+    ) -> None:
+        """Insert a surface BEFORE *surface_index* with an optional gap.
+
+        The preceding surface's thickness is reduced by *gap* so all downstream
+        z-positions remain unchanged.
+
+        Args:
+            surface_index: Index of the surface that will follow the new one.
+            material: Material for the new surface. ``None`` → inherit from the
+                      gap being split (glass stays glass, air stays air).
+            gap: Distance in mm between the new surface and *surface_index*.
+        """
+        surfaces = self._connector._optic.surfaces.surfaces
+        if surface_index <= 0 or surface_index >= len(surfaces):
+            return
+        old_state = self._connector._capture_optic_state()
+
+        if material is None:
+            material = self._infer_material(surface_index)
+
+        thickness_new = 0.0
+        if gap > 0.0:
+            preceding = surfaces[surface_index - 1]
+            actual_gap = min(float(gap), max(0.0, float(preceding.thickness)))
+            preceding.thickness = float(preceding.thickness) - actual_gap
+            thickness_new = actual_gap
+
+        self._do_insert(surface_index, material, thickness_new, old_state)
+
+    def insert_surface_after(
+        self, surface_index: int, material=None, gap: float = 0.0
+    ) -> None:
+        """Insert a surface AFTER *surface_index* with an optional gap.
+
+        *surface_index*'s thickness is reduced to *gap* (clamped to its current
+        value); the new surface receives the remaining thickness so the next
+        surface's z-position is preserved.
+
+        Args:
+            surface_index: Index of the surface that will precede the new one.
+            material: Material for the new surface. ``None`` → Air.
+            gap: Distance in mm between *surface_index* and the new surface.
+        """
+        surfaces = self._connector._optic.surfaces.surfaces
+        if surface_index < 0 or surface_index >= len(surfaces) - 1:
+            return
+        old_state = self._connector._capture_optic_state()
+
+        if material is None:
+            material = "Air"
+
+        current = surfaces[surface_index]
+        T = max(0.0, float(current.thickness))
+        actual_gap = min(float(gap), T)
+        current.thickness = actual_gap
+        thickness_new = T - actual_gap
+
+        self._do_insert(surface_index + 1, material, thickness_new, old_state)
 
     def remove_surface(self, lde_row_index: int) -> None:
         """Remove a surface by its LDE row index.

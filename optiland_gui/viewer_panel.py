@@ -570,7 +570,7 @@ class MatplotlibViewer(QWidget):
         self.settings_form_layout = QFormLayout()
 
         self.num_rays_spinbox = QSpinBox()
-        self.num_rays_spinbox.setRange(1, 100)
+        self.num_rays_spinbox.setRange(1, 300)
         self.num_rays_spinbox.setValue(
             self.settings.value("Viewer2D/NumRays", 3, type=int)
         )

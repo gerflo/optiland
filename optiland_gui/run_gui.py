@@ -23,8 +23,34 @@ from .main_window import MainWindow
 from .resources import resources_rc  # noqa: F401
 
 
+def _patch_matplotlib_show_event() -> None:
+    """Guard against a deleted QWindow in matplotlib's showEvent on PySide6 >= 6.6.
+
+    windowHandle() can return a Python wrapper around an already-destroyed C++
+    QWindow during app startup, causing installEventFilter to raise RuntimeError.
+    Suppressing it is safe: the only consequence is that DPI changes via screen
+    moves won't be detected until the next repaint.
+    """
+    try:
+        from matplotlib.backends.backend_qt import FigureCanvasQT
+
+        _orig = FigureCanvasQT.showEvent
+
+        def _safe_show_event(self, event):
+            try:
+                _orig(self, event)
+            except RuntimeError:
+                pass
+
+        FigureCanvasQT.showEvent = _safe_show_event
+    except Exception:
+        pass
+
+
 def main() -> None:
     """Application entry point."""
+    _patch_matplotlib_show_event()
+
     if sys.platform == "win32":
         myappid = f"{ORGANIZATION_NAME}.{APPLICATION_NAME}.1.0"
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)

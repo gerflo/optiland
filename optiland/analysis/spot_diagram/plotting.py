@@ -90,6 +90,7 @@ def calculate_axis_limits(
         be.to_numpy(be.max(be.sqrt(sd.x**2 + sd.y**2)))
         for field in centered_data
         for sd in field
+        if sd.x.size > 0
     ]
     max_geom_radius = max(max_radii) if max_radii else 0.01
 

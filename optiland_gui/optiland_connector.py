@@ -475,6 +475,18 @@ class OptilandConnector(QObject):
         """
         self._surface_service.add_surface(index)
 
+    def insert_surface_before(
+        self, surface_index: int, material=None, gap: float = 0.0
+    ) -> None:
+        """Insert a new surface BEFORE *surface_index* with an optional gap."""
+        self._surface_service.insert_surface_before(surface_index, material, gap)
+
+    def insert_surface_after(
+        self, surface_index: int, material=None, gap: float = 0.0
+    ) -> None:
+        """Insert a new surface AFTER *surface_index* with an optional gap."""
+        self._surface_service.insert_surface_after(surface_index, material, gap)
+
     def insert_surface_sequence(
         self,
         index: int,

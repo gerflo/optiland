@@ -610,6 +610,7 @@ class MainWindow(FramelessWindow):
         """Leave fullscreen and restore the prior maximized/normal state."""
         self.showNormal()
         self._apply_window_chrome(False)
+        self._update_project_name_in_title_bar()
         if self._was_maximized_before_fullscreen:
             self.showMaximized()
         else:
@@ -751,19 +752,22 @@ class MainWindow(FramelessWindow):
                 action.setChecked(theme.theme_id == self.current_theme_id)
 
     def _update_project_name_in_title_bar(self) -> None:
-        """Update the project name displayed in the custom title bar."""
+        """Update the project name in the custom title bar and native window title."""
+        display_name = "UnnamedProject.json"
+        current_file = self.connector.get_current_filepath()
+        is_modified = self.connector.has_unsaved_changes()
+
+        if current_file:
+            display_name = os.path.basename(current_file)
+
+        if is_modified:
+            display_name += "*"
+
         if hasattr(self, "custom_title_bar_widget") and self.custom_title_bar_widget:
-            display_name = "UnnamedProject.json"
-            current_file = self.connector.get_current_filepath()
-            is_modified = self.connector.has_unsaved_changes()
-
-            if current_file:
-                display_name = os.path.basename(current_file)
-
-            if is_modified:
-                display_name += "*"
-
             self.custom_title_bar_widget.set_project_name(display_name)
+
+        if not self.isFullScreen():
+            self.setWindowTitle(f"Optiland — {display_name}")
 
     def _animate_dock_show(
         self, dock_widget, is_left_or_right, original_dimension, duration, curve
