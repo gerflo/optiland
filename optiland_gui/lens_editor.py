@@ -2619,13 +2619,53 @@ class LensEditor(QWidget):
             else:
                 self.tableWidget.setCurrentCell(ui_row, clicked_col)
 
+            # ── compute context facts upfront ────────────────────────────────
+            is_collapsed_row = self._is_collapsed_summary_surface_row(surface_index)
+            group_meta = self.connector.get_surface_group_metadata(surface_index)
+            group_id = group_meta.get("group_id")
+            is_obj_or_img = (surface_index == 0) or (
+                surface_index == self.connector.get_surface_count() - 1
+            )
+            is_object = surface_index == 0
+            is_image = surface_index == self.connector.get_surface_count() - 1
+            group_rows = self.connector.get_group_rows(surface_index)
+            has_element = bool(group_id)
+            can_create_element = self._can_create_element_from_selection_for(surface_index)
+            is_group_expanded = bool(group_id and str(group_id) in self._expanded_group_ids)
+
+            clipboard_text = QApplication.clipboard().text()
+            has_clipboard = bool(clipboard_text)
+            has_clipboard_row = "\t" in clipboard_text
+
+            ui_col = self.tableWidget.columnAt(pos.x())
+            _NUMERIC_COLS = {
+                self.connector.COL_RADIUS,
+                self.connector.COL_THICKNESS,
+                self.connector.COL_CONIC,
+                self.connector.COL_SEMI_DIAMETER,
+            }
+            col_is_numeric = ui_col in _NUMERIC_COLS
+
+            # cell editability for the clicked cell
+            _clicked_item = self.tableWidget.item(ui_row, max(ui_col, 0))
+            cell_is_editable = (
+                _clicked_item is not None
+                and bool(_clicked_item.flags() & Qt.ItemFlag.ItemIsEditable)
+            ) or ui_col == self.connector.COL_TYPE
+
+            # ── clipboard / copy / paste ──────────────────────────────────────
             copy_cell_action = menu.addAction("Copy Cell")
             cut_cell_action = menu.addAction("Cut Cell")
             copy_row_action = menu.addAction("Copy Row")
             paste_row_action = menu.addAction("Paste Row")
             paste_cell_action = menu.addAction("Paste Cell")
+
+            cut_cell_action.setEnabled(cell_is_editable and not is_obj_or_img)
+            paste_cell_action.setEnabled(has_clipboard and cell_is_editable and not is_obj_or_img)
+            paste_row_action.setEnabled(has_clipboard_row and not is_obj_or_img)
+
+            # ── insert / remove ───────────────────────────────────────────────
             menu.addSeparator()
-            is_collapsed_row = self._is_collapsed_summary_surface_row(surface_index)
             insert_before_label = "Insert Before Element" if is_collapsed_row else "Insert Before  Ins"
             insert_after_label = "Insert After Element" if is_collapsed_row else "Insert After  Shift+Ins"
             add_before = menu.addAction(insert_before_label)
@@ -2640,45 +2680,53 @@ class LensEditor(QWidget):
             remove_action.triggered.connect(
                 lambda: self.remove_surface_handler(surface_index)
             )
+
+            add_before.setEnabled(not is_object)
+            add_after.setEnabled(not is_image)
+            remove_action.setEnabled(not is_obj_or_img)
+
+            # ── disable / enable ──────────────────────────────────────────────
             menu.addSeparator()
             disable_surface_action = None
             disable_element_action = None
-            if is_collapsed_row:
-                grp_rows_dis = self.connector.get_group_rows(surface_index)
-                all_dis = bool(grp_rows_dis) and all(
-                    r in self._disabled_surface_indices for r in grp_rows_dis
-                )
-                lbl = "Enable Element" if all_dis else "Disable Element"
-                disable_element_action = menu.addAction(lbl)
-                disable_element_action.triggered.connect(
-                    lambda _=False, si=surface_index, en=all_dis: self._set_element_disabled(si, not en)
-                )
-            else:
-                surf_dis = surface_index in self._disabled_surface_indices
-                lbl_s = "Enable Surface" if surf_dis else "Disable Surface"
-                disable_surface_action = menu.addAction(lbl_s)
-                disable_surface_action.triggered.connect(
-                    lambda _=False, si=surface_index, en=surf_dis: self._set_surface_disabled(si, not en)
-                )
-                # For expanded group members, also offer element-level toggle
-                _grp_id_early = self.connector.get_surface_group_metadata(surface_index).get("group_id")
-                if _grp_id_early:
-                    grp_rows_dis = self.connector.get_group_rows(surface_index)
-                    all_dis_el = bool(grp_rows_dis) and all(
+            if not is_obj_or_img:
+                if is_collapsed_row:
+                    grp_rows_dis = group_rows
+                    all_dis = bool(grp_rows_dis) and all(
                         r in self._disabled_surface_indices for r in grp_rows_dis
                     )
-                    lbl_el = "Enable Element" if all_dis_el else "Disable Element"
-                    disable_element_action = menu.addAction(lbl_el)
+                    lbl = "Enable Element" if all_dis else "Disable Element"
+                    disable_element_action = menu.addAction(lbl)
                     disable_element_action.triggered.connect(
-                        lambda _=False, si=surface_index, en=all_dis_el: self._set_element_disabled(si, not en)
+                        lambda _=False, si=surface_index, en=all_dis: self._set_element_disabled(si, not en)
                     )
+                else:
+                    surf_dis = surface_index in self._disabled_surface_indices
+                    lbl_s = "Enable Surface" if surf_dis else "Disable Surface"
+                    disable_surface_action = menu.addAction(lbl_s)
+                    disable_surface_action.triggered.connect(
+                        lambda _=False, si=surface_index, en=surf_dis: self._set_surface_disabled(si, not en)
+                    )
+                    if has_element:
+                        grp_rows_dis = group_rows
+                        all_dis_el = bool(grp_rows_dis) and all(
+                            r in self._disabled_surface_indices for r in grp_rows_dis
+                        )
+                        lbl_el = "Enable Element" if all_dis_el else "Disable Element"
+                        disable_element_action = menu.addAction(lbl_el)
+                        disable_element_action.triggered.connect(
+                            lambda _=False, si=surface_index, en=all_dis_el: self._set_element_disabled(si, not en)
+                        )
+
+            # ── surface properties ────────────────────────────────────────────
             menu.addSeparator()
             props_action = menu.addAction("Surface Properties")
             props_action.triggered.connect(
                 lambda: self.toggle_properties_widget(surface_index)
             )
-            group_meta = self.connector.get_surface_group_metadata(surface_index)
-            group_id = group_meta.get("group_id")
+            props_action.setEnabled(not is_obj_or_img and not is_collapsed_row)
+
+            # ── element actions ───────────────────────────────────────────────
             create_element_action = None
             select_element_action = None
             rename_element_action = None
@@ -2687,8 +2735,6 @@ class LensEditor(QWidget):
             flip_element_action = None
             duplicate_element_action = None
             move_element_action = None
-            can_create_element = self._can_create_element_from_selection_for(surface_index)
-            has_element = bool(group_id)
             if can_create_element or has_element:
                 menu.addSeparator()
             if can_create_element:
@@ -2711,7 +2757,6 @@ class LensEditor(QWidget):
                 ungroup_element_action.triggered.connect(
                     lambda _=False, si=surface_index: self._ungroup_element(si)
                 )
-                is_group_expanded = bool(group_id and str(group_id) in self._expanded_group_ids)
                 toggle_element_action = menu.addAction(
                     "Collapse Element" if is_group_expanded else "Expand Element"
                 )
@@ -2730,45 +2775,21 @@ class LensEditor(QWidget):
                 move_element_action.triggered.connect(
                     lambda _=False, si=surface_index: self._move_element(si)
                 )
-            is_group_expanded = bool(group_id and str(group_id) in self._expanded_group_ids)
-            editor_action = menu.addAction("Surface Editor (WIP)")
-            editor_action.setEnabled(False)
 
-            is_obj_or_img = (surface_index == 0) or (
-                surface_index == self.connector.get_surface_count() - 1
-            )
-            group_rows = self.connector.get_group_rows(surface_index)
-
+            # ── stop / optimization ───────────────────────────────────────────
             menu.addSeparator()
             make_stop_action = menu.addAction("Make Stop Surface")
             make_stop_action.triggered.connect(
                 lambda _=False, si=surface_index: self.connector.set_stop_surface(si)
             )
-
-            if is_obj_or_img:
-                if surface_index == 0:
-                    add_before.setEnabled(False)
-                add_after.setEnabled(False)
-                remove_action.setEnabled(False)
-                props_action.setEnabled(False)
-                make_stop_action.setEnabled(False)
-                for action in (
-                    disable_surface_action,
-                    disable_element_action,
-                    create_element_action,
-                    select_element_action,
-                    rename_element_action,
-                    ungroup_element_action,
-                    toggle_element_action,
-                    flip_element_action,
-                    duplicate_element_action,
-                    move_element_action,
-                ):
-                    if action is not None:
-                        action.setEnabled(False)
+            _surfaces = self.connector._optic.surfaces.surfaces
+            already_stop = (
+                0 < surface_index < len(_surfaces)
+                and _surfaces[surface_index].is_stop
+            )
+            make_stop_action.setEnabled(not is_obj_or_img and not already_stop)
 
             menu.addSeparator()
-            ui_col = self.tableWidget.columnAt(pos.x())
             _col_var_type = {
                 self.connector.COL_RADIUS: "radius",
                 self.connector.COL_THICKNESS: "thickness",
@@ -2783,8 +2804,7 @@ class LensEditor(QWidget):
                     self.connector.requestAddOptimizationVariable.emit(si, st)
                 )
             )
-            if is_obj_or_img:
-                add_var_action.setEnabled(False)
+            add_var_action.setEnabled(not is_obj_or_img and col_is_numeric and not is_collapsed_row)
             chosen = menu.exec(self.tableWidget.viewport().mapToGlobal(pos))
             if chosen == copy_cell_action:
                 self._copy_current_cell_to_clipboard()
