@@ -15,7 +15,7 @@ Manuel Fragata Mendes, 2025
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import matplotlib.pyplot as plt
 import numpy as _np  # Use _np for plotting logic.
@@ -79,14 +79,17 @@ class IncoherentIrradiance(BaseAnalysis):
     def __init__(
         self,
         optic,
-        num_rays: int = 5,
+        num_rays: int = 500,
         res=(128, 128),
-        px_size: float | None = None,
+        px_size: tuple[float, float] | None = None,
         detector_surface: int = -1,
         *,
         fields="all",
         wavelengths="all",
-        distribution: str = "random",
+        distribution: Literal[
+            "random", "hexapolar", "grid", "ring",
+            "line_x", "line_y", "gaussian", "uniform"
+        ] = "random",
         user_initial_rays=None,
         source=None,
         skip_trace: bool = False,
@@ -134,28 +137,21 @@ class IncoherentIrradiance(BaseAnalysis):
         self.distribution = distribution
         self.skip_trace = skip_trace
 
-        # The detector surface must have a physical aperture
         surf = optic.surfaces[self.detector_surface]
-        if surf.aperture is None:
-            raise ValueError(
-                "Detector surface has no physical aperture - set one "
-                "(e.g. RectangularAperture) so that the detector size is defined."
-            )
+        self._has_aperture = surf.aperture is not None
 
-        # Override resolution if px_size is provided
-        if self.px_size is not None:
-            x_min, x_max, y_min, y_max = surf.aperture.extent
-            detector_width = x_max - x_min
-            detector_height = y_max - y_min
-
-            # Calculate resolution from pixel size
-            new_npix_x = int(round(detector_width / self.px_size[0]))
-            new_npix_y = int(round(detector_height / self.px_size[1]))
-
-            # Print warning and update resolution
+        if not self._has_aperture:
             print(
-                "[IncoherentIrradiance] Warning: res parameter ignored - derived "
-                f"from px_size instead → ({new_npix_x},{new_npix_y}) pixels"
+                "[IncoherentIrradiance] Note: detector surface has no physical "
+                "aperture — extent will be derived automatically from ray data."
+            )
+        elif self.px_size is not None:
+            x_min, x_max, y_min, y_max = surf.aperture.extent
+            new_npix_x = int(round((x_max - x_min) / self.px_size[0]))
+            new_npix_y = int(round((y_max - y_min) / self.px_size[1]))
+            print(
+                "[IncoherentIrradiance] res overridden by px_size → "
+                f"({new_npix_x},{new_npix_y}) pixels"
             )
             self.npix_x, self.npix_y = new_npix_x, new_npix_y
 
@@ -210,8 +206,15 @@ class IncoherentIrradiance(BaseAnalysis):
         - Colorbars and axis labels are automatically added to each subplot.
         """
         if not self.data:
-            print("No irradiance data to display.")
-            return None
+            if fig_to_plot_on:
+                fig = fig_to_plot_on
+                fig.clear()
+            else:
+                fig, _ = plt.subplots(1, 1, figsize=figsize)
+            ax = fig.add_subplot(111)
+            ax.text(0.5, 0.5, "No irradiance data to display.",
+                    ha="center", va="center", transform=ax.transAxes)
+            return fig, _np.array([[ax]])
 
         cs_info = self._validate_cross_section_request(cross_section)
         vmin_plot, vmax_plot = self._calculate_plot_limits(normalize)
@@ -246,7 +249,10 @@ class IncoherentIrradiance(BaseAnalysis):
 
     def peak_irradiance(self):
         """Maximum pixel value for each (field,wvl) pair."""
-        return [[be.max(irr) for irr, *_ in fblock] for fblock in self.data]
+        return [
+            [float(_np.max(be.to_numpy(irr))) for irr, *_ in fblock]
+            for fblock in self.data
+        ]
 
     def _generate_data(self):
         """Generates irradiance data for all fields and wavelengths."""
@@ -263,10 +269,7 @@ class IncoherentIrradiance(BaseAnalysis):
         return data
 
     def _generate_field_data(self, field, wavelength, distribution, user_initial_rays):
-        """
-        Traces rays and bins their power. Switches between standard and
-        differentiable methods based on the gradient mode.
-        """
+        """Traces rays and bins their power onto a 2-D irradiance grid."""
         rays_traced = None
         if not self.skip_trace:
             if user_initial_rays is None:
@@ -282,46 +285,30 @@ class IncoherentIrradiance(BaseAnalysis):
         surf = self.optic.surfaces[self.detector_surface]
         if rays_traced is not None:
             x_g, y_g, z_g, power = (
-                rays_traced.x,
-                rays_traced.y,
-                rays_traced.z,
-                rays_traced.i,
+                rays_traced.x, rays_traced.y, rays_traced.z, rays_traced.i,
             )
         else:
-            # Read from cache (assumes trace was done externally or skipping)
             x_g, y_g, z_g, power = surf.x, surf.y, surf.z, surf.intensity
 
         from optiland.visualization.system.utils import transform
-
         x_local, y_local, _ = transform(x_g, y_g, z_g, surf, is_global=True)
 
-        x_min, x_max, y_min, y_max = surf.aperture.extent
-        if self.px_size is None:
+        # ── Differentiable path (torch autograd) ────────────────────────
+        if be.get_backend() == "torch" and be.grad_mode.requires_grad:
+            if not self._has_aperture:
+                irr = be.zeros((self.npix_x, self.npix_y))
+                return irr, _np.array([-1.0, 1.0]), _np.array([-1.0, 1.0])
+
+            x_min, x_max, y_min, y_max = surf.aperture.extent
             x_edges = _np.linspace(x_min, x_max, self.npix_x + 1, dtype=float)
             y_edges = _np.linspace(y_min, y_max, self.npix_y + 1, dtype=float)
             pixel_area = (x_edges[1] - x_edges[0]) * (y_edges[1] - y_edges[0])
-        else:
-            dx, dy = self.px_size
-            x_edges = _np.arange(x_min, x_max + 0.5 * dx, dx, dtype=float)
-            y_edges = _np.arange(y_min, y_max + 0.5 * dy, dy, dtype=float)
-            pixel_area = dx * dy
-            exp_nx, exp_ny = len(x_edges) - 1, len(y_edges) - 1
-            if (exp_nx, exp_ny) != (self.npix_x, self.npix_y):
-                print(
-                    f"[IncoherentIrradiance] Warning: res parameter ignored - "
-                    f"derived from px_size instead → ({exp_nx},{exp_ny}) pixels"
-                )
-                self.npix_x, self.npix_y = exp_nx, exp_ny
 
-        # differentiable path
-        if be.get_backend() == "torch" and be.grad_mode.requires_grad:
             x_edges_be = be.array(x_edges)
             y_edges_be = be.array(y_edges)
             ray_coords = be.stack([x_local, y_local], axis=1)
-
             if ray_coords.shape[0] == 0:
-                irr = be.zeros((self.npix_x, self.npix_y))
-                return irr, x_edges, y_edges
+                return be.zeros((self.npix_x, self.npix_y)), x_edges, y_edges
 
             indices, weights = be.get_bilinear_weights(
                 ray_coords, (x_edges_be, y_edges_be)
@@ -333,24 +320,55 @@ class IncoherentIrradiance(BaseAnalysis):
                     weights[:, i] * power,
                     accumulate=True,
                 )
-            irr = power_map / pixel_area
-            return irr, x_edges, y_edges
-        # non-differentiable path
+            return power_map / pixel_area, x_edges, y_edges
+
+        # ── Non-differentiable path ──────────────────────────────────────
+        x_np = be.to_numpy(x_local)
+        y_np = be.to_numpy(y_local)
+        power_np = be.to_numpy(power)
+
+        valid = power_np > 0.0
+        x_valid = x_np[valid]
+        y_valid = y_np[valid]
+        power_valid = power_np[valid]
+
+        if self._has_aperture:
+            x_min, x_max, y_min, y_max = surf.aperture.extent
+            if self.px_size is None:
+                x_edges = _np.linspace(x_min, x_max, self.npix_x + 1, dtype=float)
+                y_edges = _np.linspace(y_min, y_max, self.npix_y + 1, dtype=float)
+                pixel_area = (x_edges[1] - x_edges[0]) * (y_edges[1] - y_edges[0])
+            else:
+                dx, dy = self.px_size
+                x_edges = _np.arange(x_min, x_max + 0.5 * dx, dx, dtype=float)
+                y_edges = _np.arange(y_min, y_max + 0.5 * dy, dy, dtype=float)
+                pixel_area = dx * dy
+                exp_nx, exp_ny = len(x_edges) - 1, len(y_edges) - 1
+                if (exp_nx, exp_ny) != (self.npix_x, self.npix_y):
+                    self.npix_x, self.npix_y = exp_nx, exp_ny
         else:
-            x_np, y_np, power_np = (
-                be.to_numpy(x_local),
-                be.to_numpy(y_local),
-                be.to_numpy(power),
-            )
+            # Auto-derive extent from the ray footprint
+            if x_valid.size >= 4:
+                span = max(
+                    x_valid.max() - x_valid.min(),
+                    y_valid.max() - y_valid.min(),
+                    1e-3,
+                )
+                margin = span * 0.05
+                x_min = x_valid.min() - margin
+                x_max = x_valid.max() + margin
+                y_min = y_valid.min() - margin
+                y_max = y_valid.max() + margin
+            else:
+                x_min, x_max, y_min, y_max = -1.0, 1.0, -1.0, 1.0
+            x_edges = _np.linspace(x_min, x_max, self.npix_x + 1, dtype=float)
+            y_edges = _np.linspace(y_min, y_max, self.npix_y + 1, dtype=float)
+            pixel_area = (x_edges[1] - x_edges[0]) * (y_edges[1] - y_edges[0])
 
-            valid = power_np > 0.0
-            x_np, y_np, power_np = x_np[valid], y_np[valid], power_np[valid]
-
-            hist, _, _ = _np.histogram2d(
-                x_np, y_np, bins=[x_edges, y_edges], weights=power_np
-            )
-            irr = hist / pixel_area
-            return be.array(irr), x_edges, y_edges
+        hist, _, _ = _np.histogram2d(
+            x_valid, y_valid, bins=[x_edges, y_edges], weights=power_valid
+        )
+        return be.array(hist / pixel_area), x_edges, y_edges
 
     # --- Plotting Helper Functions ---
 
@@ -446,7 +464,6 @@ class IncoherentIrradiance(BaseAnalysis):
         if fig_to_plot_on:
             fig = fig_to_plot_on
             fig.clear()
-            fig.set_size_inches(total_figsize)
             axs = fig.subplots(
                 nrows=n_fields,
                 ncols=n_wavelengths,

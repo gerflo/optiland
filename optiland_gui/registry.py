@@ -76,4 +76,17 @@ ANALYSIS_REGISTRY: list[tuple[str, str, str]] = [
     # ------------------------------------------------------------------ #
     ("Distortion", "Distortion", "optiland.analysis.Distortion"),
     ("Distortion", "Grid Distortion", "optiland.analysis.GridDistortion"),
+    # ------------------------------------------------------------------ #
+    # Illumination                                                         #
+    # ------------------------------------------------------------------ #
+    (
+        "Illumination",
+        "Incoherent Irradiance",
+        "optiland.analysis.IncoherentIrradiance",
+    ),
+    (
+        "Illumination",
+        "Footprint Diagram",
+        "optiland.analysis.FootprintDiagram",
+    ),
 ]

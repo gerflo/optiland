@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QAbstractSpinBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -112,11 +114,13 @@ class SystemPropertiesPanel(QWidget):
         self.fieldsEditor = FieldsEditor(self.connector)
         self.wavelengthsEditor = WavelengthsEditor(self.connector)
         self.polarizationEditor = PolarizationEditor(self.connector)
+        self.rayAimingEditor = RayAimingEditor(self.connector)
 
         self.add_nav_item("Aperture", self.apertureEditor)
         self.add_nav_item("Fields", self.fieldsEditor)
         self.add_nav_item("Wavelengths", self.wavelengthsEditor)
         self.add_nav_item("Polarization", self.polarizationEditor)
+        self.add_nav_item("Ray Aiming", self.rayAimingEditor)
 
     def add_nav_item(self, name, widget):
         """
@@ -150,6 +154,7 @@ class SystemPropertiesPanel(QWidget):
         self.fieldsEditor.load_data()
         self.wavelengthsEditor.load_data()
         self.polarizationEditor.load_data()
+        self.rayAimingEditor.load_data()
 
 
 class PropertyEditorBase(QWidget):
@@ -758,3 +763,73 @@ class PolarizationEditor(PropertyEditorBase):
         except ValueError as exc:
             self.lblError.setText(str(exc))
             self.lblError.show()
+
+
+class RayAimingEditor(PropertyEditorBase):
+    """Editor for the ray aiming strategy used during ray tracing.
+
+    Exposes the three available modes (Paraxial, Iterative, Robust) along with
+    convergence controls (max iterations and tolerance) so the user can tune
+    tracing behaviour without touching the Python API directly.
+
+    This is particularly relevant for systems with annular or complex pupils
+    (e.g. ring apertures) where paraxial ray aiming may block all rays.
+    """
+
+    _MODE_DISPLAY = ["Paraxial", "Iterative", "Robust"]
+    _MODE_KEYS = ["paraxial", "iterative", "robust"]
+
+    def init_ui(self) -> None:
+        """Initialises the ray aiming editor UI."""
+        layout = QFormLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        self.cmbMode = QComboBox()
+        self.cmbMode.addItems(self._MODE_DISPLAY)
+        layout.addRow("Mode:", self.cmbMode)
+
+        self.spnMaxIter = QSpinBox()
+        self.spnMaxIter.setRange(1, 10000)
+        self.spnMaxIter.setValue(10)
+        layout.addRow("Max Iterations:", self.spnMaxIter)
+
+        self.spnTol = QDoubleSpinBox()
+        self.spnTol.setDecimals(10)
+        self.spnTol.setRange(0.0, 1.0)
+        self.spnTol.setValue(1e-6)
+        self.spnTol.setStepType(QAbstractSpinBox.StepType.AdaptiveDecimalStepType)
+        layout.addRow("Tolerance:", self.spnTol)
+
+        self.btnApply = QPushButton("Apply Ray Aiming")
+        layout.addRow(self.btnApply)
+
+        self.btnApply.clicked.connect(self.apply_ray_aiming)
+
+    @Slot()
+    def load_data(self) -> None:
+        """Load the current ray aiming config from the optic into the UI."""
+        self.is_loading = True
+        optic = self.connector.get_optic()
+        if optic is not None and hasattr(optic, "ray_tracer"):
+            cfg = optic.ray_tracer.ray_aiming_config
+            mode = cfg.get("mode", "paraxial")
+            if mode in self._MODE_KEYS:
+                self.cmbMode.setCurrentIndex(self._MODE_KEYS.index(mode))
+            self.spnMaxIter.setValue(int(cfg.get("max_iter", 10)))
+            self.spnTol.setValue(float(cfg.get("tol", 1e-6)))
+        self.is_loading = False
+
+    @Slot()
+    def apply_ray_aiming(self) -> None:
+        """Apply the UI settings to the optic's ray tracer."""
+        if self.is_loading:
+            return
+        optic = self.connector.get_optic()
+        if optic is not None and hasattr(optic, "ray_tracer"):
+            mode = self._MODE_KEYS[self.cmbMode.currentIndex()]
+            max_iter = self.spnMaxIter.value()
+            tol = self.spnTol.value()
+            optic.ray_tracer.set_aiming(mode, max_iter=max_iter, tol=tol)
+            self.connector.opticChanged.emit()
+            print(f"Ray aiming updated: mode={mode}, max_iter={max_iter}, tol={tol}")

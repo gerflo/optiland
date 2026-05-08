@@ -57,7 +57,15 @@ class OpticalSystem:
             "surface": {"2d": Surface2D, "3d": Surface3D},
         }
 
-    def plot(self, ax, theme=None, projection="YZ", show_apertures=True):
+    def plot(
+        self,
+        ax,
+        theme=None,
+        projection="YZ",
+        show_apertures=True,
+        show_stop_apertures=True,
+        show_non_stop_apertures=True,
+    ):
         """Plots the components of the optical system on the given
         axis (or renderer for 3D plotting).
         """
@@ -74,7 +82,12 @@ class OpticalSystem:
                 )
                 artists.update(aperture_artists)
             else:
-                self._plot_apertures_3d(ax, theme=theme)
+                self._plot_apertures_3d(
+                    ax,
+                    theme=theme,
+                    show_stop=show_stop_apertures,
+                    show_non_stop=show_non_stop_apertures,
+                )
         return artists
 
     def _identify_components(self):
@@ -273,22 +286,28 @@ class OpticalSystem:
 
         return artists
 
-    def _plot_apertures_3d(self, renderer, theme=None):
+    def _plot_apertures_3d(
+        self, renderer, theme=None, show_stop=True, show_non_stop=True
+    ):
         """Add translucent aperture disk actors to the 3D renderer."""
         import vtk
 
-        stop_color = (0.61, 0.19, 1.0)      # purple
-        aperture_color = (0.47, 0.0, 0.80)  # darker purple for non-stop apertures
+        stop_color = (0.61, 0.19, 1.0)
         if theme:
             from matplotlib.colors import to_rgb
 
             stop_hex = theme.parameters.get("aperture.stop_color", "#9B30FF")
-            ap_hex = theme.parameters.get("aperture.color", "#7700CC")
             stop_color = to_rgb(stop_hex)
-            aperture_color = to_rgb(ap_hex)
+
+        # Non-stop apertures are 20% lighter than stop color
+        aperture_color = tuple(min(1.0, c + 0.20 * (1.0 - c)) for c in stop_color)
 
         for idx, surface in enumerate(self.optic.surfaces):
             if surface.aperture is None and not surface.is_stop:
+                continue
+            if surface.is_stop and not show_stop:
+                continue
+            if not surface.is_stop and not show_non_stop:
                 continue
 
             r_outer_edge = self._aperture_radius(idx, surface)

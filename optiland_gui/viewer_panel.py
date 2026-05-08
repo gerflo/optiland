@@ -16,7 +16,7 @@ import math
 import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import QSettings, QSignalBlocker, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -295,12 +295,9 @@ class ViewerPanel(QWidget):
         self._rendering_3d = False
         self._scheduled_3d_activation = False
         self._viewer3d_tab_index = -1
-        self._viewer3d_placeholder = None
         if VTK_AVAILABLE:
-            self._viewer3d_placeholder = self._create_3d_placeholder_tab()
-            self._viewer3d_tab_index = self.tabWidget.addTab(
-                self._viewer3d_placeholder, "3D Layout"
-            )
+            _3d_tab = self._create_3d_viewer_tab()
+            self._viewer3d_tab_index = self.tabWidget.addTab(_3d_tab, "3D Layout")
 
         # Create Sag Viewer Tab
         self.sagViewer = SagViewer(self.connector, self)
@@ -312,13 +309,47 @@ class ViewerPanel(QWidget):
         self.connector.opticLoaded.connect(self.reset_original_views)
         self.connector.opticChanged.connect(self.update_viewers)
 
-    def _create_3d_placeholder_tab(self) -> QWidget:
-        """Create the lightweight tab shown until the 3D viewer is opened."""
-        placeholder = QWidget()
-        layout = QVBoxLayout(placeholder)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(QLabel("3D view is prepared when this tab is opened."))
-        return placeholder
+    def _create_3d_viewer_tab(self) -> QWidget:
+        """Create the 3D tab container with toolbar and content area."""
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(5, 5, 5, 5)
+        layout.setSpacing(2)
+
+        # Toolbar row — same layout style as the 2D tab
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.setContentsMargins(0, 0, 0, 0)
+
+        self._btn_3d_refresh = QPushButton("⟳  Refresh")
+        self._btn_3d_refresh.setToolTip("Re-render the 3D view")
+        self._btn_3d_refresh.clicked.connect(lambda _=None: self._render_3d_now())
+
+        self._chk_3d_stop = QCheckBox("Stop Aperture")
+        self._chk_3d_stop.setToolTip("Show the stop surface aperture")
+        self._chk_3d_stop.setChecked(True)
+        self._chk_3d_stop.toggled.connect(lambda _: self._render_3d_from_2d_settings())
+
+        self._chk_3d_non_stop = QCheckBox("Other Apertures")
+        self._chk_3d_non_stop.setToolTip("Show non-stop surface apertures")
+        self._chk_3d_non_stop.setChecked(True)
+        self._chk_3d_non_stop.toggled.connect(lambda _: self._render_3d_from_2d_settings())
+
+        toolbar_layout.addWidget(self._btn_3d_refresh)
+        toolbar_layout.addWidget(self._chk_3d_stop)
+        toolbar_layout.addWidget(self._chk_3d_non_stop)
+        toolbar_layout.addStretch()
+        layout.addLayout(toolbar_layout)
+
+        # Content area — starts with placeholder; VTK widget is injected here
+        self._3d_content_widget = QWidget()
+        self._3d_content_layout = QVBoxLayout(self._3d_content_widget)
+        self._3d_content_layout.setContentsMargins(0, 0, 0, 0)
+        placeholder_lbl = QLabel("3D view is prepared when this tab is opened.")
+        placeholder_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._3d_content_layout.addWidget(placeholder_lbl)
+        layout.addWidget(self._3d_content_widget, 1)
+
+        return container
 
     def _ensure_3d_viewer(self) -> bool:
         """Create the VTK viewer lazily when the 3D tab is activated."""
@@ -333,15 +364,13 @@ class ViewerPanel(QWidget):
         try:
             viewer3d = VTKViewer(self.connector)
             viewer3d.update_theme(self.current_theme, render=False)
-            blocker = QSignalBlocker(self.tabWidget)
-            try:
-                self.tabWidget.removeTab(self._viewer3d_tab_index)
-                self.tabWidget.insertTab(self._viewer3d_tab_index, viewer3d, "3D Layout")
-                self.tabWidget.setCurrentIndex(self._viewer3d_tab_index)
-            finally:
-                del blocker
+            # Swap out the placeholder label for the real VTK widget
+            while self._3d_content_layout.count():
+                item = self._3d_content_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self._3d_content_layout.addWidget(viewer3d)
             self.viewer3D = viewer3d
-            self._viewer3d_placeholder = None
             return True
         finally:
             self._creating_3d_viewer = False
@@ -438,11 +467,15 @@ class ViewerPanel(QWidget):
         if not (self.viewer2D and self._ensure_3d_viewer() and self.viewer3D):
             return
         num_rays, distribution = self.viewer2D.ray_sampling_for_3d()
+        show_stop = self._chk_3d_stop.isChecked() if hasattr(self, "_chk_3d_stop") else True
+        show_non_stop = self._chk_3d_non_stop.isChecked() if hasattr(self, "_chk_3d_non_stop") else True
         self._rendering_3d = True
         try:
             self.viewer3D.render_optic(
                 num_rays=num_rays,
                 distribution=distribution,
+                show_stop_apertures=show_stop,
+                show_non_stop_apertures=show_non_stop,
             )
             self._pending_3d_render = False
         finally:
@@ -984,12 +1017,15 @@ class VTKViewer(QWidget):
         self.connector = connector
         self._last_num_rays = 24
         self._last_distribution = "ring"
+        self._show_stop_apertures = True
+        self._show_non_stop_apertures = True
         if not VTK_AVAILABLE:
             self.layout = QVBoxLayout(self)
             self.layout.addWidget(QLabel("VTK is not available."))
             return
 
         self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
         self.vtkWidget = QVTKRenderWindowInteractor(self)
         self.layout.addWidget(self.vtkWidget)
 
@@ -1048,7 +1084,11 @@ class VTKViewer(QWidget):
             logger.warning(message)
 
     def render_optic(
-        self, num_rays: int | None = None, distribution: str | None = None
+        self,
+        num_rays: int | None = None,
+        distribution: str | None = None,
+        show_stop_apertures: bool | None = None,
+        show_non_stop_apertures: bool | None = None,
     ):
         """
         Clears the current scene and re-renders the optical system in 3D.
@@ -1060,6 +1100,10 @@ class VTKViewer(QWidget):
             num_rays = self._last_num_rays
         if distribution is None:
             distribution = self._last_distribution
+        if show_stop_apertures is not None:
+            self._show_stop_apertures = show_stop_apertures
+        if show_non_stop_apertures is not None:
+            self._show_non_stop_apertures = show_non_stop_apertures
         self._last_num_rays = int(num_rays)
         self._last_distribution = distribution
         if not VTK_AVAILABLE:
@@ -1099,7 +1143,12 @@ class VTKViewer(QWidget):
                         raise
                     self._notify_missing_stop_surface()
 
-                system_plotter.plot(self.renderer, theme=theme)
+                system_plotter.plot(
+                    self.renderer,
+                    theme=theme,
+                    show_stop_apertures=self._show_stop_apertures,
+                    show_non_stop_apertures=self._show_non_stop_apertures,
+                )
 
                 if not self.renderer.GetActiveCamera():
                     self.setup_default_camera()

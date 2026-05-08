@@ -65,6 +65,7 @@ from optiland.analysis import (
     FieldCurvature,
     FieldIncidentAngleVsHeight,
     GridDistortion,
+    IncoherentIrradiance,
     PupilAberration,
     PupilIncidentAngleVsHeight,
     RayFan,
@@ -196,7 +197,7 @@ class AnalysisPanel(QWidget):
         "RMS Spot Size vs Field": RmsSpotSizeVsField,
         "RMS Wavefront Error vs Field": RmsWavefrontErrorVsField,
         "Through-Focus Spot Diagram": ThroughFocusSpotDiagram,
-        # "Incoherent Irradiance": IncoherentIrradiance,
+        "Incoherent Irradiance": IncoherentIrradiance,
         "Pupil Aberration": PupilAberration,
         GEOMETRIC_MTF: GeometricMTF,
         FFT_MTF: FFTMTF,
@@ -818,6 +819,10 @@ class AnalysisPanel(QWidget):
             ):
                 init_params["max_freq"] = {"default": "cutoff", "annotation": str}
 
+        if analysis_class.__name__ == "IncoherentIrradiance":
+            for key in ("user_initial_rays", "source", "skip_trace", "px_size"):
+                init_params.pop(key, None)
+
         view_params = {}
         if hasattr(analysis_class, "view") and callable(analysis_class.view):
             view_sig = inspect.signature(analysis_class.view)
@@ -1388,8 +1393,10 @@ class AnalysisPanel(QWidget):
 
         if param_name in ["field", "pupil"]:
             return self._parse_tuple_str(text, float, 2)
-        if param_name in ["res", "px_size"]:
+        if param_name == "res":
             return self._parse_tuple_str(text, int, 2)
+        if param_name == "px_size":
+            return self._parse_tuple_str(text, float, 2)
         if param_name == "cross_section":
             return self._parse_cross_section(text)
 

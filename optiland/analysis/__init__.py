@@ -11,6 +11,7 @@ from .field_curvature import FieldCurvature
 from .rms_vs_field import RmsSpotSizeVsField, RmsWavefrontErrorVsField
 from .pupil_aberration import PupilAberration
 from .irradiance import IncoherentIrradiance
+from .footprint import FootprintDiagram
 from .intensity import RadiantIntensity
 from .mtf_vs_field import MTFvsField
 from .through_focus_mtf import ThroughFocusMTF

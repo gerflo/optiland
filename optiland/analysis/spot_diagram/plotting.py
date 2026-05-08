@@ -86,12 +86,14 @@ def calculate_axis_limits(
     Returns:
         A float representing the symmetric axis limit (+/- limit).
     """
-    max_radii = [
-        be.to_numpy(be.max(be.sqrt(sd.x**2 + sd.y**2)))
-        for field in centered_data
-        for sd in field
-        if sd.x.size > 0
-    ]
+    max_radii = []
+    for field in centered_data:
+        for sd in field:
+            if sd.x.size > 0:
+                r = be.to_numpy(be.sqrt(sd.x**2 + sd.y**2))
+                finite = r[np.isfinite(r)]
+                if finite.size > 0:
+                    max_radii.append(float(finite.max()))
     max_geom_radius = max(max_radii) if max_radii else 0.01
 
     if not airy_disk_data:
@@ -103,11 +105,15 @@ def calculate_axis_limits(
 
     max_extent = 0
     for i in range(len(fields)):
-        offset = np.max(np.abs(centroids[i]))
-        radius = max(rad_x[i], rad_y[i], max_geom_radius)
+        centroid_arr = np.asarray(centroids[i], dtype=float)
+        offset = float(np.nanmax(np.abs(centroid_arr))) if np.any(np.isfinite(centroid_arr)) else 0.0
+        rx = float(rad_x[i]) if np.isfinite(rad_x[i]) else 0.0
+        ry = float(rad_y[i]) if np.isfinite(rad_y[i]) else 0.0
+        radius = max(rx, ry, max_geom_radius)
         max_extent = max(max_extent, offset + radius)
 
-    return max_extent * buffer if max_extent > 0 else max_geom_radius * buffer
+    result = max_extent * buffer if max_extent > 0 else max_geom_radius * buffer
+    return result if np.isfinite(result) else 0.01
 
 
 def plot_field(
@@ -224,8 +230,8 @@ def finalize_plot(
     fig.legend(
         handles,
         labels,
-        loc="upper center",
-        bbox_to_anchor=(x_center, 0.05),
+        loc="lower center",
+        bbox_to_anchor=(x_center, 0.01),
         ncol=len(wavelengths),
     )
 
