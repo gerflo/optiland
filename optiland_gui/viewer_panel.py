@@ -892,7 +892,7 @@ class MatplotlibViewer(QWidget):
             self.figure.set_facecolor(face_color)
             self.ax.set_facecolor(face_color)
 
-            optic = self.connector.get_optic()
+            optic = self.connector.get_effective_optic()
             num_rays = self.num_rays_spinbox.value()
             distribution = self.dist_combo.currentText()
             if optic and optic.surface_group.num_surfaces > 0:
@@ -1066,7 +1066,7 @@ class VTKViewer(QWidget):
             return
 
         self.renderer.RemoveAllViewProps()
-        optic = self.connector.get_optic()
+        optic = self.connector.get_effective_optic()
 
         # Check if optic has surfaces and a valid aperture
         if (

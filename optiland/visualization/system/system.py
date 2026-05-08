@@ -8,6 +8,7 @@ Kramer Harrison, 2024
 from __future__ import annotations
 
 import optiland.backend as be
+from optiland.physical_apertures.radial import RadialAperture
 from optiland.visualization.system.lens import Lens2D, Lens3D
 from optiland.visualization.system.mirror import Mirror3D
 from optiland.visualization.system.surface import Surface2D, Surface3D
@@ -168,19 +169,12 @@ class OpticalSystem:
         if projection not in ("XZ", "YZ"):
             raise ValueError("Invalid projection type. Must be 'XY', 'XZ', or 'YZ'.")
 
-        stop_color = "#FF8C00"      # amber-orange: visible on both dark and light
-        aperture_color = "#CC6600"  # darker orange for non-stop apertures
+        stop_color = "#9B30FF"      # purple: visible on both dark and light
+        aperture_color = "#7700CC"  # darker purple for non-stop apertures
 
         artists = {}
-        n = self.optic.surfaces.n(self.optic.primary_wavelength)
         for idx, surface in enumerate(self.optic.surfaces):
-            if idx > 0:
-                is_lens_surface = n[idx] > 1 or (n[idx] == 1 and n[idx - 1] > 1)
-            else:
-                is_lens_surface = n[idx] > 1
-            if is_lens_surface and not surface.is_stop:
-                continue
-            # Skip surfaces without apertures (unless stop)
+            # Skip surfaces without any aperture indicator (unless it is the stop)
             if surface.aperture is None and not surface.is_stop:
                 continue
 
@@ -249,59 +243,85 @@ class OpticalSystem:
                     arrowprops=arrowprops,
                 )
 
+            # For ring apertures (r_min > 0): draw the inner blocking edge too
+            if isinstance(surface.aperture, RadialAperture) and surface.aperture.r_min > 0:
+                r_in = float(surface.aperture.r_min)
+                xi_local = be.array([-r_in, r_in])
+                yi_local = be.array([-r_in, r_in])
+                zi_local = be.array([0.0, 0.0])
+                xi_g, yi_g, zi_g = transform(
+                    xi_local, yi_local, zi_local, surface, is_global=False
+                )
+                xi_g = be.to_numpy(xi_g)
+                yi_g = be.to_numpy(yi_g)
+                zi_g = be.to_numpy(zi_g)
+                axis_vals_i = xi_g if projection == "XZ" else yi_g
+                (line_i,) = ax.plot(
+                    zi_g, axis_vals_i, color=facecolor, linewidth=1.5
+                )
+                artists[line_i] = surface
+                for z_val, axis_val, sign in (
+                    (zi_g[1], axis_vals_i[1], -1),  # top inner → arrow points inward
+                    (zi_g[0], axis_vals_i[0], 1),   # bottom inner → arrow points inward
+                ):
+                    ax.annotate(
+                        "",
+                        xy=(z_val, axis_val),
+                        xytext=(z_val, axis_val + sign * eps),
+                        arrowprops=arrowprops,
+                    )
+
         return artists
 
     def _plot_apertures_3d(self, renderer, theme=None):
         """Add translucent aperture disk actors to the 3D renderer."""
         import vtk
 
-        stop_color = (1.0, 0.55, 0.0)      # orange
-        aperture_color = (0.8, 0.44, 0.0)  # darker orange for non-stop apertures
+        stop_color = (0.61, 0.19, 1.0)      # purple
+        aperture_color = (0.47, 0.0, 0.80)  # darker purple for non-stop apertures
         if theme:
             from matplotlib.colors import to_rgb
 
-            stop_hex = theme.parameters.get("aperture.stop_color", "#FF8C00")
-            ap_hex = theme.parameters.get("aperture.color", "#CC6600")
+            stop_hex = theme.parameters.get("aperture.stop_color", "#9B30FF")
+            ap_hex = theme.parameters.get("aperture.color", "#7700CC")
             stop_color = to_rgb(stop_hex)
             aperture_color = to_rgb(ap_hex)
 
-        n = self.optic.surfaces.n(self.optic.primary_wavelength)
         for idx, surface in enumerate(self.optic.surfaces):
-            if idx > 0:
-                is_lens_surface = n[idx] > 1 or (n[idx] == 1 and n[idx - 1] > 1)
-            else:
-                is_lens_surface = n[idx] > 1
-            if is_lens_surface and not surface.is_stop:
-                continue
             if surface.aperture is None and not surface.is_stop:
                 continue
 
-            r_inner = self._aperture_radius(idx, surface)
-            if r_inner is None or r_inner <= 0:
+            r_outer_edge = self._aperture_radius(idx, surface)
+            if r_outer_edge is None or r_outer_edge <= 0:
                 continue
-            r_outer = r_inner * 1.5
-
-            disk = vtk.vtkDiskSource()
-            disk.SetInnerRadius(r_inner)
-            disk.SetOuterRadius(r_outer)
-            disk.SetRadialResolution(1)
-            disk.SetCircumferentialResolution(64)
-            disk.Update()
-
-            mapper = vtk.vtkPolyDataMapper()
-            mapper.SetInputConnection(disk.GetOutputPort())
-
-            actor = vtk.vtkActor()
-            actor.SetMapper(mapper)
-            actor = transform_3d(actor, surface)
 
             color = stop_color if surface.is_stop else aperture_color
-            prop = actor.GetProperty()
-            prop.SetColor(*color)
-            prop.SetOpacity(0.65)
-            prop.SetAmbient(0.6)
-            prop.SetDiffuse(0.4)
-            prop.SetSpecular(0.2)
-            prop.SetSpecularPower(20.0)
 
-            renderer.AddActor(actor)
+            def _add_disk(r_in, r_out):
+                disk = vtk.vtkDiskSource()
+                disk.SetInnerRadius(r_in)
+                disk.SetOuterRadius(r_out)
+                disk.SetRadialResolution(1)
+                disk.SetCircumferentialResolution(64)
+                disk.Update()
+                mapper = vtk.vtkPolyDataMapper()
+                mapper.SetInputConnection(disk.GetOutputPort())
+                actor = vtk.vtkActor()
+                actor.SetMapper(mapper)
+                actor = transform_3d(actor, surface)
+                prop = actor.GetProperty()
+                prop.SetColor(*color)
+                prop.SetOpacity(0.65)
+                prop.SetAmbient(0.6)
+                prop.SetDiffuse(0.4)
+                prop.SetSpecular(0.2)
+                prop.SetSpecularPower(20.0)
+                renderer.AddActor(actor)
+
+            # Outer blocking ring (beyond clear aperture)
+            _add_disk(r_outer_edge, r_outer_edge * 1.5)
+
+            # For ring apertures (r_min > 0): add inner central obstruction disk
+            if isinstance(surface.aperture, RadialAperture) and surface.aperture.r_min > 0:
+                r_inner_edge = float(surface.aperture.r_min)
+                _add_disk(0.0, r_inner_edge)

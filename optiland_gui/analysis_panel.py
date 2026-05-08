@@ -1488,7 +1488,7 @@ class AnalysisPanel(QWidget):
             A dictionary containing the packaged page data for display,
             or None on failure.
         """
-        optic = self.connector.get_optic()
+        optic = self.connector.get_effective_optic()
         final_args = {"optic": optic, **constructor_args}
 
         # Filter args to only those accepted by the constructor.
@@ -1597,7 +1597,7 @@ class AnalysisPanel(QWidget):
         Returns:
             A dictionary of page data, or None if the analysis fails.
         """
-        optic = self.connector.get_optic()
+        optic = self.connector.get_effective_optic()
         if not self._validate_system_for_analysis(optic):
             return None
 

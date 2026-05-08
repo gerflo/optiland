@@ -94,6 +94,7 @@ class OptilandConnector(QObject):
 
         self._optic = Optic("Default System")
         self._undo_redo_manager = UndoRedoManager(self)
+        self._disabled_surface_indices: set[int] = set()
 
         # Instantiate services — order does not matter; each receives *self*.
         self._file_service = FileService(self)
@@ -184,6 +185,68 @@ class OptilandConnector(QObject):
             The current optic object.
         """
         return self._optic
+
+    # ------------------------------------------------------------------
+    # Disabled-surface state
+    # ------------------------------------------------------------------
+
+    def get_disabled_surface_indices(self) -> set[int]:
+        """Return the set of currently disabled surface indices."""
+        return self._disabled_surface_indices
+
+    def is_surface_disabled(self, surface_index: int) -> bool:
+        """Return whether *surface_index* is currently disabled."""
+        return surface_index in self._disabled_surface_indices
+
+    def set_surface_disabled(self, surface_index: int, disabled: bool) -> None:
+        """Enable or disable a surface and emit ``opticChanged``.
+
+        Args:
+            surface_index: Index of the surface to toggle.
+            disabled: ``True`` to disable, ``False`` to re-enable.
+        """
+        if disabled:
+            self._disabled_surface_indices.add(surface_index)
+        else:
+            self._disabled_surface_indices.discard(surface_index)
+        self.opticChanged.emit()
+
+    def prune_disabled_state(self) -> None:
+        """Remove out-of-range indices from the disabled-surface set."""
+        max_idx = self.get_surface_count() - 1
+        self._disabled_surface_indices = {
+            i for i in self._disabled_surface_indices if 0 < i < max_idx
+        }
+
+    def get_effective_optic(self) -> Optic:
+        """Return an optic with disabled surfaces removed.
+
+        If no surfaces are disabled the live optic is returned directly.
+        Otherwise a deep copy is made, disabled surfaces are spliced out
+        (their thickness is merged into the preceding surface), and the
+        result is returned.  Falls back to the live optic if the filtered
+        copy cannot be updated successfully.
+
+        Returns:
+            The effective :class:`~optiland.optic.Optic` instance.
+        """
+        if not self._disabled_surface_indices:
+            return self._optic
+        import copy
+
+        effective = copy.deepcopy(self._optic)
+        num_surfaces = effective.surfaces.num_surfaces
+        for idx in sorted(self._disabled_surface_indices, reverse=True):
+            if idx <= 0 or idx >= num_surfaces - 1:
+                continue
+            effective.surfaces[idx - 1].thickness += effective.surfaces[idx].thickness
+            effective.surfaces.remove(idx)
+            num_surfaces -= 1
+        try:
+            effective.updater.update()
+        except Exception:
+            return self._optic
+        return effective
 
     # ------------------------------------------------------------------
     # Internal helpers (shared by services via self._connector)
@@ -277,8 +340,10 @@ class OptilandConnector(QObject):
         """
         if is_specific_new_system:
             self._create_new_optic_structure(optic_instance)
+            self._disabled_surface_indices.clear()
         else:
             self._ensure_valid_optic_structure(optic_instance)
+            self.prune_disabled_state()
         optic_instance.updater.update()
 
     def _capture_optic_state(self) -> dict:
