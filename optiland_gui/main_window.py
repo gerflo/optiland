@@ -294,7 +294,6 @@ class MainWindow(FramelessWindow):
             self.dockOptions()
             | QMainWindow.DockOption.AllowNestedDocks
             | QMainWindow.DockOption.AllowTabbedDocks
-            | QMainWindow.DockOption.GroupedDragging
         )
         self._apply_revised_default_dock_layout()
 
@@ -415,6 +414,9 @@ class MainWindow(FramelessWindow):
                             dock, checked
                         )
                     )
+                dock_widget_ref.topLevelChanged.connect(
+                    lambda floating, dock=dock_widget_ref: self._cancel_dock_animation(dock)
+                )
 
     def _populate_main_menu_bar(self, menu_bar: QMenuBar):
         """Populates the main menu bar with actions and sub-menus.
@@ -768,6 +770,14 @@ class MainWindow(FramelessWindow):
 
         if not self.isFullScreen():
             self.setWindowTitle(f"Optiland — {display_name}")
+
+    def _cancel_dock_animation(self, dock_widget: QDockWidget) -> None:
+        """Stop any running animation on a dock and restore its size constraints."""
+        current_animation = self._get_live_dock_animation(dock_widget)
+        if current_animation:
+            with contextlib.suppress(RuntimeError):
+                current_animation.stop()
+        self._restore_dock_size_constraints(dock_widget)
 
     def _animate_dock_show(
         self, dock_widget, is_left_or_right, original_dimension, duration, curve
