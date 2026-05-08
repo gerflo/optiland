@@ -932,6 +932,7 @@ class LensEditor(QWidget):
         self._active_cell: tuple[int, int] = (-1, -1)
         self._restoring_table_state = False
         self._expanded_group_ids: set[str] = set()
+        self._disabled_surface_indices: set[int] = set()
 
         self._init_ui()
         self.setup_table()
@@ -1873,6 +1874,7 @@ class LensEditor(QWidget):
     def load_data(self):
         self.tableWidget.blockSignals(True)
         self._prune_group_expansion_state()
+        self._prune_disabled_state()
         self.tableWidget.setRowCount(0)
         num_surfaces = self.connector.get_surface_count()
         self.tableWidget.setRowCount(num_surfaces)
@@ -1881,6 +1883,7 @@ class LensEditor(QWidget):
             self._process_table_row(r)
 
         self._apply_group_row_presentation()
+        self._apply_disabled_row_presentation()
 
         if self.open_prop_source_row != -1 and self.open_prop_source_row < num_surfaces:
             self._insert_properties_widget(self.open_prop_source_row)
@@ -1901,6 +1904,70 @@ class LensEditor(QWidget):
             if (meta := self.connector.get_surface_group_metadata(row)).get("group_id")
         }
         self._expanded_group_ids.intersection_update(active_group_ids)
+
+    def _prune_disabled_state(self) -> None:
+        """Drop disabled surface indices that are out of range."""
+        max_idx = self.connector.get_surface_count() - 1
+        self._disabled_surface_indices = {
+            i for i in self._disabled_surface_indices if 0 < i < max_idx
+        }
+
+    def _disabled_row_brush(self) -> QBrush:
+        """Return a desaturated grey brush for disabled rows (theme-aware)."""
+        base = self._table_base_color()
+        h, s, _l, a = base.getHsl()
+        if self._theme_mode() == "dark":
+            color = QColor.fromHsl(h, max(0, s // 6), 72, a)
+        else:
+            color = QColor.fromHsl(h, max(0, s // 6), 175, a)
+        return QBrush(color)
+
+    def _apply_disabled_row_presentation(self) -> None:
+        """Apply a grey background to all visible disabled surface rows."""
+        if not self._disabled_surface_indices:
+            return
+        brush = self._disabled_row_brush()
+        accent_color = brush.color()
+        for ui_row in range(self.tableWidget.rowCount()):
+            if self._is_properties_row(ui_row) or self.tableWidget.isRowHidden(ui_row):
+                continue
+            surface_index = self.map_ui_row_to_surface_index(ui_row)
+            if self._is_collapsed_summary_surface_row(surface_index):
+                # Show as disabled only when every surface in the group is disabled
+                group_rows = self.connector.get_group_rows(surface_index)
+                if not group_rows or not all(
+                    r in self._disabled_surface_indices for r in group_rows
+                ):
+                    continue
+            elif surface_index not in self._disabled_surface_indices:
+                continue
+            for col_idx in range(self.tableWidget.columnCount()):
+                if col_idx == self.connector.COL_TYPE:
+                    continue
+                item = self._ensure_table_item(ui_row, col_idx, create=False)
+                if item is not None:
+                    item.setBackground(brush)
+                    item.setData(_AccentFocusDelegate._ROW_ACCENT_ROLE, accent_color)
+            header_item = self.tableWidget.verticalHeaderItem(ui_row)
+            if header_item is not None:
+                header_item.setBackground(brush)
+
+    def _set_surface_disabled(self, surface_index: int, disabled: bool) -> None:
+        if disabled:
+            self._disabled_surface_indices.add(surface_index)
+        else:
+            self._disabled_surface_indices.discard(surface_index)
+        self.load_data()
+
+    def _set_element_disabled(self, surface_index: int, disabled: bool) -> None:
+        group_rows = self.connector.get_group_rows(surface_index)
+        targets = group_rows if group_rows else [surface_index]
+        for idx in targets:
+            if disabled:
+                self._disabled_surface_indices.add(idx)
+            else:
+                self._disabled_surface_indices.discard(idx)
+        self.load_data()
 
     def _group_infos(self) -> dict[str, dict[str, object]]:
         """Collect grouped-row metadata keyed by group id."""
@@ -2574,6 +2641,38 @@ class LensEditor(QWidget):
                 lambda: self.remove_surface_handler(surface_index)
             )
             menu.addSeparator()
+            disable_surface_action = None
+            disable_element_action = None
+            if is_collapsed_row:
+                grp_rows_dis = self.connector.get_group_rows(surface_index)
+                all_dis = bool(grp_rows_dis) and all(
+                    r in self._disabled_surface_indices for r in grp_rows_dis
+                )
+                lbl = "Enable Element" if all_dis else "Disable Element"
+                disable_element_action = menu.addAction(lbl)
+                disable_element_action.triggered.connect(
+                    lambda _=False, si=surface_index, en=all_dis: self._set_element_disabled(si, not en)
+                )
+            else:
+                surf_dis = surface_index in self._disabled_surface_indices
+                lbl_s = "Enable Surface" if surf_dis else "Disable Surface"
+                disable_surface_action = menu.addAction(lbl_s)
+                disable_surface_action.triggered.connect(
+                    lambda _=False, si=surface_index, en=surf_dis: self._set_surface_disabled(si, not en)
+                )
+                # For expanded group members, also offer element-level toggle
+                _grp_id_early = self.connector.get_surface_group_metadata(surface_index).get("group_id")
+                if _grp_id_early:
+                    grp_rows_dis = self.connector.get_group_rows(surface_index)
+                    all_dis_el = bool(grp_rows_dis) and all(
+                        r in self._disabled_surface_indices for r in grp_rows_dis
+                    )
+                    lbl_el = "Enable Element" if all_dis_el else "Disable Element"
+                    disable_element_action = menu.addAction(lbl_el)
+                    disable_element_action.triggered.connect(
+                        lambda _=False, si=surface_index, en=all_dis_el: self._set_element_disabled(si, not en)
+                    )
+            menu.addSeparator()
             props_action = menu.addAction("Surface Properties")
             props_action.triggered.connect(
                 lambda: self.toggle_properties_widget(surface_index)
@@ -2654,6 +2753,8 @@ class LensEditor(QWidget):
                 props_action.setEnabled(False)
                 make_stop_action.setEnabled(False)
                 for action in (
+                    disable_surface_action,
+                    disable_element_action,
                     create_element_action,
                     select_element_action,
                     rename_element_action,
