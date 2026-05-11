@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -52,6 +53,124 @@ _FIELD_TYPE_MAP: dict[type, str] = {
     ObjectHeightField: "object_height",
     ParaxialImageHeightField: "paraxial_image_height",
     RealImageHeightField: "real_image_height",
+}
+
+_APERTURE_DESCRIPTIONS: dict[str, str] = {
+    "EPD": (
+        "Sets the aperture by specifying the diameter of the entrance pupil — the "
+        "apparent opening of the lens as seen from the object side. A larger diameter "
+        "collects more light and can resolve finer detail, but increases aberrations. "
+        "Use this when you want to work directly in physical units (mm). This is the "
+        "most common aperture specification for camera lenses, telescopes, and general "
+        "imaging optics."
+    ),
+    "imageFNO": (
+        "The image-space F-number (F/#) is the ratio of focal length to entrance pupil "
+        "diameter. A lower F/# (e.g. F/1.4) means a faster lens that collects more "
+        "light; a higher F/# (e.g. F/16) gives greater depth of field but less "
+        "throughput. F/# is scale-independent, making it easy to compare lenses of "
+        "different sizes. It is the familiar 'f-stop' setting in photography."
+    ),
+    "objectNA": (
+        "Numerical Aperture (NA) on the object side measures the cone of light "
+        "accepted from the object: NA = n × sin(θ), where n is the refractive index "
+        "and θ is the half-angle of the acceptance cone. Higher NA means finer "
+        "resolution and more light collection. NA is the standard aperture "
+        "specification for microscope objectives and is also used in fiber coupling "
+        "and data storage optics."
+    ),
+    "float_by_stop_size": (
+        "The aperture is defined by the physical size of the aperture stop surface "
+        "itself. The entrance pupil diameter is then computed automatically by tracing "
+        "a ray from the stop back to the entrance side. Use this when designing around "
+        "a component with a fixed physical opening — such as a purchased iris or a "
+        "lens barrel — rather than targeting a specific F/# or NA value."
+    ),
+}
+
+_FIELD_TYPE_DESCRIPTIONS: dict[str, str] = {
+    "Angle": (
+        "Each field point is specified by the angle (in degrees) between the incoming "
+        "chief ray and the optical axis. This is the natural choice for systems viewing "
+        "distant or infinite objects — cameras, telescopes, and collimated-beam "
+        "instruments — where you know the angular field of view (e.g. ±5°). Cannot be "
+        "used when the object space is telecentric (chief rays must be parallel to the "
+        "axis)."
+    ),
+    "Object Height": (
+        "Each field point is specified by its physical distance (mm) from the optical "
+        "axis at the object plane. Use this for finite-conjugate systems — microscopes, "
+        "scanners, and machine-vision cameras — where you know the physical size of the "
+        "object being imaged. Only valid when the object is at a finite (not infinite) "
+        "distance."
+    ),
+    "Paraxial Image Height": (
+        "Each field point is specified by its desired height at the image plane, "
+        "estimated using first-order (paraxial) optics. The system works backwards to "
+        "find the object position that produces the target image height. Practical when "
+        "you know your sensor size and want to fill it predictably. Faster than Real "
+        "Image Height; accurate enough when distortion is small."
+    ),
+    "Real Image Height": (
+        "Each field point is specified by the actual chief-ray height at the image "
+        "plane, verified by real ray tracing. The system iteratively adjusts the object "
+        "position until a traced ray lands at exactly the specified height. Use this "
+        "when your design has significant distortion — wide-angle or fisheye lenses — "
+        "and field positions must match actual image locations rather than the paraxial "
+        "prediction. More accurate, but slower to compute."
+    ),
+}
+
+_POLARIZATION_DESCRIPTIONS: dict[str, str] = {
+    "Ignore": (
+        "Polarization is not tracked. Rays carry only scalar intensity, and "
+        "polarization-dependent effects such as coating reflectance variation or "
+        "birefringence are ignored. This is the fastest option and is appropriate for "
+        "most everyday design and analysis tasks — ray tracing, aberrations, MTF — "
+        "where polarization is not a concern."
+    ),
+    "Unpolarized": (
+        "Light is modelled as unpolarized — a statistical mixture of all polarization "
+        "orientations with equal probability. The simulation averages "
+        "polarization-dependent effects, so coating reflections and losses are "
+        "computed realistically. Use this when your source has no preferred polarization "
+        "direction, such as an LED, lamp, or natural light, and you want to check how "
+        "coatings affect overall throughput."
+    ),
+    "Polarized": (
+        "Light has a precisely defined polarization state described by the electric "
+        "field amplitudes Ex and Ey and their phase difference. Use this when your "
+        "source produces polarized light — a laser, a beam after a linear polarizer, "
+        "or LCD illumination — or when analysing polarization-sensitive effects such "
+        "as wave plates, stress birefringence, or contrast in polarimetric instruments."
+    ),
+}
+
+_RAY_AIMING_DESCRIPTIONS: dict[str, str] = {
+    "Paraxial": (
+        "Rays are aimed through the entrance pupil using a fast first-order "
+        "approximation: pupil position and size are estimated from a single paraxial "
+        "trace and ray starting conditions are scaled accordingly. This works well for "
+        "most standard imaging systems. It can fail for ring apertures (annular stops), "
+        "very wide fields, or pupils that differ significantly from the paraxial "
+        "estimate — try Iterative or Robust in those cases."
+    ),
+    "Iterative": (
+        "Rays are aimed by iteratively adjusting their starting conditions until they "
+        "actually pass through the correct position on the aperture stop, verified by "
+        "real ray tracing. More accurate than Paraxial because real rays are used "
+        "rather than a linear approximation. Works well for annular pupils, ring stops, "
+        "and moderately complex systems. If some rays still fail to converge, try "
+        "Robust mode."
+    ),
+    "Robust": (
+        "The most reliable ray aiming mode. Starting from the paraxial solution, rays "
+        "are guided toward the real solution in small incremental steps (homotopy "
+        "continuation), enabling convergence even for severely distorted pupils or "
+        "strongly oblique fields where direct iteration fails. Best for very wide-angle "
+        "lenses, telecentric designs, or any system where Iterative mode gives "
+        "incomplete results. Slowest of the three options."
+    ),
 }
 
 
@@ -203,6 +322,22 @@ class PropertyEditorBase(QWidget):
         """
         raise NotImplementedError
 
+    @staticmethod
+    def _make_description_box() -> QTextEdit:
+        """Create a read-only text box for displaying setting descriptions."""
+        box = QTextEdit()
+        box.setReadOnly(True)
+        box.setFixedHeight(110)
+        box.setStyleSheet(
+            "QTextEdit {"
+            "  border: 1px solid palette(mid);"
+            "  border-radius: 3px;"
+            "  padding: 4px;"
+            "  font-size: 11px;"
+            "}"
+        )
+        return box
+
 
 class ApertureEditor(PropertyEditorBase):
     """A widget for editing the aperture properties of the optical system."""
@@ -210,12 +345,15 @@ class ApertureEditor(PropertyEditorBase):
     def init_ui(self):
         """Initializes the UI for the aperture editor."""
         layout = QFormLayout(self)
-        layout.setContentsMargins(1, 1, 1, 1)
+        layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(10)
 
         self.cmbApertureType = QComboBox()
         self.cmbApertureType.addItems(self.connector.get_aperture_types())
         layout.addRow("Aperture Type:", self.cmbApertureType)
+
+        self.descAperture = self._make_description_box()
+        layout.addRow(self.descAperture)
 
         self.spnApertureValue = QDoubleSpinBox()
         self.spnApertureValue.setDecimals(4)
@@ -226,9 +364,19 @@ class ApertureEditor(PropertyEditorBase):
         self.btnApplyAperture = QPushButton("Apply Aperture Changes")
         layout.addRow(self.btnApplyAperture)
 
+        self.cmbApertureType.currentTextChanged.connect(self._update_aperture_description)
         self.cmbApertureType.currentTextChanged.connect(self.apply_aperture_changes)
         self.spnApertureValue.valueChanged.connect(self.apply_aperture_changes)
         self.btnApplyAperture.clicked.connect(self.apply_aperture_changes)
+
+        self._update_aperture_description(self.cmbApertureType.currentText())
+
+    @Slot(str)
+    def _update_aperture_description(self, key: str) -> None:
+        """Update the description box when the aperture type selection changes."""
+        self.descAperture.setPlainText(
+            _APERTURE_DESCRIPTIONS.get(key, "No description available for this aperture type.")
+        )
 
     @Slot()
     def load_data(self):
@@ -274,19 +422,25 @@ class FieldsEditor(PropertyEditorBase):
         self._create_fields_table(main_layout)
         self._create_control_buttons(main_layout)
 
+        self.cmbFieldType.currentTextChanged.connect(self._update_field_description)
         self.cmbFieldType.currentTextChanged.connect(self.apply_field_type_change)
         self.btnAddField.clicked.connect(self.add_field)
         self.btnRemoveField.clicked.connect(self.remove_field)
         self.btnApplyFields.clicked.connect(self.apply_table_field_changes)
 
+        self._update_field_description(self.cmbFieldType.currentText())
+
     def _create_type_selector(self, parent_layout):
-        """Creates the field type dropdown menu."""
+        """Creates the field type dropdown menu and its description box."""
         form_layout = QFormLayout()
         self.cmbFieldType = QComboBox()
         for _display, key in self.connector.get_field_types():
             self.cmbFieldType.addItem(_display, userData=key)
         form_layout.addRow("Field Type:", self.cmbFieldType)
         parent_layout.addLayout(form_layout)
+
+        self.descFieldType = self._make_description_box()
+        parent_layout.addWidget(self.descFieldType)
 
     def _create_fields_table(self, parent_layout):
         """Creates the table for editing field points."""
@@ -311,6 +465,13 @@ class FieldsEditor(PropertyEditorBase):
         button_layout.addWidget(self.btnRemoveField)
         button_layout.addWidget(self.btnApplyFields)
         parent_layout.addLayout(button_layout)
+
+    @Slot(str)
+    def _update_field_description(self, display_name: str) -> None:
+        """Update the description box when the field type selection changes."""
+        self.descFieldType.setPlainText(
+            _FIELD_TYPE_DESCRIPTIONS.get(display_name, "No description available for this field type.")
+        )
 
     @Slot()
     def load_data(self):
@@ -618,6 +779,9 @@ class PolarizationEditor(PropertyEditorBase):
         layout_mode.addStretch()
         main_layout.addLayout(layout_mode)
 
+        self.descPolarization = self._make_description_box()
+        main_layout.addWidget(self.descPolarization)
+
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(8)
@@ -647,6 +811,7 @@ class PolarizationEditor(PropertyEditorBase):
         self.btnApply.clicked.connect(self.apply_polarization)
 
         self._set_inputs_enabled(False)
+        self._update_polarization_description(0)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -680,9 +845,18 @@ class PolarizationEditor(PropertyEditorBase):
 
     @Slot(int)
     def _on_mode_changed(self, index: int) -> None:
-        """Enable/disable numeric inputs when the combo box changes."""
+        """Enable/disable numeric inputs and refresh description when mode changes."""
         self._set_inputs_enabled(index == 2)
         self.lblError.hide()
+        self._update_polarization_description(index)
+
+    def _update_polarization_description(self, index: int) -> None:
+        """Update the description box for the given polarization mode index."""
+        modes = ["Ignore", "Unpolarized", "Polarized"]
+        key = modes[index] if 0 <= index < len(modes) else ""
+        self.descPolarization.setPlainText(
+            _POLARIZATION_DESCRIPTIONS.get(key, "No description available.")
+        )
 
     @Slot()
     def load_data(self) -> None:
@@ -789,6 +963,9 @@ class RayAimingEditor(PropertyEditorBase):
         self.cmbMode.addItems(self._MODE_DISPLAY)
         layout.addRow("Mode:", self.cmbMode)
 
+        self.descRayAiming = self._make_description_box()
+        layout.addRow(self.descRayAiming)
+
         self.spnMaxIter = QSpinBox()
         self.spnMaxIter.setRange(1, 10000)
         self.spnMaxIter.setValue(10)
@@ -804,7 +981,17 @@ class RayAimingEditor(PropertyEditorBase):
         self.btnApply = QPushButton("Apply Ray Aiming")
         layout.addRow(self.btnApply)
 
+        self.cmbMode.currentTextChanged.connect(self._update_ray_aiming_description)
         self.btnApply.clicked.connect(self.apply_ray_aiming)
+
+        self._update_ray_aiming_description(self.cmbMode.currentText())
+
+    @Slot(str)
+    def _update_ray_aiming_description(self, display_name: str) -> None:
+        """Update the description box when the ray aiming mode selection changes."""
+        self.descRayAiming.setPlainText(
+            _RAY_AIMING_DESCRIPTIONS.get(display_name, "No description available.")
+        )
 
     @Slot()
     def load_data(self) -> None:
@@ -827,9 +1014,11 @@ class RayAimingEditor(PropertyEditorBase):
             return
         optic = self.connector.get_optic()
         if optic is not None and hasattr(optic, "ray_tracer"):
+            old_state = self.connector._capture_optic_state()
             mode = self._MODE_KEYS[self.cmbMode.currentIndex()]
             max_iter = self.spnMaxIter.value()
             tol = self.spnTol.value()
             optic.ray_tracer.set_aiming(mode, max_iter=max_iter, tol=tol)
+            self.connector._undo_redo_manager.add_state(old_state)
             self.connector.opticChanged.emit()
             print(f"Ray aiming updated: mode={mode}, max_iter={max_iter}, tol={tol}")

@@ -80,6 +80,7 @@ from optiland.mtf import FFTMTF, GeometricMTF
 from . import gui_plot_utils
 from .config import CONTROL_HEIGHT_PX
 from .theme_manager import get_theme
+from .worker import BusyOverlay
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -216,6 +217,7 @@ class AnalysisPanel(QWidget):
 
         self._connect_signals()
         self._set_initial_state()
+        self._busy_overlay = BusyOverlay(self)
 
     def _init_attributes(self, connector):
         """Initializes instance attributes."""
@@ -1479,28 +1481,9 @@ class AnalysisPanel(QWidget):
             return False
         return True
 
-    def _run_and_package_analysis(
-        self, analysis_class, analysis_name, constructor_args, view_args
-    ):
-        """
-        Instantiates, runs, and packages the analysis results.
-
-        Args:
-            analysis_class: The class of the analysis to run.
-            analysis_name (str): The display name of the analysis.
-            constructor_args (dict): Arguments for the analysis class constructor.
-            view_args (dict): Arguments for the analysis view method.
-
-        Returns:
-            A dictionary containing the packaged page data for display,
-            or None on failure.
-        """
-        optic = self.connector.get_effective_optic()
+    def _prepare_filtered_args(self, optic, analysis_class, analysis_name, constructor_args):
+        """Build the filtered kwargs dict for analysis_class(**kwargs) — fast, main thread."""
         final_args = {"optic": optic, **constructor_args}
-
-        # Filter args to only those accepted by the constructor.
-        # For factory dispatch classes (e.g. FFTPSF) whose __init__ is
-        # *args/**kwargs, fall back to __new__ for the accepted-param list.
         init_sig = inspect.signature(analysis_class.__init__)
         init_params = init_sig.parameters
         _variadic = frozenset(
@@ -1510,34 +1493,27 @@ class AnalysisPanel(QWidget):
             p.kind in _variadic for name, p in init_params.items() if name != "self"
         ) and hasattr(analysis_class, "__new__"):
             init_params = inspect.signature(analysis_class.__new__).parameters
-        valid_init_params = init_params
-        filtered_args = {k: v for k, v in final_args.items() if k in valid_init_params}
-
-        # Inject defaults for required args that may be absent when the
-        # settings panel has never been opened (e.g. field/wavelength for
-        # wavefront and PSF analyses).
+        filtered_args = {k: v for k, v in final_args.items() if k in init_params}
         _required_defaults = {"field": (0.0, 0.0), "wavelength": "primary"}
         for _key, _default in _required_defaults.items():
-            if _key not in filtered_args and _key in valid_init_params:
+            if _key not in filtered_args and _key in init_params:
                 filtered_args[_key] = _default
-
         if (
             analysis_name in [self.GEOMETRIC_MTF, self.FFT_MTF]
             and "max_freq" in final_args
             and "max_freq" not in filtered_args
         ):
             filtered_args["max_freq"] = final_args["max_freq"]
+        return filtered_args, final_args
 
-        instance = analysis_class(**filtered_args)
-
-        # Check if the analysis can be plotted directly on a Matplotlib figure
+    def _finish_analysis(self, instance, analysis_name, constructor_args, view_args, optic, final_args):
+        """Package a completed analysis instance into page_data — main thread."""
         can_embed = (
             hasattr(instance, "view")
             and "fig_to_plot_on" in inspect.signature(instance.view).parameters
         )
         if not can_embed:
-            instance.view(**view_args)  # Open in a separate window
-
+            instance.view(**view_args)
         page_data = {
             "name": analysis_name,
             "analysis_instance": instance,
@@ -1545,14 +1521,24 @@ class AnalysisPanel(QWidget):
             "view_args": view_args,
             "constructor_args_used": constructor_args,
         }
-
-        # Special case for sizing the plot figure for certain analyses
         if analysis_name in ("Through-Focus Spot", "Through-Focus Spot Diagram"):
             num_f = optic.fields.num_fields
             num_s = final_args.get("num_steps", 5)
             page_data["figsize"] = (max(1, num_s) * 3, max(1, num_f) * 3)
-
         return page_data
+
+    def _run_and_package_analysis(
+        self, analysis_class, analysis_name, constructor_args, view_args
+    ):
+        """Synchronous fallback used by clone/export paths (not the Run button)."""
+        optic = self.connector.get_effective_optic()
+        filtered_args, final_args = self._prepare_filtered_args(
+            optic, analysis_class, analysis_name, constructor_args
+        )
+        instance = analysis_class(**filtered_args)
+        return self._finish_analysis(
+            instance, analysis_name, constructor_args, view_args, optic, final_args
+        )
 
     def _collect_current_settings(self):
         """
@@ -1589,26 +1575,10 @@ class AnalysisPanel(QWidget):
     def _execute_analysis(
         self, analysis_class, analysis_name, constructor_args=None, view_args=None
     ):
-        """
-        Main entry point for executing an analysis.
-
-        This method orchestrates the validation, settings collection, execution,
-        and error handling for running a single analysis.
-
-        Args:
-            analysis_class: The analysis class to instantiate.
-            analysis_name (str): The display name of the analysis.
-            constructor_args (dict, optional): Pre-collected args, used for cloning.
-            view_args (dict, optional): Pre-collected view args, used for cloning.
-
-        Returns:
-            A dictionary of page data, or None if the analysis fails.
-        """
+        """Synchronous execution used by clone/export paths (not the Run button)."""
         optic = self.connector.get_effective_optic()
         if not self._validate_system_for_analysis(optic):
             return None
-
-        # Validate UI inputs (ranges, tuples, etc)
         valid, error_msg = self._validate_all_inputs()
         if not valid:
             tm = getattr(self.connector, "toast_manager", None)
@@ -1617,31 +1587,91 @@ class AnalysisPanel(QWidget):
             else:
                 QMessageBox.warning(self, "Invalid Input", error_msg)
             return None
-
         try:
-            # If no args are provided, get them from the UI (standard run)
             if constructor_args is None and view_args is None:
                 constructor_args, view_args = self._collect_current_settings()
-
             return self._run_and_package_analysis(
                 analysis_class, analysis_name, constructor_args, view_args
             )
-
         except Exception as e:
             msg = f"An error occurred during {analysis_name}:\n{e}"
             tm = getattr(self.connector, "toast_manager", None)
             if tm:
                 tm.notify(msg, "error")
             else:
-                QMessageBox.critical(
-                    self,
-                    self.ANALYSIS_ERROR_TITLE,
-                    msg,
-                )
+                QMessageBox.critical(self, self.ANALYSIS_ERROR_TITLE, msg)
             import traceback
-
             print(f"Analysis Panel Error: {e}\n{traceback.format_exc()}")
             return None
+
+    def _execute_analysis_threaded(
+        self, analysis_class, analysis_name,
+        constructor_args=None, view_args=None,
+        on_complete=None,
+    ):
+        """Validate inputs, show busy overlay, then defer the synchronous
+        analysis run by one event-loop cycle so the overlay paints first.
+
+        on_complete(page_data) is called when the analysis finishes.
+
+        Note: analysis classes may import VTK/matplotlib and must stay on
+        the main thread — true background threading causes QObject::setParent
+        errors because Qt objects are created outside the main thread.
+        """
+        optic = self.connector.get_effective_optic()
+        if not self._validate_system_for_analysis(optic):
+            return
+        valid, error_msg = self._validate_all_inputs()
+        if not valid:
+            tm = getattr(self.connector, "toast_manager", None)
+            if tm:
+                tm.notify(error_msg, "error")
+            else:
+                QMessageBox.warning(self, "Invalid Input", error_msg)
+            return
+
+        if constructor_args is None and view_args is None:
+            constructor_args, view_args = self._collect_current_settings()
+
+        self._busy_overlay.show_busy()
+        self.btnRun.setEnabled(False)
+        self.btnRunAll.setEnabled(False)
+
+        # Capture for the deferred closure
+        _ac = analysis_class
+        _an = analysis_name
+        _ca = constructor_args
+        _va = view_args
+        _oc = on_complete
+        _op = optic
+
+        def _run_sync():
+            try:
+                filtered_args, final_args = self._prepare_filtered_args(
+                    _op, _ac, _an, _ca
+                )
+                instance = _ac(**filtered_args)
+                page_data = self._finish_analysis(
+                    instance, _an, _ca, _va, _op, final_args
+                )
+                if _oc and page_data:
+                    _oc(page_data)
+            except Exception as exc:
+                import traceback
+                msg = f"An error occurred during {_an}:\n{exc}"
+                tm = getattr(self.connector, "toast_manager", None)
+                if tm:
+                    tm.notify(msg, "error")
+                else:
+                    QMessageBox.critical(self, self.ANALYSIS_ERROR_TITLE, msg)
+                print(f"Analysis Panel Error: {exc}\n{traceback.format_exc()}")
+                self.logArea.append(f"{_an} failed.")
+            finally:
+                self._busy_overlay.hide_busy()
+                self.btnRun.setEnabled(True)
+                self.btnRunAll.setEnabled(True)
+
+        QTimer.singleShot(60, _run_sync)
 
     @Slot()
     def _apply_settings_and_rerun_analysis_slot(self):
@@ -1650,13 +1680,17 @@ class AnalysisPanel(QWidget):
         page_data = self.analysis_results_pages[self.current_plot_page_index]
         analysis_name = page_data.get("name")
         self.logArea.setText(f"Rerunning {analysis_name} with new settings...")
-        new_page_data = self._execute_analysis(
-            self._analysis_class_map.get(analysis_name), analysis_name
-        )
-        if new_page_data:
-            self.analysis_results_pages[self.current_plot_page_index] = new_page_data
-            self.display_plot_page(self.current_plot_page_index)
+        page_index = self.current_plot_page_index
+
+        def on_complete(new_page_data):
+            self.analysis_results_pages[page_index] = new_page_data
+            self.display_plot_page(page_index)
             self.logArea.append(f"{analysis_name} reran successfully.")
+
+        self._execute_analysis_threaded(
+            self._analysis_class_map.get(analysis_name), analysis_name,
+            on_complete=on_complete,
+        )
 
     @Slot()
     def _refresh_current_plot_page_slot(self):
@@ -1664,7 +1698,6 @@ class AnalysisPanel(QWidget):
         if not (0 <= self.current_plot_page_index < len(self.analysis_results_pages)):
             self.logArea.append("No analysis page selected to refresh.")
             return
-
         self.logArea.setText("Refreshing current analysis...")
         self._apply_settings_and_rerun_analysis_slot()
 
@@ -1675,11 +1708,13 @@ class AnalysisPanel(QWidget):
         if not analysis_class:
             return
         self.logArea.setText(f"Running {analysis_name}...")
-        page_data = self._execute_analysis(analysis_class, analysis_name)
-        if page_data:
+
+        def on_complete(page_data):
             self.analysis_results_pages.append(page_data)
             self.switch_plot_page(len(self.analysis_results_pages) - 1)
             self.logArea.append(f"{analysis_name} run complete.")
+
+        self._execute_analysis_threaded(analysis_class, analysis_name, on_complete=on_complete)
 
     @Slot()
     def run_all_analysis_slot(self):

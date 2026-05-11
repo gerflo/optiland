@@ -54,6 +54,7 @@ from optiland.visualization.system.system import (
 from . import gui_plot_utils
 from .analysis_panel import CustomMatplotlibToolbar
 from .config import APPLICATION_NAME, ORGANIZATION_NAME
+from .worker import BusyOverlay
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -647,6 +648,7 @@ class MatplotlibViewer(QWidget):
         # Add new event connections for panning
         self.canvas.mpl_connect("button_press_event", self.on_mouse_button_press)
         self.canvas.mpl_connect("button_release_event", self.on_mouse_button_release)
+        self.canvas.mpl_connect("resize_event", self._on_canvas_resize)
         self.ax.callbacks.connect("xlim_changed", self.on_ax_limit_changed)
         self.ax.callbacks.connect("ylim_changed", self.on_ax_limit_changed)
 
@@ -656,6 +658,7 @@ class MatplotlibViewer(QWidget):
         self._enforce_equal_xy_on_toolbar_release = False
         self._adjusting_equal_xy_limits = False
 
+        self._busy_overlay = BusyOverlay(viewer_widget)
         self.plot_optic()
         self.update_theme()
 
@@ -690,6 +693,22 @@ class MatplotlibViewer(QWidget):
                 self.canvas.draw_idle()
             finally:
                 self._adjusting_equal_xy_limits = False
+
+    def _on_canvas_resize(self, event) -> None:
+        """Re-apply equal X/Y limits after the canvas pixel size changes.
+
+        Matplotlib fires this after FigureCanvas.resizeEvent() has updated
+        figure.get_figwidth()/get_figheight(), so box_ratio in
+        _apply_equal_xy_limits already reflects the new pixel dimensions.
+        """
+        if not self._preserve_xy_ratio or self._is_plotting or self._adjusting_equal_xy_limits:
+            return
+        self._adjusting_equal_xy_limits = True
+        try:
+            self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
+            self.canvas.draw_idle()
+        finally:
+            self._adjusting_equal_xy_limits = False
 
     def reset_view(self):
         """Resets the view to the default zoom and panel-filling framing."""
@@ -749,6 +768,9 @@ class MatplotlibViewer(QWidget):
         if event.button == 1:  # Left mouse button
             if self._is_panning and event.inaxes:
                 event.inaxes.end_pan()
+                if self._preserve_xy_ratio:
+                    self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
+                    self.canvas.draw_idle()
             self._is_panning = False
             self._active_pan_button = None
             self.canvas.setCursor(Qt.ArrowCursor)  # Reset cursor
@@ -804,6 +826,8 @@ class MatplotlibViewer(QWidget):
 
         ax.set_xlim([xdata - new_width * (1 - rel_x), xdata + new_width * rel_x])
         ax.set_ylim([ydata - new_height * (1 - rel_y), ydata + new_height * rel_y])
+        if self._preserve_xy_ratio:
+            self._apply_equal_xy_limits(ax.get_xlim(), ax.get_ylim())
         ax.figure.canvas.draw_idle()
 
     def update_theme(self, theme="dark"):
@@ -902,29 +926,32 @@ class MatplotlibViewer(QWidget):
         self.canvas.draw_idle()
 
     def plot_optic(self, preserve_zoom=False):
-        """
-        Clears the current plot and redraws the optical system.
+        """Redraws the 2D optical layout.
 
-        This method retrieves the current optical system from the connector and
-        uses Optiland's plotting utilities to generate a 2D layout.
-
-        Args:
-            preserve_zoom (bool): If True, maintains the current view
-            limits after redrawing.
+        Matplotlib's Qt backend creates QObjects during rendering and must stay
+        on the main thread.  We show the BusyOverlay, then defer the actual
+        plot by one event-loop cycle so the overlay paints before blocking.
         """
+        if self._is_plotting:
+            return
         self._is_plotting = True
+        self._pending_preserve_zoom = preserve_zoom
+        self._busy_overlay.show_busy()
+        QTimer.singleShot(60, self._plot_optic_sync)
+
+    def _plot_optic_sync(self, preserve_zoom=None):
+        """Synchronous matplotlib render — must stay on the main thread."""
+        if preserve_zoom is None:
+            preserve_zoom = getattr(self, "_pending_preserve_zoom", False)
         try:
             gui_plot_utils.apply_gui_matplotlib_styles(theme=self.current_theme)
-
             should_preserve_limits = preserve_zoom or self._user_initiated_view_change
             xlim = self.ax.get_xlim() if should_preserve_limits else None
             ylim = self.ax.get_ylim() if should_preserve_limits else None
-
             self.ax.clear()
             face_color = matplotlib.rcParams["figure.facecolor"]
             self.figure.set_facecolor(face_color)
             self.ax.set_facecolor(face_color)
-
             optic = self.connector.get_effective_optic()
             num_rays = self.num_rays_spinbox.value()
             distribution = self.dist_combo.currentText()
@@ -935,7 +962,6 @@ class MatplotlibViewer(QWidget):
                         optic, rays2d_plotter, projection="2d"
                     )
                     from optiland.visualization.themes import get_active_theme
-
                     theme = get_active_theme()
                     try:
                         rays2d_plotter.plot(
@@ -960,7 +986,6 @@ class MatplotlibViewer(QWidget):
                     self.ax.set_ylabel("Y-axis (mm)")
                     self.ax.grid(True, linestyle="--", alpha=0.7)
                     self.ax.set_aspect("auto")
-
                     if should_preserve_limits and xlim is not None and ylim is not None:
                         self.ax.set_xlim(xlim)
                         self.ax.set_ylim(ylim)
@@ -968,13 +993,11 @@ class MatplotlibViewer(QWidget):
                         self.ax.relim()
                         self.ax.autoscale_view()
                         self.ax.margins(x=0.03, y=0.08)
-
                     self.figure.subplots_adjust(
                         left=0.06, right=0.995, top=0.92, bottom=0.12
                     )
                     if self._preserve_xy_ratio:
                         self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
-
                 except Exception:
                     self.ax.text(
                         0.5, 0.5, "Error plotting system", ha="center", va="center"
@@ -984,11 +1007,11 @@ class MatplotlibViewer(QWidget):
                 self.figure.subplots_adjust(
                     left=0.06, right=0.995, top=0.92, bottom=0.12
                 )
-
             gui_plot_utils.apply_theme_to_existing_figure(self.figure)
             self.canvas.draw()
         finally:
             self._is_plotting = False
+            self._busy_overlay.hide_busy()
 
 
 class VTKViewer(QWidget):
@@ -1035,6 +1058,7 @@ class VTKViewer(QWidget):
         self.iren.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
         self.setup_default_camera()
         self.iren.Initialize()
+        self._busy_overlay = BusyOverlay(self)
 
     def setup_default_camera(self):
         """Sets up the default camera position and orientation for the 3D view."""
@@ -1090,11 +1114,12 @@ class VTKViewer(QWidget):
         show_stop_apertures: bool | None = None,
         show_non_stop_apertures: bool | None = None,
     ):
-        """
-        Clears the current scene and re-renders the optical system in 3D.
+        """Re-renders the 3D optical system on the main thread.
 
-        This method retrieves the current optical system and uses Optiland's
-        VTK plotting utilities to generate the 3D visualization.
+        VTK compiles OpenGL shaders eagerly when actors are added to a renderer,
+        so it cannot run off the main thread.  We show the BusyOverlay, then
+        defer the actual render by one event-loop cycle so the overlay paints
+        before the (blocking) VTK call begins.
         """
         if num_rays is None:
             num_rays = self._last_num_rays
@@ -1109,82 +1134,80 @@ class VTKViewer(QWidget):
         if not VTK_AVAILABLE:
             return
 
-        self.renderer.RemoveAllViewProps()
-        optic = self.connector.get_effective_optic()
+        self._busy_overlay.show_busy()
+        # A short delay lets Qt process the overlay paint before we block.
+        QTimer.singleShot(60, self._render_optic_sync)
 
-        # Check if optic has surfaces and a valid aperture
-        if (
-            optic
-            and optic.surface_group.num_surfaces > 0
-            and hasattr(optic, "aperture")
-            and optic.aperture is not None
-        ):
-            try:
-                rays3d_plotter = Rays3D(optic)
-                system_plotter = OptilandOpticalSystemPlotter(
-                    optic, rays3d_plotter, projection="3d"
-                )
-
-                from optiland.visualization.themes import get_active_theme
-
-                theme = get_active_theme()
-                try:
-                    rays3d_plotter.plot(
-                        self.renderer,
-                        fields="all",
-                        wavelengths="primary",
-                        num_rays=num_rays,
-                        distribution=distribution,
-                        theme=theme,
-                    )
-                    setattr(self.connector, "_missing_stop_surface_warned", False)
-                except ValueError as exc:
-                    if "No stop surface found." not in str(exc):
-                        raise
-                    self._notify_missing_stop_surface()
-
-                system_plotter.plot(
-                    self.renderer,
-                    theme=theme,
-                    show_stop_apertures=self._show_stop_apertures,
-                    show_non_stop_apertures=self._show_non_stop_apertures,
-                )
-
-                if not self.renderer.GetActiveCamera():
-                    self.setup_default_camera()
-                else:
-                    self.renderer.ResetCameraClippingRange()
-                    self.renderer.ResetCamera()
-
-            except Exception as e:
-                print(f"VTKViewer Error: {e}")
-                textActor = vtk.vtkTextActor()
-                textActor.SetInput(f"Error rendering 3D view:\n{e}")
-                textActor.GetTextProperty().SetColor(1, 0, 0)
-                self.renderer.AddActor2D(textActor)
-        else:
-            # Display a message if the optic doesn't have a valid aperture
+    def _render_optic_sync(self):
+        """Synchronous VTK render — must stay on the main thread (OpenGL context)."""
+        try:
+            self.renderer.RemoveAllViewProps()
+            optic = self.connector.get_effective_optic()
             if (
                 optic
                 and optic.surface_group.num_surfaces > 0
-                and (not hasattr(optic, "aperture") or optic.aperture is None)
+                and hasattr(optic, "aperture")
+                and optic.aperture is not None
             ):
-                textActor = vtk.vtkTextActor()
-                textActor.SetInput("Please set an aperture in System Properties.")
-                textActor.GetTextProperty().SetColor(1, 0, 0)
-                self.renderer.AddActor2D(textActor)
-
-            # Add a default sphere for empty systems
-            sphereSource = vtk.vtkSphereSource()
-            sphereSource.SetRadius(0.1)
-            mapper = vtk.vtkPolyDataMapper()
-            mapper.SetInputConnection(sphereSource.GetOutputPort())
-            actor = vtk.vtkActor()
-            actor.SetMapper(mapper)
-            self.renderer.AddActor(actor)
-            if not self.renderer.GetActiveCamera():
-                self.setup_default_camera()
+                try:
+                    from optiland.visualization.themes import get_active_theme
+                    rays3d_plotter = Rays3D(optic)
+                    system_plotter = OptilandOpticalSystemPlotter(
+                        optic, rays3d_plotter, projection="3d"
+                    )
+                    theme = get_active_theme()
+                    try:
+                        rays3d_plotter.plot(
+                            self.renderer,
+                            fields="all",
+                            wavelengths="primary",
+                            num_rays=self._last_num_rays,
+                            distribution=self._last_distribution,
+                            theme=theme,
+                        )
+                        setattr(self.connector, "_missing_stop_surface_warned", False)
+                    except ValueError as exc:
+                        if "No stop surface found." not in str(exc):
+                            raise
+                        self._notify_missing_stop_surface()
+                    system_plotter.plot(
+                        self.renderer,
+                        theme=theme,
+                        show_stop_apertures=self._show_stop_apertures,
+                        show_non_stop_apertures=self._show_non_stop_apertures,
+                    )
+                    if not self.renderer.GetActiveCamera():
+                        self.setup_default_camera()
+                    else:
+                        self.renderer.ResetCameraClippingRange()
+                        self.renderer.ResetCamera()
+                except Exception as e:
+                    print(f"VTKViewer Error: {e}")
+                    textActor = vtk.vtkTextActor()
+                    textActor.SetInput(f"Error rendering 3D view:\n{e}")
+                    textActor.GetTextProperty().SetColor(1, 0, 0)
+                    self.renderer.AddActor2D(textActor)
             else:
-                self.renderer.ResetCamera()
-
-        self.vtkWidget.GetRenderWindow().Render()
+                if (
+                    optic
+                    and optic.surface_group.num_surfaces > 0
+                    and (not hasattr(optic, "aperture") or optic.aperture is None)
+                ):
+                    textActor = vtk.vtkTextActor()
+                    textActor.SetInput("Please set an aperture in System Properties.")
+                    textActor.GetTextProperty().SetColor(1, 0, 0)
+                    self.renderer.AddActor2D(textActor)
+                sphereSource = vtk.vtkSphereSource()
+                sphereSource.SetRadius(0.1)
+                mapper = vtk.vtkPolyDataMapper()
+                mapper.SetInputConnection(sphereSource.GetOutputPort())
+                actor = vtk.vtkActor()
+                actor.SetMapper(mapper)
+                self.renderer.AddActor(actor)
+                if not self.renderer.GetActiveCamera():
+                    self.setup_default_camera()
+                else:
+                    self.renderer.ResetCamera()
+            self.vtkWidget.GetRenderWindow().Render()
+        finally:
+            self._busy_overlay.hide_busy()
