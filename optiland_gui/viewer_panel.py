@@ -842,6 +842,7 @@ class MatplotlibViewer(QWidget):
         self.canvas.mpl_connect("button_press_event", self.on_mouse_button_press)
         self.canvas.mpl_connect("button_release_event", self.on_mouse_button_release)
         self.canvas.mpl_connect("resize_event", self._on_canvas_resize)
+        self.canvas.mpl_connect("key_press_event", self._on_canvas_key_press)
         self.ax.callbacks.connect("xlim_changed", self.on_ax_limit_changed)
         self.ax.callbacks.connect("ylim_changed", self.on_ax_limit_changed)
 
@@ -902,6 +903,16 @@ class MatplotlibViewer(QWidget):
             self.canvas.draw_idle()
         finally:
             self._adjusting_equal_xy_limits = False
+
+    def _on_canvas_key_press(self, event) -> None:
+        if event.key == "escape" and self._measure_anchor is not None:
+            self._measure_anchor = None
+            self._measure_target = None
+            self._cursor_pixel = None
+            self._dragging_point = None
+            self._measure_panel._user_moved = False
+            self._measure_panel.setVisible(False)
+            self._measure_overlay.update()
 
     def reset_view(self):
         """Resets the view to the default zoom and panel-filling framing."""
