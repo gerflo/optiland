@@ -16,8 +16,8 @@ import math
 import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import QSettings, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import QPoint, QSettings, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -376,52 +377,11 @@ class ViewerPanel(QWidget):
         finally:
             self._creating_3d_viewer = False
 
-    def _settings_key(self, name: str) -> str:
-        """Return the persistent-settings key for a 2D viewer panel option."""
-        return f"Viewer2D/{name}"
-
     def _create_2d_viewer_tab(self):
-        """Creates the container widget for the 2D viewer, including its toolbar."""
+        """Creates the container widget for the 2D viewer."""
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(5, 5, 5, 5)
-
-        # Add toolbar with 'Preserve Zoom' checkbox
-        toolbar_layout = QHBoxLayout()
-        self.preserve_zoom_checkbox = QCheckBox("Preserve Zoom")
-        self.preserve_zoom_checkbox.setToolTip(
-            "Lock the current zoom and pan level when the system updates."
-        )
-        self.preserve_zoom_checkbox.setChecked(
-            self.settings.value(self._settings_key("PreserveZoom"), False, type=bool)
-        )
-        self.preserve_zoom_checkbox.toggled.connect(
-            lambda checked: self.settings.setValue(
-                self._settings_key("PreserveZoom"), checked
-            )
-        )
-        toolbar_layout.addWidget(self.preserve_zoom_checkbox)
-        self.preserve_xy_ratio_checkbox = QCheckBox("Preserve X/Y Ratio")
-        self.preserve_xy_ratio_checkbox.setToolTip(
-            "Keep equal scaling between the X and Y axes in the 2D layout."
-        )
-        self.preserve_xy_ratio_checkbox.toggled.connect(
-            self.viewer2D.set_preserve_xy_ratio
-        )
-        self.preserve_xy_ratio_checkbox.toggled.connect(
-            lambda checked: self.settings.setValue(
-                self._settings_key("PreserveXYRatio"), checked
-            )
-        )
-        self.preserve_xy_ratio_checkbox.setChecked(
-            self.settings.value(
-                self._settings_key("PreserveXYRatio"), False, type=bool
-            )
-        )
-        toolbar_layout.addWidget(self.preserve_xy_ratio_checkbox)
-        toolbar_layout.addStretch()
-
-        layout.addLayout(toolbar_layout)
         layout.addWidget(self.viewer2D)
         return container
 
@@ -429,7 +389,7 @@ class ViewerPanel(QWidget):
     def update_viewers(self):
         """Updates all active viewers with the current optic data."""
         if self.viewer2D:
-            preserve = self.preserve_zoom_checkbox.isChecked()
+            preserve = self.viewer2D.preserve_zoom_checkbox.isChecked()
             self.viewer2D.plot_optic(preserve_zoom=preserve)
         self._render_3d_from_2d_settings()
 
@@ -517,6 +477,127 @@ class ViewerPanel(QWidget):
             self.sagViewer.update_theme(theme_name)
 
 
+_GRAB_RADIUS_PX = 8  # pixel radius for grabbing/snapping to a measurement dot
+
+
+class _DraggablePanel(QLabel):
+    """Measurement value panel that the user can drag by left-clicking."""
+
+    def __init__(self, parent) -> None:
+        super().__init__("", parent)
+        self._drag_offset: QPoint | None = None
+        self._on_right_click = None  # callable, set by the viewer after creation
+        self._user_moved = False  # True once the user has dragged this panel manually
+
+    def enterEvent(self, event) -> None:
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+
+    def leaveEvent(self, event) -> None:
+        self.setCursor(Qt.CursorShape.ArrowCursor)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_offset = event.pos()
+            self.grabMouse()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif event.button() == Qt.MouseButton.RightButton:
+            if self._on_right_click:
+                self._on_right_click()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_offset is not None:
+            new_pos = self.mapToParent(event.pos()) - self._drag_offset
+            p = self.parent()
+            new_x = max(0, min(new_pos.x(), p.width() - self.width()))
+            new_y = max(0, min(new_pos.y(), p.height() - self.height()))
+            self.move(new_x, new_y)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_offset is not None:
+            self._user_moved = True
+            self._drag_offset = None
+            self.releaseMouse()
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+
+
+class _MeasureOverlay(QWidget):
+    """Transparent canvas overlay that draws the measurement dot and line."""
+
+    def __init__(self, viewer: "MatplotlibViewer") -> None:
+        super().__init__(viewer.canvas)
+        self._viewer = viewer
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.resize(viewer.canvas.size())
+        self.raise_()
+
+    def paintEvent(self, _event) -> None:
+        v = self._viewer
+        has_active = v._measure_anchor is not None
+        has_kept = bool(v._kept_measurements)
+        if not has_active and not has_kept:
+            return
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = 4
+
+        # Draw all kept measurements (dimmed, behind active)
+        if has_kept:
+            pen = QPen(QColor(160, 160, 160, 140))
+            pen.setWidth(1)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            for ka, kt in v._kept_measurements:
+                try:
+                    kapx, kapy = v._data_to_canvas_pixel(*ka)
+                    ktpx, ktpy = v._data_to_canvas_pixel(*kt)
+                except Exception:
+                    continue
+                painter.setPen(pen)
+                painter.drawLine(kapx, kapy, ktpx, ktpy)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QColor(160, 160, 160, 160))
+                painter.drawEllipse(kapx - r, kapy - r, 2 * r, 2 * r)
+                painter.drawEllipse(ktpx - r, ktpy - r, 2 * r, 2 * r)
+
+        # Draw active measurement (yellow)
+        if not has_active:
+            painter.end()
+            return
+
+        try:
+            apx, apy = v._data_to_canvas_pixel(*v._measure_anchor)
+        except Exception:
+            painter.end()
+            return
+
+        tpx = tpy = None
+        if v._measure_target is not None:
+            try:
+                tpx, tpy = v._data_to_canvas_pixel(*v._measure_target)
+            except Exception:
+                pass
+        elif v._cursor_pixel is not None:
+            tpx, tpy = v._cursor_pixel
+
+        if tpx is not None:
+            pen = QPen(QColor(255, 210, 0, 200))
+            pen.setWidth(1)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(pen)
+            painter.drawLine(apx, apy, tpx, tpy)
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 210, 0, 230))
+        painter.drawEllipse(apx - r, apy - r, 2 * r, 2 * r)
+
+        if v._measure_target is not None and tpx is not None:
+            painter.drawEllipse(tpx - r, tpy - r, 2 * r, 2 * r)
+
+        painter.end()
+
+
 class MatplotlibViewer(QWidget):
     """
     A widget for displaying a 2D plot of the optical system using Matplotlib.
@@ -580,6 +661,8 @@ class MatplotlibViewer(QWidget):
         plot_layout.addWidget(self.canvas)
         self.ax = self.figure.add_subplot(111)
 
+        self._busy_overlay = BusyOverlay(viewer_widget)
+
         self._is_plotting = False
         self._user_initiated_view_change = False
 
@@ -613,14 +696,89 @@ class MatplotlibViewer(QWidget):
         )
         self.settings_form_layout.addRow("Num Rays:", self.num_rays_spinbox)
 
+        _DIST_DESCRIPTIONS = {
+            "line_y":    "Fan of rays along the Y axis (vertical cross-section).",
+            "line_x":    "Fan of rays along the X axis (horizontal cross-section).",
+            "hexapolar": "Rays in concentric hexagonal rings across the pupil.",
+            "random":    "Uniformly random ray positions across the entrance pupil.",
+        }
         self.dist_combo = QComboBox()
-        self.dist_combo.addItems(["line_y", "line_x", "hexapolar", "random"])
+        self.dist_combo.addItems(list(_DIST_DESCRIPTIONS.keys()))
         self.settings_form_layout.addRow("Distribution:", self.dist_combo)
+
+        self.dist_desc_label = QLabel(_DIST_DESCRIPTIONS.get(self.dist_combo.currentText(), ""))
+        self.dist_desc_label.setWordWrap(True)
+        self.dist_desc_label.setStyleSheet("color:#8A9BAD;font-size:8pt;padding:2px 0 4px 0;")
+        self.dist_combo.currentTextChanged.connect(
+            lambda text: self.dist_desc_label.setText(_DIST_DESCRIPTIONS.get(text, ""))
+        )
+
+        self.preserve_zoom_checkbox = QCheckBox()
+        self.preserve_zoom_checkbox.setToolTip(
+            "Lock the current zoom and pan level when the system updates."
+        )
+        self.preserve_zoom_checkbox.setChecked(
+            self.settings.value("Viewer2D/PreserveZoom", False, type=bool)
+        )
+        self.preserve_zoom_checkbox.toggled.connect(
+            lambda checked: self.settings.setValue("Viewer2D/PreserveZoom", bool(checked))
+        )
+        self.settings_form_layout.addRow("Preserve Zoom:", self.preserve_zoom_checkbox)
+
+        self.preserve_xy_ratio_checkbox = QCheckBox()
+        self.preserve_xy_ratio_checkbox.setToolTip(
+            "Keep equal scaling between the X and Y axes in the 2D layout."
+        )
+        self.preserve_xy_ratio_checkbox.setChecked(
+            self.settings.value("Viewer2D/PreserveXYRatio", False, type=bool)
+        )
+        self._preserve_xy_ratio = self.preserve_xy_ratio_checkbox.isChecked()
+        self.preserve_xy_ratio_checkbox.toggled.connect(self.set_preserve_xy_ratio)
+        self.preserve_xy_ratio_checkbox.toggled.connect(
+            lambda checked: self.settings.setValue("Viewer2D/PreserveXYRatio", bool(checked))
+        )
+        self.settings_form_layout.addRow("Preserve XY Ratio:", self.preserve_xy_ratio_checkbox)
+
+        self.center_line_checkbox = QCheckBox()
+        self.center_line_checkbox.setChecked(
+            self.settings.value("Viewer2D/ShowCenterLine", False, type=bool)
+        )
+        self.center_line_checkbox.toggled.connect(self._on_center_line_toggled)
+        self.settings_form_layout.addRow("Show Center Line:", self.center_line_checkbox)
 
         apply_button = QPushButton("Apply")
         apply_button.clicked.connect(self.apply_settings)
 
         settings_layout.addLayout(self.settings_form_layout)
+        settings_layout.addWidget(self.dist_desc_label)
+
+        measurement_header = QLabel("Measurement")
+        measurement_header.setStyleSheet(
+            "font-weight:bold;padding-top:8px;padding-bottom:2px;"
+            "border-bottom:1px solid #3A4551;"
+        )
+        settings_layout.addWidget(measurement_header)
+
+        measurement_form = QFormLayout()
+        self.snap_combo = QComboBox()
+        self.snap_combo.addItems(["Off", "10 px", "20 px", "30 px", "40 px"])
+        self.snap_combo.setCurrentText(
+            self.settings.value("Viewer2D/SnapToSurface", "Off", type=str)
+        )
+        self.snap_combo.currentTextChanged.connect(
+            lambda text: self.settings.setValue("Viewer2D/SnapToSurface", text)
+        )
+        measurement_form.addRow("Snap to:", self.snap_combo)
+        settings_layout.addLayout(measurement_form)
+
+        snap_desc = QLabel(
+            "Snaps the measurement anchor to the nearest surface axial (Z) position "
+            "when right-clicking within the selected screen distance."
+        )
+        snap_desc.setWordWrap(True)
+        snap_desc.setStyleSheet("color:#8A9BAD;font-size:8pt;padding:3px 0;")
+        settings_layout.addWidget(snap_desc)
+
         settings_layout.addStretch()
         settings_layout.addWidget(apply_button)
         main_layout.addWidget(self.settings_area)
@@ -642,6 +800,41 @@ class MatplotlibViewer(QWidget):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents
         )
 
+        self._measure_anchor = None   # (xdata, ydata) — first right-click (active)
+        self._measure_target = None   # (xdata, ydata) — second right-click (locks panel)
+        self._cursor_pixel = None     # current cursor in Qt canvas coords (px, py)
+        self._dragging_point = None   # "anchor" | "target" | "kept_anchor" | "kept_target" | None
+        self._dragging_kept_idx = None  # index into _kept_measurements when dragging a kept dot
+        self._kept_measurements: list[tuple] = []  # list of (anchor, target), max 10, FIFO
+
+        _KEPT_MAX = 10
+
+        self._measure_panel = _DraggablePanel(self.canvas)
+        self._measure_panel.setObjectName("MeasurePanelLabel")
+        self._measure_panel.setStyleSheet(
+            "background-color:rgba(0,0,0,0.75);color:white;padding:4px 8px;"
+            "border-radius:4px;"
+        )
+        self._measure_panel.setVisible(False)
+        self._measure_panel._on_right_click = self._show_measurement_context_menu
+
+        _kept_style = (
+            "background-color:rgba(0,0,0,0.65);color:#AAAAAA;padding:4px 8px;"
+            "border-radius:4px;border:1px solid #555555;"
+        )
+        self._kept_measure_panels: list[_DraggablePanel] = []
+        for _ in range(_KEPT_MAX):
+            _p = _DraggablePanel(self.canvas)
+            _p.setObjectName("KeptMeasurePanelLabel")
+            _p.setStyleSheet(_kept_style)
+            _p.setVisible(False)
+            self._kept_measure_panels.append(_p)
+        for _p in self._kept_measure_panels:
+            _p._on_right_click = lambda panel=_p: self._on_kept_panel_right_click(panel)
+
+        self._measure_overlay = _MeasureOverlay(self)
+        self.canvas.mpl_connect("draw_event", lambda _: self._refresh_measure_display())
+
         self.canvas.mpl_connect("motion_notify_event", self.on_mouse_move_on_plot)
         self.canvas.mpl_connect("scroll_event", self.on_scroll_zoom)
 
@@ -658,7 +851,6 @@ class MatplotlibViewer(QWidget):
         self._enforce_equal_xy_on_toolbar_release = False
         self._adjusting_equal_xy_limits = False
 
-        self._busy_overlay = BusyOverlay(viewer_widget)
         self.plot_optic()
         self.update_theme()
 
@@ -701,6 +893,7 @@ class MatplotlibViewer(QWidget):
         figure.get_figwidth()/get_figheight(), so box_ratio in
         _apply_equal_xy_limits already reflects the new pixel dimensions.
         """
+        self._measure_overlay.resize(self.canvas.size())
         if not self._preserve_xy_ratio or self._is_plotting or self._adjusting_equal_xy_limits:
             return
         self._adjusting_equal_xy_limits = True
@@ -728,6 +921,188 @@ class MatplotlibViewer(QWidget):
             QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier
         )
 
+    def _data_to_canvas_pixel(self, data_x: float, data_y: float) -> tuple[int, int]:
+        """Convert axes data coordinates to Qt canvas pixel coordinates."""
+        disp = self.ax.transData.transform((data_x, data_y))
+        return int(disp[0]), int(self.canvas.height() - disp[1])
+
+    def _update_locked_measure_panel(self) -> None:
+        """Populate and (if not user-moved) reposition the active measurement panel."""
+        if self._measure_anchor is None or self._measure_target is None:
+            return
+        az, ay = self._measure_anchor
+        tz, ty = self._measure_target
+        dz = tz - az
+        dy = ty - ay
+        length = math.hypot(dz, dy)
+        angle = math.degrees(math.atan2(dy, dz))
+        self._measure_panel.setText(
+            f"ΔZ = {dz:+.3f} mm\nΔY = {dy:+.3f} mm\n"
+            f"L  = {length:.3f} mm\n∠X = {angle:.1f}°"
+        )
+        self._measure_panel.adjustSize()
+        if not self._measure_panel._user_moved:
+            try:
+                tpx, tpy = self._data_to_canvas_pixel(tz, ty)
+            except Exception:
+                self._measure_panel.setVisible(False)
+                return
+            px = tpx + 15
+            py = tpy + 5
+            px = min(px, self.canvas.width() - self._measure_panel.width() - 4)
+            py = min(py, self.canvas.height() - self._measure_panel.height() - 4)
+            py = max(py, 4)
+            self._measure_panel.move(px, py)
+        self._measure_panel.setVisible(True)
+        self._measure_panel.raise_()
+
+    def _update_kept_measure_panels(self) -> None:
+        """Populate all kept measurement panels; reposition unless user-moved."""
+        for i, (ka, kt) in enumerate(self._kept_measurements):
+            panel = self._kept_measure_panels[i]
+            az, ay = ka
+            tz, ty = kt
+            dz = tz - az
+            dy = ty - ay
+            length = math.hypot(dz, dy)
+            angle = math.degrees(math.atan2(dy, dz))
+            panel.setText(
+                f"ΔZ = {dz:+.3f} mm\nΔY = {dy:+.3f} mm\n"
+                f"L  = {length:.3f} mm\n∠X = {angle:.1f}°"
+            )
+            panel.adjustSize()
+            if not panel._user_moved:
+                try:
+                    tpx, tpy = self._data_to_canvas_pixel(tz, ty)
+                except Exception:
+                    panel.setVisible(False)
+                    continue
+                px = tpx + 15
+                py = tpy + 5
+                px = min(px, self.canvas.width() - panel.width() - 4)
+                py = min(py, self.canvas.height() - panel.height() - 4)
+                py = max(py, 4)
+                panel.move(px, py)
+            panel.setVisible(True)
+            panel.raise_()
+        for i in range(len(self._kept_measurements), len(self._kept_measure_panels)):
+            self._kept_measure_panels[i].setVisible(False)
+
+    def _refresh_measure_display(self) -> None:
+        """Repaint overlay and reposition locked panel after a canvas redraw."""
+        self._measure_overlay.update()
+        if self._measure_target is not None:
+            self._update_locked_measure_panel()
+        if self._kept_measurements:
+            self._update_kept_measure_panels()
+
+    def _snap_anchor(self, pixel_x: float, pixel_y: float, data_x: float, data_y: float) -> tuple[float, float]:
+        """Snap anchor to nearest surface Z and/or Y=0 when within the pixel threshold."""
+        snap_text = self.snap_combo.currentText()
+        if snap_text == "Off":
+            return data_x, data_y
+        threshold_px = int(snap_text.split()[0])
+
+        # Snap X to nearest surface Z
+        optic = self.connector.get_effective_optic()
+        snapped_x = data_x
+        if optic is not None and optic.surface_group.num_surfaces > 0:
+            best_dist = float("inf")
+            for surf in optic.surface_group.surfaces:
+                try:
+                    z = float(surf.geometry.cs.z)
+                except Exception:
+                    continue
+                surf_px = self.ax.transData.transform((z, 0.0))[0]
+                dist = abs(pixel_x - surf_px)
+                if dist < threshold_px and dist < best_dist:
+                    best_dist = dist
+                    snapped_x = z
+
+        # Snap Y to 0 when close — both pixel_y (event.y) and zero_display_y are in
+        # matplotlib display coords (origin bottom-left), so subtract directly.
+        snapped_y = data_y
+        zero_display_y = self.ax.transData.transform((data_x, 0.0))[1]
+        if abs(pixel_y - zero_display_y) < threshold_px:
+            snapped_y = 0.0
+
+        return snapped_x, snapped_y
+
+    def _is_near_dot(self, event_x: float, event_y: float, data_x: float, data_y: float) -> bool:
+        """Return True if matplotlib display coords are within grab radius of the data point."""
+        try:
+            disp = self.ax.transData.transform((data_x, data_y))
+            return math.hypot(event_x - disp[0], event_y - disp[1]) <= _GRAB_RADIUS_PX
+        except Exception:
+            return False
+
+    def _clear_measurement(self) -> None:
+        """Clear all measurement state (active and kept) and hide all UI."""
+        self._measure_anchor = None
+        self._measure_target = None
+        self._cursor_pixel = None
+        self._dragging_point = None
+        self._dragging_kept_idx = None
+        self._kept_measurements.clear()
+        self._measure_panel._user_moved = False
+        self._measure_panel.setVisible(False)
+        for p in self._kept_measure_panels:
+            p._user_moved = False
+            p.setVisible(False)
+        self._measure_overlay.update()
+
+    def _on_kept_panel_right_click(self, panel: "_DraggablePanel") -> None:
+        """Delete the kept measurement whose panel was right-clicked."""
+        try:
+            i = self._kept_measure_panels.index(panel)
+        except ValueError:
+            return
+        menu = QMenu(self)
+        delete_action = menu.addAction("Delete")
+        if menu.exec(QCursor.pos()) == delete_action and i < len(self._kept_measurements):
+            self._kept_measurements.pop(i)
+            # Panels from i upward now show a different measurement → reset their positions
+            for j in range(i, len(self._kept_measurements)):
+                self._kept_measure_panels[j]._user_moved = False
+            self._update_kept_measure_panels()
+            self._measure_overlay.update()
+
+    def _show_measurement_context_menu(self) -> None:
+        """Show Keep/Delete context menu for the active measurement."""
+        menu = QMenu(self)
+        keep_action = menu.addAction("Keep")
+        delete_action = menu.addAction("Delete")
+        chosen = menu.exec(QCursor.pos())
+        if chosen == keep_action:
+            # Evict oldest if at capacity (all slots shift → reset all positions)
+            evicted = len(self._kept_measurements) >= len(self._kept_measure_panels)
+            if evicted:
+                self._kept_measurements.pop(0)
+                for p in self._kept_measure_panels:
+                    p._user_moved = False
+            self._kept_measurements.append((self._measure_anchor, self._measure_target))
+            # Transfer the active panel's user position (if any) to the kept slot
+            new_panel = self._kept_measure_panels[len(self._kept_measurements) - 1]
+            if self._measure_panel._user_moved:
+                new_panel._user_moved = True
+                new_panel.move(self._measure_panel.pos())
+            else:
+                new_panel._user_moved = False
+            self._update_kept_measure_panels()
+            # Clear active so next right-click starts fresh
+            self._measure_anchor = None
+            self._measure_target = None
+            self._measure_panel.setVisible(False)
+            self._measure_overlay.update()
+        elif chosen == delete_action:
+            # Clear only the active measurement
+            self._measure_anchor = None
+            self._measure_target = None
+            self._cursor_pixel = None
+            self._dragging_point = None
+            self._measure_panel.setVisible(False)
+            self._measure_overlay.update()
+
     def on_mouse_button_press(self, event):
         """
         Handles mouse button press events to initiate panning.
@@ -743,13 +1118,73 @@ class MatplotlibViewer(QWidget):
             )
             return
 
-        if event.button == 1 and event.inaxes:  # Left mouse button
+        if event.button == 3 and event.inaxes:
+            # Right-click near active target dot → Keep/Delete menu
+            near_active_target = (
+                self._measure_target is not None
+                and self._is_near_dot(event.x, event.y, *self._measure_target)
+            )
+            if near_active_target:
+                self._show_measurement_context_menu()
+                return
+
+            # Right-click near any kept target dot → Delete-only menu
+            for i, (ka, kt) in enumerate(self._kept_measurements):
+                near = self._is_near_dot(event.x, event.y, *kt)
+                if near:
+                    menu = QMenu(self)
+                    delete_action = menu.addAction("Delete")
+                    if menu.exec(QCursor.pos()) == delete_action:
+                        self._kept_measurements.pop(i)
+                        for j in range(i, len(self._kept_measurements)):
+                            self._kept_measure_panels[j]._user_moved = False
+                        self._update_kept_measure_panels()
+                        self._measure_overlay.update()
+                    return
+
+            # State machine
+            if self._measure_anchor is None or self._measure_target is not None:
+                # State 0 / State 2 → State 1: start new measurement
+                snap_x, snap_y = self._snap_anchor(event.x, event.y, event.xdata, event.ydata)
+                self._measure_anchor = (snap_x, snap_y)
+                self._measure_target = None
+                self._measure_panel.setVisible(False)
+            else:
+                # State 1 → State 2: lock target
+                snap_x, snap_y = self._snap_anchor(event.x, event.y, event.xdata, event.ydata)
+                self._measure_target = (snap_x, snap_y)
+                self._measure_panel._user_moved = False  # fresh placement for new target
+                self._update_locked_measure_panel()
+            self._measure_overlay.update()
+            return
+
+        if event.button == 1 and event.inaxes:
+            # Left-click near a dot → start drag instead of pan
+            if self._measure_anchor is not None and self._is_near_dot(event.x, event.y, *self._measure_anchor):
+                self._dragging_point = "anchor"
+                self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
+                return
+            if self._measure_target is not None and self._is_near_dot(event.x, event.y, *self._measure_target):
+                self._dragging_point = "target"
+                self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
+                return
+            for i, (ka, kt) in enumerate(self._kept_measurements):
+                if self._is_near_dot(event.x, event.y, *ka):
+                    self._dragging_point = "kept_anchor"
+                    self._dragging_kept_idx = i
+                    self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
+                    return
+                if self._is_near_dot(event.x, event.y, *kt):
+                    self._dragging_point = "kept_target"
+                    self._dragging_kept_idx = i
+                    self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
+                    return
+
+            # Normal pan
             event.inaxes.start_pan(event.x, event.y, event.button)
             self._active_pan_button = event.button
             self._is_panning = True
-            self.canvas.setCursor(
-                Qt.ClosedHandCursor
-            )  # Change cursor to indicate panning
+            self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def on_mouse_button_release(self, event):
         """
@@ -765,7 +1200,13 @@ class MatplotlibViewer(QWidget):
             self._enforce_equal_xy_on_toolbar_release = False
             return
 
-        if event.button == 1:  # Left mouse button
+        if event.button == 1:
+            if self._dragging_point is not None:
+                self._dragging_point = None
+                self._dragging_kept_idx = None
+                self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
+                return
+
             if self._is_panning and event.inaxes:
                 event.inaxes.end_pan()
                 if self._preserve_xy_ratio:
@@ -773,7 +1214,7 @@ class MatplotlibViewer(QWidget):
                     self.canvas.draw_idle()
             self._is_panning = False
             self._active_pan_button = None
-            self.canvas.setCursor(Qt.ArrowCursor)  # Reset cursor
+            self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
 
     def on_mouse_move_on_plot(self, event):
         """
@@ -782,12 +1223,63 @@ class MatplotlibViewer(QWidget):
         Args:
             event: The Matplotlib motion notify event.
         """
+        # Always track cursor pixel for the overlay
+        if event.inaxes:
+            self._cursor_pixel = (int(event.x), self.canvas.height() - int(event.y))
+
+        # Handle drag mode — move anchor or target with snap
+        if self._dragging_point is not None and event.inaxes:
+            snap_x, snap_y = self._snap_anchor(event.x, event.y, event.xdata, event.ydata)
+            if self._dragging_point == "anchor":
+                self._measure_anchor = (snap_x, snap_y)
+                if self._measure_target is not None:
+                    self._update_locked_measure_panel()
+                else:
+                    self._measure_panel.setVisible(False)
+            elif self._dragging_point == "target":
+                self._measure_target = (snap_x, snap_y)
+                self._update_locked_measure_panel()
+            elif self._dragging_point == "kept_anchor" and self._dragging_kept_idx is not None:
+                i = self._dragging_kept_idx
+                _, kt = self._kept_measurements[i]
+                self._kept_measurements[i] = ((snap_x, snap_y), kt)
+                self._update_kept_measure_panels()
+            elif self._dragging_point == "kept_target" and self._dragging_kept_idx is not None:
+                i = self._dragging_kept_idx
+                ka, _ = self._kept_measurements[i]
+                self._kept_measurements[i] = (ka, (snap_x, snap_y))
+                self._update_kept_measure_panels()
+            self._measure_overlay.update()
+            return
+
         if self._is_panning and event.inaxes and self._active_pan_button is not None:
             event.inaxes.drag_pan(self._active_pan_button, event.key, event.x, event.y)
             self.canvas.draw_idle()
-            return  # Skip the coordinate display when panning
+            if self._measure_anchor is not None and self._measure_target is None:
+                self._measure_overlay.update()
+            return
 
-        # Original coordinate display code
+        # Update overlay while in State 1 (anchor set, target not yet locked)
+        if self._measure_anchor is not None and self._measure_target is None:
+            self._measure_overlay.update()
+
+        # Cursor: open hand when hovering over any grabbable dot, arrow otherwise
+        if event.inaxes:
+            near_any = (
+                (self._measure_anchor is not None and self._is_near_dot(event.x, event.y, *self._measure_anchor))
+                or (self._measure_target is not None and self._is_near_dot(event.x, event.y, *self._measure_target))
+                or any(
+                    self._is_near_dot(event.x, event.y, *ka) or self._is_near_dot(event.x, event.y, *kt)
+                    for ka, kt in self._kept_measurements
+                )
+            )
+            self.canvas.setCursor(
+                Qt.CursorShape.OpenHandCursor if near_any else Qt.CursorShape.ArrowCursor
+            )
+        else:
+            self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
+
+        # Coordinate display
         if event.inaxes:
             x_coord = f"{event.xdata:.3f}"
             y_coord = f"{event.ydata:.3f}"
@@ -798,6 +1290,30 @@ class MatplotlibViewer(QWidget):
             self.cursor_coord_label.raise_()
         else:
             self.cursor_coord_label.setVisible(False)
+
+        # Measurement panel: only track cursor in State 1
+        if self._measure_anchor is not None and self._measure_target is None:
+            if event.inaxes:
+                az, ay = self._measure_anchor
+                dz = event.xdata - az
+                dy = event.ydata - ay
+                length = math.hypot(dz, dy)
+                angle = math.degrees(math.atan2(dy, dz))
+                self._measure_panel.setText(
+                    f"ΔZ = {dz:+.3f} mm\nΔY = {dy:+.3f} mm\n"
+                    f"L  = {length:.3f} mm\n∠X = {angle:.1f}°"
+                )
+                self._measure_panel.adjustSize()
+                px = int(event.x) + 15
+                py = self.canvas.height() - int(event.y) + 5
+                px = min(px, self.canvas.width() - self._measure_panel.width() - 4)
+                py = min(py, self.canvas.height() - self._measure_panel.height() - 4)
+                py = max(py, 4)
+                self._measure_panel.move(px, py)
+                self._measure_panel.setVisible(True)
+                self._measure_panel.raise_()
+            else:
+                self._measure_panel.setVisible(False)
 
     def on_scroll_zoom(self, event):
         """
@@ -883,6 +1399,10 @@ class MatplotlibViewer(QWidget):
         target_count = max(1, int(target_count))
         rings = round((math.sqrt(12 * target_count - 3) - 3) / 6)
         return max(1, int(rings))
+
+    def _on_center_line_toggled(self, checked: bool) -> None:
+        self.settings.setValue("Viewer2D/ShowCenterLine", bool(checked))
+        self.plot_optic()
 
     @Slot()
     def apply_settings(self) -> None:
@@ -998,6 +1518,11 @@ class MatplotlibViewer(QWidget):
                     )
                     if self._preserve_xy_ratio:
                         self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
+                    if self.center_line_checkbox.isChecked():
+                        self.ax.axhline(
+                            y=0, color="yellow", linestyle="-.",
+                            linewidth=0.9, alpha=0.85, zorder=1,
+                        )
                 except Exception:
                     self.ax.text(
                         0.5, 0.5, "Error plotting system", ha="center", va="center"

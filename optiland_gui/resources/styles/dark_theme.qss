@@ -989,6 +989,15 @@ QComboBox {
     border: 1px solid #3A4551;
 }
 
+QSpinBox,
+QDoubleSpinBox {
+    padding-right: 20px;
+}
+
+QComboBox {
+    padding-right: 24px;
+}
+
 QSpinBox:hover,
 QDoubleSpinBox:hover,
 QComboBox:hover {
@@ -1005,6 +1014,7 @@ QComboBox:focus {
 
 QAbstractSpinBox::up-button,
 QAbstractSpinBox::down-button {
+    width: 16px;
     background-color: #212B36;
     border-left: 1px solid #3A4551;
 }
@@ -1051,6 +1061,7 @@ QAbstractSpinBox::down-arrow {
 }
 
 QComboBox::drop-down {
+    width: 20px;
     subcontrol-origin: padding;
     subcontrol-position: top right;
     background-color: #212B36;
