@@ -30,6 +30,7 @@ from PySide6.QtCore import (
     QRegularExpression,
     QSize,
     Qt,
+    QThread,
     QTimer,
     Slot,
 )
@@ -80,7 +81,7 @@ from optiland.mtf import FFTMTF, GeometricMTF
 from . import gui_plot_utils
 from .config import CONTROL_HEIGHT_PX
 from .theme_manager import get_theme
-from .worker import BusyOverlay
+from .worker import BusyOverlay, _Worker
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
@@ -236,6 +237,8 @@ class AnalysisPanel(QWidget):
         self.current_settings_widgets = {}
         # Mapping of display name → class, built from the registry at init.
         self._analysis_class_map: dict[str, type] = {}
+        self._analysis_thread: QThread | None = None
+        self._pending_analysis_context: dict | None = None
 
     def _setup_main_layout(self):
         """Sets up the main QVBoxLayout for the panel."""
@@ -1609,14 +1612,9 @@ class AnalysisPanel(QWidget):
         constructor_args=None, view_args=None,
         on_complete=None,
     ):
-        """Validate inputs, show busy overlay, then defer the synchronous
-        analysis run by one event-loop cycle so the overlay paints first.
-
-        on_complete(page_data) is called when the analysis finishes.
-
-        Note: analysis classes may import VTK/matplotlib and must stay on
-        the main thread — true background threading causes QObject::setParent
-        errors because Qt objects are created outside the main thread.
+        """Validate inputs, show busy overlay, run heavy ray-tracing on a
+        QThread, then call view() and finalise on the main thread via a
+        queued signal so the UI stays responsive during computation.
         """
         optic = self.connector.get_effective_optic()
         if not self._validate_system_for_analysis(optic):
@@ -1633,45 +1631,104 @@ class AnalysisPanel(QWidget):
         if constructor_args is None and view_args is None:
             constructor_args, view_args = self._collect_current_settings()
 
+        # _prepare_filtered_args is pure Python (inspect) — safe on main thread
+        try:
+            filtered_args, final_args = self._prepare_filtered_args(
+                optic, analysis_class, analysis_name, constructor_args
+            )
+        except Exception as exc:
+            import traceback
+            msg = f"An error occurred preparing {analysis_name}:\n{exc}"
+            tm = getattr(self.connector, "toast_manager", None)
+            if tm:
+                tm.notify(msg, "error")
+            else:
+                QMessageBox.critical(self, self.ANALYSIS_ERROR_TITLE, msg)
+            print(f"Analysis Panel Error: {exc}\n{traceback.format_exc()}")
+            return
+
         self._busy_overlay.show_busy()
         self.btnRun.setEnabled(False)
         self.btnRunAll.setEnabled(False)
 
-        # Capture for the deferred closure
+        self._pending_analysis_context = {
+            "name": analysis_name,
+            "constructor_args": constructor_args,
+            "view_args": view_args,
+            "on_complete": on_complete,
+            "optic": optic,
+            "final_args": final_args,
+        }
+
         _ac = analysis_class
-        _an = analysis_name
-        _ca = constructor_args
-        _va = view_args
-        _oc = on_complete
-        _op = optic
+        _fa = filtered_args
 
-        def _run_sync():
-            try:
-                filtered_args, final_args = self._prepare_filtered_args(
-                    _op, _ac, _an, _ca
-                )
-                instance = _ac(**filtered_args)
-                page_data = self._finish_analysis(
-                    instance, _an, _ca, _va, _op, final_args
-                )
-                if _oc and page_data:
-                    _oc(page_data)
-            except Exception as exc:
-                import traceback
-                msg = f"An error occurred during {_an}:\n{exc}"
-                tm = getattr(self.connector, "toast_manager", None)
-                if tm:
-                    tm.notify(msg, "error")
-                else:
-                    QMessageBox.critical(self, self.ANALYSIS_ERROR_TITLE, msg)
-                print(f"Analysis Panel Error: {exc}\n{traceback.format_exc()}")
-                self.logArea.append(f"{_an} failed.")
-            finally:
-                self._busy_overlay.hide_busy()
-                self.btnRun.setEnabled(True)
-                self.btnRunAll.setEnabled(True)
+        def _compute():
+            # Background thread: pure numerical computation, no Qt objects
+            return _ac(**_fa)
 
-        QTimer.singleShot(60, _run_sync)
+        worker = _Worker(_compute)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_analysis_computed)
+        worker.error.connect(self._on_analysis_error)
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        self._analysis_thread = thread
+        thread.start()
+
+    @Slot(object)
+    def _on_analysis_computed(self, instance):
+        """Called on the main thread when background ray tracing completes."""
+        ctx = self._pending_analysis_context
+        self._pending_analysis_context = None
+        try:
+            page_data = self._finish_analysis(
+                instance,
+                ctx["name"],
+                ctx["constructor_args"],
+                ctx["view_args"],
+                ctx["optic"],
+                ctx["final_args"],
+            )
+            if ctx["on_complete"] and page_data:
+                ctx["on_complete"](page_data)
+        except Exception as exc:
+            import traceback
+            msg = f"An error occurred during {ctx['name']}:\n{exc}"
+            tm = getattr(self.connector, "toast_manager", None)
+            if tm:
+                tm.notify(msg, "error")
+            else:
+                QMessageBox.critical(self, self.ANALYSIS_ERROR_TITLE, msg)
+            print(f"Analysis Panel Error: {exc}\n{traceback.format_exc()}")
+            self.logArea.append(f"{ctx['name']} failed.")
+        finally:
+            self._busy_overlay.hide_busy()
+            self.btnRun.setEnabled(True)
+            self.btnRunAll.setEnabled(True)
+            self._analysis_thread = None
+
+    @Slot(object)
+    def _on_analysis_error(self, exc):
+        """Called on the main thread when background computation raised."""
+        ctx = self._pending_analysis_context or {}
+        name = ctx.get("name", "Analysis")
+        self._pending_analysis_context = None
+        msg = f"An error occurred during {name}:\n{exc}"
+        tm = getattr(self.connector, "toast_manager", None)
+        if tm:
+            tm.notify(msg, "error")
+        else:
+            QMessageBox.critical(self, self.ANALYSIS_ERROR_TITLE, msg)
+        print(f"Analysis Panel Error: {exc}")
+        self.logArea.append(f"{name} failed.")
+        self._busy_overlay.hide_busy()
+        self.btnRun.setEnabled(True)
+        self.btnRunAll.setEnabled(True)
+        self._analysis_thread = None
 
     @Slot()
     def _apply_settings_and_rerun_analysis_slot(self):
