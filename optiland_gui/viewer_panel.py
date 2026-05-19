@@ -582,14 +582,14 @@ class _MeasureOverlay(QWidget):
             tpx, tpy = v._cursor_pixel
 
         if tpx is not None:
-            pen = QPen(QColor(255, 210, 0, 200))
+            pen = QPen(QColor(220, 220, 220, 200))
             pen.setWidth(1)
             pen.setStyle(Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.drawLine(apx, apy, tpx, tpy)
 
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(255, 210, 0, 230))
+        painter.setBrush(QColor(220, 220, 220, 230))
         painter.drawEllipse(apx - r, apy - r, 2 * r, 2 * r)
 
         if v._measure_target is not None and tpx is not None:
@@ -681,7 +681,7 @@ class MatplotlibViewer(QWidget):
 
         self.settings_area = QWidget()
         self.settings_area.setObjectName("ViewerSettingsArea")
-        self.settings_area.setFixedWidth(200)
+        self.settings_area.setFixedWidth(225)
         self.settings_area.setVisible(False)
         settings_layout = QVBoxLayout(self.settings_area)
         self.settings_form_layout = QFormLayout()
@@ -712,6 +712,7 @@ class MatplotlibViewer(QWidget):
         self.dist_combo.currentTextChanged.connect(
             lambda text: self.dist_desc_label.setText(_DIST_DESCRIPTIONS.get(text, ""))
         )
+        self.settings_form_layout.addRow(self.dist_desc_label)
 
         self.preserve_zoom_checkbox = QCheckBox()
         self.preserve_zoom_checkbox.setToolTip(
@@ -750,7 +751,6 @@ class MatplotlibViewer(QWidget):
         apply_button.clicked.connect(self.apply_settings)
 
         settings_layout.addLayout(self.settings_form_layout)
-        settings_layout.addWidget(self.dist_desc_label)
 
         measurement_header = QLabel("Measurement")
         measurement_header.setStyleSheet(
@@ -1346,6 +1346,33 @@ class MatplotlibViewer(QWidget):
             self._apply_equal_xy_limits(ax.get_xlim(), ax.get_ylim())
         ax.figure.canvas.draw_idle()
 
+    def _style_settings_controls(self, theme: str) -> None:
+        """Apply widget-level stylesheets to spinbox/combobox to guarantee text visibility."""
+        if theme == "dark":
+            fg, bg, border, btn_bg = "#F0F6FC", "#111821", "#3A4551", "#212B36"
+        else:
+            fg, bg, border, btn_bg = "#16202B", "#FFFFFF", "#B9C7D6", "#EDF3F8"
+        self.num_rays_spinbox.setStyleSheet(
+            f"QSpinBox{{color:{fg};background-color:{bg};border:1px solid {border};"
+            f"padding:3px 22px 3px 4px;border-radius:3px;}}"
+            f"QSpinBox::up-button,QSpinBox::down-button{{width:16px;background-color:{btn_bg};"
+            f"border-left:1px solid {border};}}"
+            f"QSpinBox::up-button{{subcontrol-origin:border;subcontrol-position:top right;"
+            f"border-top-right-radius:3px;}}"
+            f"QSpinBox::down-button{{subcontrol-origin:border;subcontrol-position:bottom right;"
+            f"border-top:1px solid {border};border-bottom-right-radius:3px;}}"
+        )
+        self.dist_combo.setStyleSheet(
+            f"QComboBox{{color:{fg};background-color:{bg};border:1px solid {border};"
+            f"padding:3px 24px 3px 4px;border-radius:3px;}}"
+            f"QComboBox::drop-down{{width:20px;background-color:{btn_bg};"
+            f"border-left:1px solid {border};border-top-right-radius:3px;"
+            f"border-bottom-right-radius:3px;}}"
+            f"QComboBox::down-arrow{{width:0;height:0;"
+            f"border-left:4px solid transparent;border-right:4px solid transparent;"
+            f"border-top:5px solid {fg};}}"
+        )
+
     def update_theme(self, theme="dark"):
         """
         Updates the theme of the Matplotlib plot.
@@ -1364,6 +1391,7 @@ class MatplotlibViewer(QWidget):
             self.canvas.draw_idle()
         self.settings_toggle_btn.setIcon(QIcon(f":/icons/{theme}/settings.svg"))
         self.toolbar.update_theme()
+        self._style_settings_controls(theme)
 
     def set_preserve_xy_ratio(self, preserve: bool) -> None:
         """Toggle equal X/Y scaling for the 2D layout plot."""
