@@ -16,7 +16,7 @@ import math
 import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import QPoint, QSettings, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
@@ -842,7 +842,8 @@ class MatplotlibViewer(QWidget):
         self.canvas.mpl_connect("button_press_event", self.on_mouse_button_press)
         self.canvas.mpl_connect("button_release_event", self.on_mouse_button_release)
         self.canvas.mpl_connect("resize_event", self._on_canvas_resize)
-        self.canvas.mpl_connect("key_press_event", self._on_canvas_key_press)
+        self.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.canvas.installEventFilter(self)
         self.ax.callbacks.connect("xlim_changed", self.on_ax_limit_changed)
         self.ax.callbacks.connect("ylim_changed", self.on_ax_limit_changed)
 
@@ -904,8 +905,11 @@ class MatplotlibViewer(QWidget):
         finally:
             self._adjusting_equal_xy_limits = False
 
-    def _on_canvas_key_press(self, event) -> None:
-        if event.key == "escape" and self._measure_anchor is not None:
+    def eventFilter(self, obj, event) -> bool:
+        if (obj is self.canvas
+                and event.type() == QEvent.Type.KeyPress
+                and event.key() == Qt.Key.Key_Escape
+                and self._measure_anchor is not None):
             self._measure_anchor = None
             self._measure_target = None
             self._cursor_pixel = None
@@ -913,6 +917,8 @@ class MatplotlibViewer(QWidget):
             self._measure_panel._user_moved = False
             self._measure_panel.setVisible(False)
             self._measure_overlay.update()
+            return True
+        return super().eventFilter(obj, event)
 
     def reset_view(self):
         """Resets the view to the default zoom and panel-filling framing."""
@@ -1121,6 +1127,7 @@ class MatplotlibViewer(QWidget):
         Args:
             event: The Matplotlib mouse button press event.
         """
+        self.canvas.setFocus()
         if self._toolbar_navigation_mode_active():
             self._enforce_equal_xy_on_toolbar_release = bool(
                 event.inaxes
