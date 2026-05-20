@@ -212,7 +212,10 @@ class SagViewer(QWidget):
 
     def update_theme(self, theme="dark"):
         self.current_theme = theme
-        self.settings_toggle_btn.setIcon(QIcon(f":/icons/{theme}/settings.svg"))
+        fg = self.toolbar._toolbar_foreground_color()
+        self.settings_toggle_btn.setIcon(
+            self.toolbar._tinted_icon(QIcon(f":/icons/{theme}/settings.svg"), fg)
+        )
         self.toolbar.update_theme()
         self.plot_sag()
 
@@ -779,6 +782,21 @@ class MatplotlibViewer(QWidget):
             )
         )
         self.settings_form_layout.addRow("Hide Internal Surfaces:", self.hide_internal_surfaces_checkbox)
+
+        self.show_apertures_checkbox = QCheckBox()
+        self.show_apertures_checkbox.setToolTip(
+            "Overlay aperture markers (stop and physical apertures) on the 2D layout."
+        )
+        self.show_apertures_checkbox.setChecked(
+            self.settings.value("Viewer2D/ShowApertures", False, type=bool)
+        )
+        self.show_apertures_checkbox.toggled.connect(
+            lambda checked: (
+                self.settings.setValue("Viewer2D/ShowApertures", bool(checked)),
+                self.plot_optic(),
+            )
+        )
+        self.settings_form_layout.addRow("Show Apertures:", self.show_apertures_checkbox)
 
         self.display_y_measures_checkbox = QCheckBox()
         self.display_y_measures_checkbox.setToolTip(
@@ -1511,8 +1529,13 @@ class MatplotlibViewer(QWidget):
             gui_plot_utils.apply_gui_matplotlib_styles(theme=self.current_theme)
             gui_plot_utils.apply_theme_to_existing_figure(self.figure)
             self.canvas.draw_idle()
-        self.settings_toggle_btn.setIcon(QIcon(f":/icons/{theme}/settings.svg"))
-        self._print_btn.setIcon(QIcon(f":/icons/{theme}/print.svg"))
+        fg = self.toolbar._toolbar_foreground_color()
+        self.settings_toggle_btn.setIcon(
+            self.toolbar._tinted_icon(QIcon(f":/icons/{theme}/settings.svg"), fg)
+        )
+        self._print_btn.setIcon(
+            self.toolbar._tinted_icon(QIcon(f":/icons/{theme}/print.svg"), fg)
+        )
         self.toolbar.update_theme()
         self._style_settings_controls(theme)
 
@@ -1614,7 +1637,9 @@ class MatplotlibViewer(QWidget):
         """Open a print preview dialog for the 2D layout.
 
         The preview dialog contains toolbar buttons for printer selection,
-        paper format, orientation, zoom, and a Print button.
+        paper format, orientation, zoom, and a Print button.  When the user
+        clicks Print, Qt's own (non-native) QPrintDialog opens so printer
+        settings can be configured before the job is sent.
         """
         try:
             from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
@@ -1623,44 +1648,75 @@ class MatplotlibViewer(QWidget):
             QMessageBox.warning(self, "Print", "Print support is not available on this system.")
             return
 
-        from PySide6.QtPrintSupport import QPrintPreviewWidget
-        from PySide6.QtWidgets import QToolBar
-
         from PySide6.QtWidgets import QStyleFactory
 
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         preview = QPrintPreviewDialog(printer, self)
         preview.setWindowTitle("Print Preview – 2D Layout")
-        # Remove the inherited app QSS and force the Fusion style with its own
-        # light palette.  This ensures the toolbar has a light background so
-        # Qt's dark built-in icons (zoom, print, …) are actually visible.
-        preview.setStyleSheet("")
+
+        # Force the Fusion style with its light palette so Qt's built-in toolbar
+        # icons (dark icons designed for light backgrounds) are visible.
+        # We also apply an explicit stylesheet that overrides any rules from the
+        # app's dark theme that would otherwise bleed into this dialog (e.g.
+        # QPushButton → dark-blue, QLabel → near-white text on a white bg).
         fusion = QStyleFactory.create("Fusion")
         if fusion:
             preview.setStyle(fusion)
             preview.setPalette(fusion.standardPalette())
+        preview.setStyleSheet("""
+            QWidget          { background-color: #f0f0f0; color: #202020; }
+            QToolBar         { background-color: #ececec; border: none; spacing: 2px; }
+            QToolBar::separator { width: 1px; background-color: #c8c8c8; margin: 4px 2px; }
+            QToolButton      { color: #202020; background-color: transparent;
+                               border: 1px solid transparent; padding: 2px; border-radius: 2px; }
+            QToolButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
+            QToolButton:pressed,
+            QToolButton:checked  { background-color: #b8d0ea; border-color: #4e8cc0; }
+            QToolButton:disabled { color: #909090; }
+            QPushButton      { background-color: #e1e1e1; color: #202020;
+                               border: 1px solid #adadad; border-radius: 3px;
+                               padding: 4px 12px; }
+            QPushButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
+            QPushButton:pressed  { background-color: #b8d0ea; border-color: #4e8cc0; }
+            QPushButton:default  { border-color: #0078d7; }
+            QPushButton:disabled { background-color: #d4d4d4; color: #888888; border-color: #d4d4d4; }
+            QLabel           { color: #202020; background-color: transparent; }
+            QCheckBox, QRadioButton, QGroupBox { color: #202020; }
+            QGroupBox        { border: 1px solid #b0b0b0; border-radius: 4px;
+                               margin-top: 8px; padding-top: 8px; }
+            QGroupBox::title { color: #202020; }
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+                background-color: #ffffff; color: #202020;
+                border: 1px solid #aaaaaa; border-radius: 2px; padding: 1px 4px; }
+            QComboBox::drop-down { background-color: #e1e1e1; border-left: 1px solid #aaaaaa; }
+            QAbstractItemView{ background-color: #ffffff; color: #202020;
+                               border: 1px solid #aaaaaa; }
+            QScrollBar:vertical, QScrollBar:horizontal {
+                background-color: #e8e8e8; border: none; }
+            QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+                background-color: #b0b0b0; border-radius: 3px; min-length: 20px; }
+            QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+                background-color: #909090; }
+            QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+        """)
+
         preview.paintRequested.connect(self._render_for_print)
 
-        # Override the built-in Print toolbar button so it prints directly without
-        # opening the Windows 11 native print dialog (which shows "keine Seitenansicht"
-        # because Qt does not implement the required IDocumentPreview COM interface).
-        # The preview dialog's own toolbar already provides printer selection.
-        preview_widget = preview.findChild(QPrintPreviewWidget)
-        if preview_widget:
-            for toolbar in preview.findChildren(QToolBar):
-                for action in toolbar.actions():
-                    if action.shortcut() == QKeySequence(QKeySequence.StandardKey.Print):
-                        try:
-                            action.triggered.disconnect()
-                        except RuntimeError:
-                            pass
-                        action.triggered.connect(
-                            lambda checked=False, pw=preview_widget, dlg=preview:
-                                (pw.print_(), dlg.accept())
-                        )
-                        break
-
-        preview.exec()
+        # Use Qt's own (non-native) print dialog when the user clicks Print.
+        # The Windows 11 native PrintDlgEx reports "keine Seitenansicht" because
+        # Qt does not implement the IDocumentPreview COM interface.
+        # AA_DontUseNativeDialogs forces QPrintDialog to use Qt's cross-platform
+        # implementation instead.
+        had_no_native = QApplication.testAttribute(
+            Qt.ApplicationAttribute.AA_DontUseNativeDialogs
+        )
+        QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
+        try:
+            preview.exec()
+        finally:
+            QApplication.setAttribute(
+                Qt.ApplicationAttribute.AA_DontUseNativeDialogs, had_no_native
+            )
 
     def _render_for_print(self, printer) -> None:
         """Render the current matplotlib figure onto *printer*.
@@ -1908,6 +1964,7 @@ class MatplotlibViewer(QWidget):
                     hide_vignetted = self.rays_reach_image_checkbox.isChecked()
                     hide_internal = self.hide_internal_surfaces_checkbox.isChecked()
                     show_measures = self.display_y_measures_checkbox.isChecked()
+                    show_apertures = self.show_apertures_checkbox.isChecked()
                     try:
                         rays2d_plotter.plot(
                             self.ax,
@@ -1926,6 +1983,7 @@ class MatplotlibViewer(QWidget):
                     system_plotter.plot(
                         self.ax, theme=theme,
                         hide_internal_surfaces=hide_internal,
+                        show_apertures=show_apertures,
                     )
                     self.ax.set_title(
                         f"System: {optic.name} (2D)",
