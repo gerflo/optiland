@@ -848,6 +848,34 @@ class OptilandConnector(QObject):
             "stock_part",
         )
 
+    def replace_catalog_lens(self, catalog_id: str, surface_index: int) -> None:
+        """Replace the logical element at surface_index with a catalog lens."""
+        record = self._catalog_service.get_record(catalog_id)
+        if record is None:
+            raise ValueError(f"Catalog lens not found: {catalog_id}")
+        insert_record = self._catalog_service.resolve_insertable_record(catalog_id) or record
+        surfaces, stop_offset = record_to_insert_specs(insert_record)
+        if not surfaces:
+            if record.manufacturer.casefold() == "winlens library 2002":
+                raise ValueError(
+                    "This WinLens entry only contains family metadata. "
+                    "No optical surface model was found in the imported WinLens library for this family."
+                )
+            raise ValueError(
+                "This catalog entry has no optical surface data to insert. "
+                "It is currently metadata-only."
+            )
+        group_rows = self._surface_service.get_group_rows(surface_index)
+        insert_index = min(group_rows) if group_rows else surface_index
+        self._surface_service.remove_surface_element(surface_index)
+        self._surface_service.insert_surface_sequence(
+            insert_index,
+            surfaces,
+            stop_offset,
+            record.part_number or record.product_name,
+            "stock_part",
+        )
+
     # ------------------------------------------------------------------
     # OptimizationService delegation
     # ------------------------------------------------------------------

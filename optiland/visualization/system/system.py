@@ -65,11 +65,12 @@ class OpticalSystem:
         show_apertures=True,
         show_stop_apertures=True,
         show_non_stop_apertures=True,
+        hide_internal_surfaces=False,
     ):
         """Plots the components of the optical system on the given
         axis (or renderer for 3D plotting).
         """
-        self._identify_components()
+        self._identify_components(hide_internal_surfaces=hide_internal_surfaces)
         artists = {}
         for component in self.components:
             component_artists = component.plot(ax, theme=theme, projection=projection)
@@ -90,7 +91,7 @@ class OpticalSystem:
                 )
         return artists
 
-    def _identify_components(self):
+    def _identify_components(self, hide_internal_surfaces=False):
         """Identifies the components of the optical system and adds them to the
         list of components.
         """
@@ -118,7 +119,12 @@ class OpticalSystem:
                 if lens_surfaces:  # Second surface mirror (lens + mirror)
                     surface = self._get_lens_surface(surf, extent)
                     lens_surfaces.append(surface)
-                    self._add_component("lens", lens_surfaces)
+                    surfaces_to_add = (
+                        [lens_surfaces[0], lens_surfaces[-1]]
+                        if hide_internal_surfaces and len(lens_surfaces) > 2
+                        else lens_surfaces
+                    )
+                    self._add_component("lens", surfaces_to_add)
                     lens_surfaces = []
                 else:
                     self._add_component("mirror", surf, extent)
@@ -132,8 +138,12 @@ class OpticalSystem:
             elif n[k] == 1 and n[k - 1] > 1 and lens_surfaces:
                 surface = self._get_lens_surface(surf, extent)
                 lens_surfaces.append(surface)
-                self._add_component("lens", lens_surfaces)
-
+                surfaces_to_add = (
+                    [lens_surfaces[0], lens_surfaces[-1]]
+                    if hide_internal_surfaces and len(lens_surfaces) > 2
+                    else lens_surfaces
+                )
+                self._add_component("lens", surfaces_to_add)
                 lens_surfaces = []
 
             # Standalone phase surface
@@ -142,7 +152,12 @@ class OpticalSystem:
 
         # add final lens, if any
         if lens_surfaces:
-            self._add_component("lens", lens_surfaces)
+            surfaces_to_add = (
+                [lens_surfaces[0], lens_surfaces[-1]]
+                if hide_internal_surfaces and len(lens_surfaces) > 2
+                else lens_surfaces
+            )
+            self._add_component("lens", surfaces_to_add)
 
     def _add_component(self, component_name, *args):
         """Adds a component to the list of components."""

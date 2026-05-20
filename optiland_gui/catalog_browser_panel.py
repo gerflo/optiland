@@ -171,6 +171,14 @@ class CatalogBrowserPanel(QWidget):
         insert_controls_layout.addWidget(self.insert_after_button)
         controls_box_layout.addLayout(insert_controls_layout)
 
+        replace_separator = QFrame()
+        replace_separator.setFrameShape(QFrame.Shape.HLine)
+        replace_separator.setFrameShadow(QFrame.Shadow.Sunken)
+        controls_box_layout.addWidget(replace_separator)
+
+        self.replace_button = QPushButton("Replace Selected Element")
+        controls_box_layout.addWidget(self.replace_button)
+
         controls_layout = QHBoxLayout()
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Search by part number, name, material...")
@@ -410,6 +418,7 @@ class CatalogBrowserPanel(QWidget):
         self.copy_insert_shortcut.activated.connect(self._copy_current_cell_to_clipboard)
         self.insert_before_button.clicked.connect(lambda: self._insert_selected("before"))
         self.insert_after_button.clicked.connect(lambda: self._insert_selected("after"))
+        self.replace_button.clicked.connect(self._replace_selected)
         self.mark_filtered_button.clicked.connect(self._mark_filtered_results)
         self.clear_marks_button.clicked.connect(self._clear_marked_results)
         self.delete_marked_button.clicked.connect(self._delete_marked_results)
@@ -1225,6 +1234,30 @@ class CatalogBrowserPanel(QWidget):
             return
         self._notify("Catalog lens inserted into the system.", "success")
 
+    def _replace_selected(self) -> None:
+        catalog_id = self._selected_catalog_id()
+        if not catalog_id:
+            self._notify("Select a catalog entry first.", "warning")
+            return
+        main_window = self.window()
+        if not hasattr(main_window, "panel_manager"):
+            self._notify("Main window context not available.", "warning")
+            return
+        lens_editor = main_window.panel_manager.lens_editor
+        ui_row = lens_editor.tableWidget.currentRow()
+        if ui_row < 0:
+            self._notify(
+                "Select a target surface in the Lens Data Editor first.", "info"
+            )
+            return
+        surface_index = lens_editor.map_ui_row_to_surface_index(ui_row)
+        try:
+            self.connector.replace_catalog_lens(catalog_id, surface_index)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.warning(self, "Catalog Replacement Failed", str(exc))
+            return
+        self._notify("Catalog lens replaced in the system.", "success")
+
     def _selected_catalog_id(self) -> str:
         selected = self.results_table.selectedItems()
         if not selected:
@@ -1320,6 +1353,7 @@ class CatalogBrowserPanel(QWidget):
         menu = QMenu(self.results_table)
         insert_before_action = menu.addAction("Insert Before Selected Surface")
         insert_after_action = menu.addAction("Insert After Selected Surface")
+        replace_action = menu.addAction("Replace Selected Element")
         menu.addSeparator()
         copy_cell_action = menu.addAction("Copy Cell")
         copy_row_action = menu.addAction("Copy Row")
@@ -1332,6 +1366,7 @@ class CatalogBrowserPanel(QWidget):
         document_urls = self.connector.get_catalog_document_urls(catalog_id) if catalog_id else []
         insert_before_action.setEnabled(has_item)
         insert_after_action.setEnabled(has_item)
+        replace_action.setEnabled(has_item)
         copy_cell_action.setEnabled(has_item)
         copy_row_action.setEnabled(has_item)
 
@@ -1352,6 +1387,8 @@ class CatalogBrowserPanel(QWidget):
             self._insert_selected("before")
         elif chosen == insert_after_action:
             self._insert_selected("after")
+        elif chosen == replace_action:
+            self._replace_selected()
         elif chosen == copy_cell_action:
             self._copy_current_cell_to_clipboard()
         elif chosen == copy_row_action:

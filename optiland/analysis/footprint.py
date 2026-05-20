@@ -86,37 +86,55 @@ class FootprintDiagram(BaseAnalysis):
         """
         from optiland.visualization.system.utils import transform
 
+        # Robust ray aiming recurses aggressively when the stop is very close
+        # to the source (common in illumination systems), making this analysis
+        # prohibitively slow.  Iterative aiming is sufficient for a footprint
+        # visualisation — exact pupil sampling doesn't matter here.
+        ray_tracer = getattr(self.optic, "ray_tracer", None)
+        original_config = None
+        if ray_tracer is not None:
+            original_config = ray_tracer.ray_aiming_config.copy()
+            if original_config.get("mode") == "robust":
+                ray_tracer.ray_aiming_config = {
+                    **original_config,
+                    "mode": "iterative",
+                }
+
         image_surf = self.optic.surfaces[-1]
         data = []
-        for field in self.fields:
-            f_block = []
-            for wp in self.wavelengths:
-                Hx, Hy = float(field[0]), float(field[1])
-                try:
-                    rays = self.optic.trace(
-                        Hx, Hy, wp.value, self.num_rays, self.distribution
-                    )
-                    x_g = be.to_numpy(rays.x)
-                    y_g = be.to_numpy(rays.y)
-                    z_g = be.to_numpy(rays.z)
-                    i_np = be.to_numpy(rays.i)
+        try:
+            for field in self.fields:
+                f_block = []
+                for wp in self.wavelengths:
+                    Hx, Hy = float(field[0]), float(field[1])
+                    try:
+                        rays = self.optic.trace(
+                            Hx, Hy, wp.value, self.num_rays, self.distribution
+                        )
+                        x_g = be.to_numpy(rays.x)
+                        y_g = be.to_numpy(rays.y)
+                        z_g = be.to_numpy(rays.z)
+                        i_np = be.to_numpy(rays.i)
 
-                    x_loc, y_loc, _ = transform(
-                        be.array(x_g), be.array(y_g), be.array(z_g),
-                        image_surf, is_global=True,
-                    )
-                    x_loc = be.to_numpy(x_loc)
-                    y_loc = be.to_numpy(y_loc)
+                        x_loc, y_loc, _ = transform(
+                            be.array(x_g), be.array(y_g), be.array(z_g),
+                            image_surf, is_global=True,
+                        )
+                        x_loc = be.to_numpy(x_loc)
+                        y_loc = be.to_numpy(y_loc)
 
-                    mask = i_np > 0
-                    f_block.append((x_loc[mask], y_loc[mask], i_np[mask]))
-                except Exception as exc:
-                    print(
-                        f"[FootprintDiagram] Trace failed for field {field}, "
-                        f"wavelength {wp.value}: {exc}"
-                    )
-                    f_block.append((_np.empty(0), _np.empty(0), _np.empty(0)))
-            data.append(f_block)
+                        mask = i_np > 0
+                        f_block.append((x_loc[mask], y_loc[mask], i_np[mask]))
+                    except Exception as exc:
+                        print(
+                            f"[FootprintDiagram] Trace failed for field {field}, "
+                            f"wavelength {wp.value}: {exc}"
+                        )
+                        f_block.append((_np.empty(0), _np.empty(0), _np.empty(0)))
+                data.append(f_block)
+        finally:
+            if original_config is not None:
+                ray_tracer.ray_aiming_config = original_config
         return data
 
     # ------------------------------------------------------------------

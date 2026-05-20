@@ -27,6 +27,7 @@
     <file alias="dark/mark_all.svg">icons/dark/mark_all.svg</file>
     <file alias="dark/clear_marks.svg">icons/dark/clear_marks.svg</file>
     <file alias="dark/delete_marks.svg">icons/dark/delete_marks.svg</file>
+    <file alias="dark/print.svg">icons/dark/print.svg</file>
     <file alias="optiland_icon.png">icons/optiland_icon.png</file>
 
 
@@ -57,6 +58,7 @@
     <file alias="light/mark_all.svg">icons/light/mark_all.svg</file>
     <file alias="light/clear_marks.svg">icons/light/clear_marks.svg</file>
     <file alias="light/delete_marks.svg">icons/light/delete_marks.svg</file>
+    <file alias="light/print.svg">icons/light/print.svg</file>
 
 </qresource>
 

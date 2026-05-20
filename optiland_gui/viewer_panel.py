@@ -17,7 +17,7 @@ import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QCursor, QIcon, QPainter, QPen
+from PySide6.QtGui import QColor, QCursor, QIcon, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -487,7 +487,9 @@ class _DraggablePanel(QLabel):
         super().__init__("", parent)
         self._drag_offset: QPoint | None = None
         self._on_right_click = None  # callable, set by the viewer after creation
-        self._user_moved = False  # True once the user has dragged this panel manually
+        self._on_drag_end = None    # callable(panel, QPoint) called after a drag ends
+        self._user_moved = False    # True once the user has dragged this panel manually
+        self._data_pos: tuple[float, float] | None = None  # top-left in data coords when user-moved
 
     def enterEvent(self, event) -> None:
         self.setCursor(Qt.CursorShape.SizeAllCursor)
@@ -518,6 +520,8 @@ class _DraggablePanel(QLabel):
             self._drag_offset = None
             self.releaseMouse()
             self.setCursor(Qt.CursorShape.SizeAllCursor)
+            if self._on_drag_end:
+                self._on_drag_end(self, self.pos())
 
 
 class _MeasureOverlay(QWidget):
@@ -669,7 +673,6 @@ class MatplotlibViewer(QWidget):
         self.toolbar = CustomMatplotlibToolbar(self.canvas, self.toolbar_container)
         self.toolbar.on_view_limits_changed = self._handle_toolbar_view_limits_changed
         toolbar_layout.addWidget(self.toolbar)
-        toolbar_layout.addStretch()
 
         for action in self.toolbar.actions():
             if action.toolTip() == "Reset original view":
@@ -747,6 +750,51 @@ class MatplotlibViewer(QWidget):
         self.center_line_checkbox.toggled.connect(self._on_center_line_toggled)
         self.settings_form_layout.addRow("Show Center Line:", self.center_line_checkbox)
 
+        self.rays_reach_image_checkbox = QCheckBox()
+        self.rays_reach_image_checkbox.setToolTip(
+            "Only draw rays that reach the image surface (hide vignetted rays)."
+        )
+        self.rays_reach_image_checkbox.setChecked(
+            self.settings.value("Viewer2D/RaysReachImage", False, type=bool)
+        )
+        self.rays_reach_image_checkbox.toggled.connect(
+            lambda checked: (
+                self.settings.setValue("Viewer2D/RaysReachImage", bool(checked)),
+                self.plot_optic(),
+            )
+        )
+        self.settings_form_layout.addRow("Rays Reach Image:", self.rays_reach_image_checkbox)
+
+        self.hide_internal_surfaces_checkbox = QCheckBox()
+        self.hide_internal_surfaces_checkbox.setToolTip(
+            "Hide internal glass-glass interfaces of compound lens elements."
+        )
+        self.hide_internal_surfaces_checkbox.setChecked(
+            self.settings.value("Viewer2D/HideInternalSurfaces", False, type=bool)
+        )
+        self.hide_internal_surfaces_checkbox.toggled.connect(
+            lambda checked: (
+                self.settings.setValue("Viewer2D/HideInternalSurfaces", bool(checked)),
+                self.plot_optic(),
+            )
+        )
+        self.settings_form_layout.addRow("Hide Internal Surfaces:", self.hide_internal_surfaces_checkbox)
+
+        self.display_y_measures_checkbox = QCheckBox()
+        self.display_y_measures_checkbox.setToolTip(
+            "Show Z-spacing dimension annotations below the 2D layout."
+        )
+        self.display_y_measures_checkbox.setChecked(
+            self.settings.value("Viewer2D/DisplayYMeasures", False, type=bool)
+        )
+        self.display_y_measures_checkbox.toggled.connect(
+            lambda checked: (
+                self.settings.setValue("Viewer2D/DisplayYMeasures", bool(checked)),
+                self.plot_optic(),
+            )
+        )
+        self.settings_form_layout.addRow("Display Y Measures:", self.display_y_measures_checkbox)
+
         apply_button = QPushButton("Apply")
         apply_button.clicked.connect(self.apply_settings)
 
@@ -783,11 +831,27 @@ class MatplotlibViewer(QWidget):
         settings_layout.addWidget(apply_button)
         main_layout.addWidget(self.settings_area)
 
+        # Print button sits directly after the built-in Save button
+        self._print_btn = QToolButton()
+        self._print_btn.setToolTip("Print the 2D layout  (Ctrl+P)")
+        self._print_btn.clicked.connect(self._print_layout)
+        self.toolbar.addWidget(self._print_btn)
+
+        # Expanding spacer pushes the settings toggle to the far right
+        _toolbar_spacer = QWidget()
+        _toolbar_spacer.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.toolbar.addWidget(_toolbar_spacer)
+
+        # Settings toggle — right-aligned
         self.settings_toggle_btn = QToolButton()
         self.settings_toggle_btn.setToolTip("Toggle Viewer Settings")
         self.settings_toggle_btn.setCheckable(True)
         self.settings_toggle_btn.toggled.connect(self.settings_area.setVisible)
         self.toolbar.addWidget(self.settings_toggle_btn)
+
+        QShortcut(QKeySequence.StandardKey.Print, self, activated=self._print_layout)
 
         self.cursor_coord_label = QLabel("", self.canvas)
         self.cursor_coord_label.setObjectName("CursorCoordLabel")
@@ -817,6 +881,7 @@ class MatplotlibViewer(QWidget):
         )
         self._measure_panel.setVisible(False)
         self._measure_panel._on_right_click = self._show_measurement_context_menu
+        self._measure_panel._on_drag_end = self._on_panel_drag_end
 
         _kept_style = (
             "background-color:rgba(0,0,0,0.65);color:#AAAAAA;padding:4px 8px;"
@@ -831,6 +896,7 @@ class MatplotlibViewer(QWidget):
             self._kept_measure_panels.append(_p)
         for _p in self._kept_measure_panels:
             _p._on_right_click = lambda panel=_p: self._on_kept_panel_right_click(panel)
+            _p._on_drag_end = self._on_panel_drag_end
 
         self._measure_overlay = _MeasureOverlay(self)
         self.canvas.mpl_connect("draw_event", lambda _: self._refresh_measure_display())
@@ -943,6 +1009,15 @@ class MatplotlibViewer(QWidget):
         disp = self.ax.transData.transform((data_x, data_y))
         return int(disp[0]), int(self.canvas.height() - disp[1])
 
+    def _on_panel_drag_end(self, panel: "_DraggablePanel", pos: "QPoint") -> None:
+        """Store the dragged panel's top-left corner in data coordinates."""
+        try:
+            py_mpl = self.canvas.height() - pos.y()
+            data_xy = self.ax.transData.inverted().transform((pos.x(), py_mpl))
+            panel._data_pos = (float(data_xy[0]), float(data_xy[1]))
+        except Exception:
+            panel._data_pos = None
+
     def _update_locked_measure_panel(self) -> None:
         """Populate and (if not user-moved) reposition the active measurement panel."""
         if self._measure_anchor is None or self._measure_target is None:
@@ -958,7 +1033,15 @@ class MatplotlibViewer(QWidget):
             f"L  = {length:.3f} mm\n∠X = {angle:.1f}°"
         )
         self._measure_panel.adjustSize()
-        if not self._measure_panel._user_moved:
+        if self._measure_panel._data_pos is not None:
+            try:
+                px, py = self._data_to_canvas_pixel(*self._measure_panel._data_pos)
+                px = min(px, self.canvas.width() - self._measure_panel.width() - 4)
+                py = min(max(py, 4), self.canvas.height() - self._measure_panel.height() - 4)
+                self._measure_panel.move(px, py)
+            except Exception:
+                pass
+        else:
             try:
                 tpx, tpy = self._data_to_canvas_pixel(tz, ty)
             except Exception:
@@ -967,8 +1050,7 @@ class MatplotlibViewer(QWidget):
             px = tpx + 15
             py = tpy + 5
             px = min(px, self.canvas.width() - self._measure_panel.width() - 4)
-            py = min(py, self.canvas.height() - self._measure_panel.height() - 4)
-            py = max(py, 4)
+            py = min(max(py, 4), self.canvas.height() - self._measure_panel.height() - 4)
             self._measure_panel.move(px, py)
         self._measure_panel.setVisible(True)
         self._measure_panel.raise_()
@@ -988,7 +1070,15 @@ class MatplotlibViewer(QWidget):
                 f"L  = {length:.3f} mm\n∠X = {angle:.1f}°"
             )
             panel.adjustSize()
-            if not panel._user_moved:
+            if panel._data_pos is not None:
+                try:
+                    px, py = self._data_to_canvas_pixel(*panel._data_pos)
+                    px = min(px, self.canvas.width() - panel.width() - 4)
+                    py = min(max(py, 4), self.canvas.height() - panel.height() - 4)
+                    panel.move(px, py)
+                except Exception:
+                    pass
+            else:
                 try:
                     tpx, tpy = self._data_to_canvas_pixel(tz, ty)
                 except Exception:
@@ -997,8 +1087,7 @@ class MatplotlibViewer(QWidget):
                 px = tpx + 15
                 py = tpy + 5
                 px = min(px, self.canvas.width() - panel.width() - 4)
-                py = min(py, self.canvas.height() - panel.height() - 4)
-                py = max(py, 4)
+                py = min(max(py, 4), self.canvas.height() - panel.height() - 4)
                 panel.move(px, py)
             panel.setVisible(True)
             panel.raise_()
@@ -1062,9 +1151,11 @@ class MatplotlibViewer(QWidget):
         self._dragging_kept_idx = None
         self._kept_measurements.clear()
         self._measure_panel._user_moved = False
+        self._measure_panel._data_pos = None
         self._measure_panel.setVisible(False)
         for p in self._kept_measure_panels:
             p._user_moved = False
+            p._data_pos = None
             p.setVisible(False)
         self._measure_overlay.update()
 
@@ -1078,9 +1169,13 @@ class MatplotlibViewer(QWidget):
         delete_action = menu.addAction("Delete")
         if menu.exec(QCursor.pos()) == delete_action and i < len(self._kept_measurements):
             self._kept_measurements.pop(i)
-            # Panels from i upward now show a different measurement → reset their positions
+            # Shift panel positions down so each panel keeps its data-space location
             for j in range(i, len(self._kept_measurements)):
-                self._kept_measure_panels[j]._user_moved = False
+                self._kept_measure_panels[j]._data_pos = self._kept_measure_panels[j + 1]._data_pos
+                self._kept_measure_panels[j]._user_moved = self._kept_measure_panels[j + 1]._user_moved
+            freed = len(self._kept_measurements)
+            self._kept_measure_panels[freed]._data_pos = None
+            self._kept_measure_panels[freed]._user_moved = False
             self._update_kept_measure_panels()
             self._measure_overlay.update()
 
@@ -1091,19 +1186,23 @@ class MatplotlibViewer(QWidget):
         delete_action = menu.addAction("Delete")
         chosen = menu.exec(QCursor.pos())
         if chosen == keep_action:
-            # Evict oldest if at capacity (all slots shift → reset all positions)
+            # Evict oldest if at capacity (shift all positions down by one)
             evicted = len(self._kept_measurements) >= len(self._kept_measure_panels)
             if evicted:
                 self._kept_measurements.pop(0)
-                for p in self._kept_measure_panels:
-                    p._user_moved = False
+                for j in range(len(self._kept_measure_panels) - 1):
+                    self._kept_measure_panels[j]._data_pos = self._kept_measure_panels[j + 1]._data_pos
+                    self._kept_measure_panels[j]._user_moved = self._kept_measure_panels[j + 1]._user_moved
+                self._kept_measure_panels[-1]._data_pos = None
+                self._kept_measure_panels[-1]._user_moved = False
             self._kept_measurements.append((self._measure_anchor, self._measure_target))
-            # Transfer the active panel's user position (if any) to the kept slot
+            # Transfer the active panel's data-space position (if any) to the kept slot
             new_panel = self._kept_measure_panels[len(self._kept_measurements) - 1]
-            if self._measure_panel._user_moved:
+            if self._measure_panel._data_pos is not None:
+                new_panel._data_pos = self._measure_panel._data_pos
                 new_panel._user_moved = True
-                new_panel.move(self._measure_panel.pos())
             else:
+                new_panel._data_pos = None
                 new_panel._user_moved = False
             self._update_kept_measure_panels()
             # Clear active so next right-click starts fresh
@@ -1155,7 +1254,11 @@ class MatplotlibViewer(QWidget):
                     if menu.exec(QCursor.pos()) == delete_action:
                         self._kept_measurements.pop(i)
                         for j in range(i, len(self._kept_measurements)):
-                            self._kept_measure_panels[j]._user_moved = False
+                            self._kept_measure_panels[j]._data_pos = self._kept_measure_panels[j + 1]._data_pos
+                            self._kept_measure_panels[j]._user_moved = self._kept_measure_panels[j + 1]._user_moved
+                        freed = len(self._kept_measurements)
+                        self._kept_measure_panels[freed]._data_pos = None
+                        self._kept_measure_panels[freed]._user_moved = False
                         self._update_kept_measure_panels()
                         self._measure_overlay.update()
                     return
@@ -1172,6 +1275,7 @@ class MatplotlibViewer(QWidget):
                 snap_x, snap_y = self._snap_anchor(event.x, event.y, event.xdata, event.ydata)
                 self._measure_target = (snap_x, snap_y)
                 self._measure_panel._user_moved = False  # fresh placement for new target
+                self._measure_panel._data_pos = None
                 self._update_locked_measure_panel()
             self._measure_overlay.update()
             return
@@ -1408,6 +1512,7 @@ class MatplotlibViewer(QWidget):
             gui_plot_utils.apply_theme_to_existing_figure(self.figure)
             self.canvas.draw_idle()
         self.settings_toggle_btn.setIcon(QIcon(f":/icons/{theme}/settings.svg"))
+        self._print_btn.setIcon(QIcon(f":/icons/{theme}/print.svg"))
         self.toolbar.update_theme()
         self._style_settings_controls(theme)
 
@@ -1505,6 +1610,277 @@ class MatplotlibViewer(QWidget):
         self._busy_overlay.show_busy()
         QTimer.singleShot(60, self._plot_optic_sync)
 
+    def _print_layout(self) -> None:
+        """Open a print preview dialog for the 2D layout.
+
+        The preview dialog contains toolbar buttons for printer selection,
+        paper format, orientation, zoom, and a Print button.
+        """
+        try:
+            from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
+        except ImportError:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Print", "Print support is not available on this system.")
+            return
+
+        from PySide6.QtPrintSupport import QPrintPreviewWidget
+        from PySide6.QtWidgets import QToolBar
+
+        from PySide6.QtWidgets import QStyleFactory
+
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        preview = QPrintPreviewDialog(printer, self)
+        preview.setWindowTitle("Print Preview – 2D Layout")
+        # Remove the inherited app QSS and force the Fusion style with its own
+        # light palette.  This ensures the toolbar has a light background so
+        # Qt's dark built-in icons (zoom, print, …) are actually visible.
+        preview.setStyleSheet("")
+        fusion = QStyleFactory.create("Fusion")
+        if fusion:
+            preview.setStyle(fusion)
+            preview.setPalette(fusion.standardPalette())
+        preview.paintRequested.connect(self._render_for_print)
+
+        # Override the built-in Print toolbar button so it prints directly without
+        # opening the Windows 11 native print dialog (which shows "keine Seitenansicht"
+        # because Qt does not implement the required IDocumentPreview COM interface).
+        # The preview dialog's own toolbar already provides printer selection.
+        preview_widget = preview.findChild(QPrintPreviewWidget)
+        if preview_widget:
+            for toolbar in preview.findChildren(QToolBar):
+                for action in toolbar.actions():
+                    if action.shortcut() == QKeySequence(QKeySequence.StandardKey.Print):
+                        try:
+                            action.triggered.disconnect()
+                        except RuntimeError:
+                            pass
+                        action.triggered.connect(
+                            lambda checked=False, pw=preview_widget, dlg=preview:
+                                (pw.print_(), dlg.accept())
+                        )
+                        break
+
+        preview.exec()
+
+    def _render_for_print(self, printer) -> None:
+        """Render the current matplotlib figure onto *printer*.
+
+        Called by QPrintPreviewDialog whenever the preview needs to refresh
+        (e.g. after an orientation or paper-size change).
+        """
+        import io
+        from PySide6.QtGui import QImage, QPixmap
+
+        buf = io.BytesIO()
+        self._save_figure_print_friendly(buf)
+        buf.seek(0)
+        image = QImage.fromData(buf.getvalue())
+        if image.isNull():
+            return
+
+        painter = QPainter(printer)
+        if not painter.isActive():
+            return
+        viewport = painter.viewport()
+        pixmap = QPixmap.fromImage(image)
+        scaled = pixmap.scaled(
+            viewport.width(),
+            viewport.height(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x = viewport.x() + (viewport.width() - scaled.width()) // 2
+        y = viewport.y() + (viewport.height() - scaled.height()) // 2
+        painter.drawPixmap(x, y, scaled)
+        painter.end()
+
+    def _save_figure_print_friendly(self, buf) -> None:
+        """Save the figure to *buf* as PNG with white background and black text/chrome.
+
+        Temporarily remaps all light-colored UI elements (text, ticks, spines)
+        to black so they are readable on white paper, then restores the original
+        dark-theme colors.  Data artists (ray lines, lens outlines) keep their
+        colors unchanged.
+        """
+        import matplotlib.colors as mcolors
+
+        fig = self.figure
+
+        def _luminance(color):
+            try:
+                r, g, b, *_ = mcolors.to_rgba(color)
+                return 0.299 * r + 0.587 * g + 0.114 * b
+            except Exception:
+                return 0.0
+
+        def _is_light(color):
+            return _luminance(color) > 0.55
+
+        restores = []
+
+        def _remap(obj, getter, setter, new_val):
+            restores.append((setter, getter()))
+            setter(new_val)
+
+        # Figure background
+        _remap(fig, fig.get_facecolor, fig.set_facecolor, "white")
+
+        for ax in fig.get_axes():
+            _remap(ax, ax.get_facecolor, ax.set_facecolor, "white")
+
+            # Spines
+            for spine in ax.spines.values():
+                if _is_light(spine.get_edgecolor()):
+                    _remap(spine, spine.get_edgecolor, spine.set_edgecolor, "black")
+
+            # Title, axis labels
+            for text_obj in (ax.title, ax.xaxis.label, ax.yaxis.label):
+                if _is_light(text_obj.get_color()):
+                    _remap(text_obj, text_obj.get_color, text_obj.set_color, "black")
+
+            # Tick labels
+            for tl in ax.get_xticklabels() + ax.get_yticklabels():
+                if _is_light(tl.get_color()):
+                    _remap(tl, tl.get_color, tl.set_color, "black")
+
+            # Tick and grid lines
+            for axis in (ax.xaxis, ax.yaxis):
+                for tick in axis.get_major_ticks() + axis.get_minor_ticks():
+                    for line in (tick.tick1line, tick.tick2line):
+                        if _is_light(line.get_color()):
+                            _remap(line, line.get_color, line.set_color, "black")
+                    # Grid lines: remap to a subtle gray
+                    gl = tick.gridline
+                    if _is_light(gl.get_color()):
+                        _remap(gl, gl.get_color, gl.set_color, "#AAAAAA")
+
+            # Free-floating text (e.g. dimension annotations)
+            for text_obj in ax.texts:
+                if _is_light(text_obj.get_color()):
+                    _remap(text_obj, text_obj.get_color, text_obj.set_color, "black")
+
+            # Dimension lines drawn with plot() — only remap near-white/gray ones
+            for line in ax.lines:
+                c = line.get_color()
+                if _is_light(c) and _luminance(c) > 0.75:
+                    _remap(line, line.get_color, line.set_color, "#444444")
+
+        try:
+            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight",
+                        facecolor="white")
+        finally:
+            for setter, original in reversed(restores):
+                try:
+                    setter(original)
+                except Exception:
+                    pass
+
+    def _draw_surface_dimensions(self, ax, optic):
+        """Draw Z-spacing dimension annotations below the 2D layout.
+
+        Identifies external surfaces (standalone + first/last of each group),
+        then draws horizontal dimension lines with labels between each
+        consecutive pair.  When adjacent labels are close enough to overlap,
+        every other label is dropped to a second row.
+        """
+        # Collect group boundary indices
+        group_bounds = {}  # group_id → [first_idx, last_idx]
+        for idx, surf in enumerate(optic.surfaces):
+            gid = getattr(surf, "group_id", None)
+            if gid:
+                if gid not in group_bounds:
+                    group_bounds[gid] = [idx, idx]
+                else:
+                    group_bounds[gid][1] = idx
+
+        # Build ordered list of external surface z-positions.
+        # Skip only the object surface; include the image surface so the
+        # distance to the image plane is shown.
+        num_surf = optic.surfaces.num_surfaces
+        ext_z = []
+        for idx, surf in enumerate(optic.surfaces):
+            if idx == 0:
+                continue  # skip object surface
+            gid = getattr(surf, "group_id", None)
+            if gid is None:
+                z = float(surf.geometry.cs.z)
+                if not ext_z or abs(z - ext_z[-1]) > 1e-9:
+                    ext_z.append(z)
+            elif idx in (group_bounds[gid][0], group_bounds[gid][1]):
+                z = float(surf.geometry.cs.z)
+                if not ext_z or abs(z - ext_z[-1]) > 1e-9:
+                    ext_z.append(z)
+
+        if len(ext_z) < 2:
+            return
+
+        text_color = matplotlib.rcParams.get("text.color", "white")
+        dim_color = "#8A9BAD"
+        ylim = ax.get_ylim()
+        y_span = ylim[1] - ylim[0]
+
+        tick_h = y_span * 0.025
+        dim_y = ylim[0] - y_span * 0.07
+        label_y_row0 = dim_y - tick_h * 1.6
+        label_y_row1 = label_y_row0 - tick_h * 3.5  # second row, further down
+
+        # Build dimension segments
+        dims = []
+        for i in range(len(ext_z) - 1):
+            z1, z2 = ext_z[i], ext_z[i + 1]
+            dz = z2 - z1
+            if abs(dz) < 1e-6:
+                continue
+            dims.append((z1, z2, dz, (z1 + z2) / 2.0))
+
+        if not dims:
+            return
+
+        # Estimate label width in data coords (approx 6 chars × ~0.55 em at 6.5pt)
+        # Use the axis data range to convert points → data units.
+        fig_width_in = ax.get_figure().get_figwidth()
+        ax_width_frac = ax.get_position().width
+        ax_data_width = ax.get_xlim()[1] - ax.get_xlim()[0]
+        pts_per_data = (fig_width_in * ax_width_frac * 72.0) / max(ax_data_width, 1e-9)
+        char_width_data = (6.5 * 0.55) / pts_per_data  # approx width of one char
+        label_half_w = [len(f"{d[2]:.2f}") * char_width_data * 0.5 for d in dims]
+
+        # Assign rows: put label on row 1 if it overlaps previous label on row 0
+        rows = [0] * len(dims)
+        last_end_row0 = -1e18
+        last_end_row1 = -1e18
+        for i, (_, _, _, zm) in enumerate(dims):
+            hw = label_half_w[i]
+            if zm - hw > last_end_row0 + char_width_data * 0.3:
+                rows[i] = 0
+                last_end_row0 = zm + hw
+            elif zm - hw > last_end_row1 + char_width_data * 0.3:
+                rows[i] = 1
+                last_end_row1 = zm + hw
+            else:
+                # Both rows crowded — fall back to alternating
+                rows[i] = i % 2
+                if rows[i] == 0:
+                    last_end_row0 = zm + hw
+                else:
+                    last_end_row1 = zm + hw
+
+        for i, (z1, z2, dz, zm) in enumerate(dims):
+            label_y = label_y_row1 if rows[i] == 1 else label_y_row0
+
+            ax.plot([z1, z2], [dim_y, dim_y], color=dim_color, linewidth=0.8,
+                    clip_on=False)
+            for zz in (z1, z2):
+                ax.plot([zz, zz], [dim_y - tick_h, dim_y + tick_h],
+                        color=dim_color, linewidth=0.8, clip_on=False)
+            ax.text(zm, label_y, f"{dz:.2f}",
+                    ha="center", va="top", fontsize=6.5,
+                    color=text_color, clip_on=False)
+
+        # Extend y-axis to include both rows
+        bottom = label_y_row1 - tick_h * 2
+        ax.set_ylim(bottom, ylim[1])
+
     def _plot_optic_sync(self, preserve_zoom=None):
         """Synchronous matplotlib render — must stay on the main thread."""
         if preserve_zoom is None:
@@ -1529,6 +1905,9 @@ class MatplotlibViewer(QWidget):
                     )
                     from optiland.visualization.themes import get_active_theme
                     theme = get_active_theme()
+                    hide_vignetted = self.rays_reach_image_checkbox.isChecked()
+                    hide_internal = self.hide_internal_surfaces_checkbox.isChecked()
+                    show_measures = self.display_y_measures_checkbox.isChecked()
                     try:
                         rays2d_plotter.plot(
                             self.ax,
@@ -1537,13 +1916,17 @@ class MatplotlibViewer(QWidget):
                             num_rays=num_rays,
                             distribution=distribution,
                             theme=theme,
+                            hide_vignetted=hide_vignetted,
                         )
                         setattr(self.connector, "_missing_stop_surface_warned", False)
                     except ValueError as exc:
                         if "No stop surface found." not in str(exc):
                             raise
                         self._notify_missing_stop_surface()
-                    system_plotter.plot(self.ax, theme=theme)
+                    system_plotter.plot(
+                        self.ax, theme=theme,
+                        hide_internal_surfaces=hide_internal,
+                    )
                     self.ax.set_title(
                         f"System: {optic.name} (2D)",
                         color=matplotlib.rcParams["text.color"],
@@ -1559,8 +1942,12 @@ class MatplotlibViewer(QWidget):
                         self.ax.relim()
                         self.ax.autoscale_view()
                         self.ax.margins(x=0.03, y=0.08)
+                    bottom_margin = 0.12
+                    if show_measures:
+                        self._draw_surface_dimensions(self.ax, optic)
+                        bottom_margin = 0.28
                     self.figure.subplots_adjust(
-                        left=0.06, right=0.995, top=0.92, bottom=0.12
+                        left=0.06, right=0.995, top=0.92, bottom=bottom_margin
                     )
                     if self._preserve_xy_ratio:
                         self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
