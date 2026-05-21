@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSizePolicy,
     QSpinBox,
@@ -229,12 +230,14 @@ class SystemPropertiesPanel(QWidget):
     def _create_editor_pages(self):
         """Creates and adds all the property editor pages to the
         navigation tree and stacked widget."""
+        self.metadataEditor = MetadataEditor(self.connector)
         self.apertureEditor = ApertureEditor(self.connector)
         self.fieldsEditor = FieldsEditor(self.connector)
         self.wavelengthsEditor = WavelengthsEditor(self.connector)
         self.polarizationEditor = PolarizationEditor(self.connector)
         self.rayAimingEditor = RayAimingEditor(self.connector)
 
+        self.add_nav_item("Metadata", self.metadataEditor)
         self.add_nav_item("Aperture", self.apertureEditor)
         self.add_nav_item("Fields", self.fieldsEditor)
         self.add_nav_item("Wavelengths", self.wavelengthsEditor)
@@ -269,6 +272,7 @@ class SystemPropertiesPanel(QWidget):
     @Slot()
     def load_properties(self):
         """Loads or reloads data into all property editors."""
+        self.metadataEditor.load_data()
         self.apertureEditor.load_data()
         self.fieldsEditor.load_data()
         self.wavelengthsEditor.load_data()
@@ -337,6 +341,48 @@ class PropertyEditorBase(QWidget):
             "}"
         )
         return box
+
+
+class MetadataEditor(PropertyEditorBase):
+    """Editor for the system name and description metadata."""
+
+    def init_ui(self) -> None:
+        """Initialises the metadata editor UI."""
+        layout = QFormLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        self.txtName = QLineEdit()
+        self.txtName.setPlaceholderText("Default System")
+        layout.addRow("Name:", self.txtName)
+
+        self.txtDescription = QTextEdit()
+        self.txtDescription.setPlaceholderText("Enter a system description…")
+        self.txtDescription.setMinimumHeight(120)
+        layout.addRow("Description:", self.txtDescription)
+
+        self.btnApply = QPushButton("Apply Metadata")
+        layout.addRow(self.btnApply)
+
+        self.btnApply.clicked.connect(self._apply_changes)
+
+    @Slot()
+    def _apply_changes(self) -> None:
+        """Write the current name and description back to the optic."""
+        if self.is_loading:
+            return
+        name = self.txtName.text().strip()
+        description = self.txtDescription.toPlainText().strip()
+        self.connector.set_metadata(name, description)
+
+    @Slot()
+    def load_data(self) -> None:
+        """Load name and description from the optic into the UI."""
+        self.is_loading = True
+        name, description = self.connector.get_metadata()
+        self.txtName.setText(name)
+        self.txtDescription.setPlainText(description)
+        self.is_loading = False
 
 
 class ApertureEditor(PropertyEditorBase):

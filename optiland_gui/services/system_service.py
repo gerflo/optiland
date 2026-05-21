@@ -133,6 +133,31 @@ class SystemService:
             raise ValueError(f"Unknown polarization mode: {mode}")
         self._connector.opticChanged.emit()
 
+    def get_metadata(self) -> tuple[str, str]:
+        """Return the current name and description of the optic.
+
+        Returns:
+            A ``(name, description)`` tuple with empty strings as fallbacks.
+        """
+        optic = self._connector._optic
+        name = (optic.name or "") if optic else ""
+        description = (getattr(optic, "description", None) or "") if optic else ""
+        return name, description
+
+    def set_metadata(self, name: str, description: str) -> None:
+        """Update the name and description of the active optic.
+
+        Args:
+            name: The new system name. Empty string stores as ``None``.
+            description: The new description text. Empty string stores as ``None``.
+        """
+        optic = self._connector._optic
+        if optic is None:
+            return
+        optic.name = name or None
+        optic.description = description or None
+        self._connector.opticChanged.emit()
+
     def get_field_types(self) -> list[tuple[str, str]]:
         """Return all four supported field types.
 

@@ -97,15 +97,18 @@ class Optic:
 
     """
 
-    def __init__(self, name: str | None = None):
+    def __init__(self, name: str | None = None, description: str | None = None):
         """
         Initializes an Optic instance.
 
         Args:
             name: An optional name for the optical system.
                 Defaults to None.
+            description: An optional description for the optical system.
+                Defaults to None.
         """
         self.name = name
+        self.description = description
         self.reset()
 
     def _initialize_attributes(self):

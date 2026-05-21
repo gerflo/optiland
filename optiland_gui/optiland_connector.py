@@ -669,6 +669,23 @@ class OptilandConnector(QObject):
         """
         return self._system_service.get_wavelength_options()
 
+    def get_metadata(self) -> tuple[str, str]:
+        """Return the current name and description of the optic.
+
+        Returns:
+            A ``(name, description)`` tuple with empty strings as fallbacks.
+        """
+        return self._system_service.get_metadata()
+
+    def set_metadata(self, name: str, description: str) -> None:
+        """Update the name and description of the active optic.
+
+        Args:
+            name: The new system name.
+            description: The new description text.
+        """
+        self._system_service.set_metadata(name, description)
+
     def get_aperture_types(self) -> list[str]:
         """Return all aperture type keys registered with BaseSystemAperture.
 

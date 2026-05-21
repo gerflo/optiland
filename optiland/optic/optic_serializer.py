@@ -42,6 +42,7 @@ class OpticSerializer:
         data = {
             "version": 1.0,
             "name": optic.name,
+            "description": optic.description,
             "aperture": optic.aperture.to_dict() if optic.aperture else None,
             "fields": optic.fields.to_dict(),
             "wavelengths": optic.wavelengths.to_dict(),
@@ -70,6 +71,7 @@ class OpticSerializer:
 
         optic = Optic()
         optic.name = data.get("name")
+        optic.description = data.get("description")
         optic.aperture = BaseSystemAperture.from_dict(data["aperture"])
         optic.surfaces = SurfaceGroup.from_dict(data["surface_group"])
         optic.fields = FieldGroup.from_dict(data["fields"])

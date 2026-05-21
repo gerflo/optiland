@@ -1702,21 +1702,32 @@ class MatplotlibViewer(QWidget):
 
         preview.paintRequested.connect(self._render_for_print)
 
-        # Use Qt's own (non-native) print dialog when the user clicks Print.
-        # The Windows 11 native PrintDlgEx reports "keine Seitenansicht" because
-        # Qt does not implement the IDocumentPreview COM interface.
-        # AA_DontUseNativeDialogs forces QPrintDialog to use Qt's cross-platform
-        # implementation instead.
-        had_no_native = QApplication.testAttribute(
-            Qt.ApplicationAttribute.AA_DontUseNativeDialogs
-        )
-        QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, True)
-        try:
-            preview.exec()
-        finally:
-            QApplication.setAttribute(
-                Qt.ApplicationAttribute.AA_DontUseNativeDialogs, had_no_native
-            )
+        # Intercept the preview's Print button to preserve the page layout
+        # (orientation, paper size) set in the preview toolbar.  On Windows,
+        # QPrintDialog re-reads the printer driver's DEVMODE when it opens,
+        # which resets the orientation to the driver default (usually portrait)
+        # regardless of what was selected in the preview.  We save the layout
+        # before the dialog and restore it after acceptance so the preview
+        # orientation is always honoured.
+        from PySide6.QtGui import QAction as _QAction
+        from PySide6.QtPrintSupport import QPrintDialog as _QPrintDialog
+
+        def _handle_print():
+            saved_layout = printer.pageLayout()
+            dlg = _QPrintDialog(printer, preview)
+            if dlg.exec():
+                printer.setPageLayout(saved_layout)
+                preview.paintRequested.emit(printer)
+
+        for _act in preview.findChildren(_QAction, "qt_print_action"):
+            try:
+                _act.triggered.disconnect()
+            except RuntimeError:
+                pass
+            _act.triggered.connect(_handle_print)
+            break
+
+        preview.exec()
 
     def _render_for_print(self, printer) -> None:
         """Render the current matplotlib figure onto *printer*.
