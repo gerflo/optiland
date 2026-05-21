@@ -1693,8 +1693,8 @@ class MatplotlibViewer(QWidget):
                                border: 1px solid #aaaaaa; }
             QScrollBar:vertical, QScrollBar:horizontal {
                 background-color: #e8e8e8; border: none; }
-            QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
-                background-color: #b0b0b0; border-radius: 3px; min-length: 20px; }
+            QScrollBar::handle:vertical   { background-color: #b0b0b0; border-radius: 3px; min-height: 20px; }
+            QScrollBar::handle:horizontal { background-color: #b0b0b0; border-radius: 3px; min-width:  20px; }
             QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
                 background-color: #909090; }
             QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
@@ -1728,6 +1728,17 @@ class MatplotlibViewer(QWidget):
             break
 
         preview.exec()
+
+        # Disconnect paintRequested and remove Qt parent so the C++ dialog is
+        # deleted immediately when 'preview' goes out of scope, before 'printer'
+        # is released.  Without this, the Qt parent-child chain keeps the dialog's
+        # C++ object alive while the Python-owned QPrinter (no Qt parent) is GC'd
+        # first, leaving the dialog with a dangling QPrinter*.
+        try:
+            preview.paintRequested.disconnect(self._render_for_print)
+        except RuntimeError:
+            pass
+        preview.setParent(None)
 
     def _render_for_print(self, printer) -> None:
         """Render the current matplotlib figure onto *printer*.
