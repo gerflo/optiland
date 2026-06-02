@@ -41,11 +41,14 @@ class FootprintDiagram(BaseAnalysis):
     Args:
         optic: The optical system to analyse.
         num_rays: Number of rays per (field, wavelength) pair.  Default 500.
+            Note: for ``"hexapolar"`` distribution this value is interpreted as
+            the number of *rings*, not points — 500 rings ≈ 750 000 rays.
+            Use ``"random"`` (the default) to get exactly ``num_rays`` rays.
         fields: Which fields to include.  ``"all"`` uses every field defined on
             the optic; otherwise pass a list of ``(Hx, Hy)`` normalised pairs.
         wavelengths: ``"all"``, ``"primary"``, or a list of wavelength values
             in µm.  Default ``"all"``.
-        distribution: Pupil-sampling strategy.  Default ``"hexapolar"``.
+        distribution: Pupil-sampling strategy.  Default ``"random"``.
         marker_size: Scatter-plot point size (matplotlib *s* parameter).
             Default ``1.0``.
     """
@@ -59,7 +62,7 @@ class FootprintDiagram(BaseAnalysis):
         wavelengths="all",
         distribution: Literal[
             "random", "hexapolar", "grid", "ring", "line_x", "line_y"
-        ] = "hexapolar",
+        ] = "random",
         marker_size: float = 1.0,
     ):
         if fields == "all":

@@ -34,7 +34,7 @@ from PySide6.QtCore import (
     QTimer,
     Slot,
 )
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QRegularExpressionValidator
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPixmap, QRegularExpressionValidator, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -238,6 +238,8 @@ class AnalysisPanel(QWidget):
         # Mapping of display name → class, built from the registry at init.
         self._analysis_class_map: dict[str, type] = {}
         self._analysis_thread: QThread | None = None
+        self._analysis_worker = None
+        self._stop_requested: bool = False
         self._pending_analysis_context: dict | None = None
 
     def _setup_main_layout(self):
@@ -272,6 +274,7 @@ class AnalysisPanel(QWidget):
         self.btnStop.setObjectName("StopAnalysisButton")
         self.btnStop.setToolTip("Stop Analysis")
         self.btnStop.setIconSize(QSize(18, 18))
+        self.btnStop.setEnabled(False)
 
         top_bar_layout.addWidget(self.btnRun)
         top_bar_layout.addWidget(self.btnRunAll)
@@ -397,6 +400,12 @@ class AnalysisPanel(QWidget):
         self.btnRefreshPlot.setIconSize(QSize(18, 18))
         self.plot_area_title_bar_layout.addWidget(self.btnRefreshPlot)
 
+        self.btnPrint = QToolButton()
+        self.btnPrint.setObjectName("PrintAnalysisButton")
+        self.btnPrint.setToolTip("Print the current analysis plot (Ctrl+P)")
+        self.btnPrint.setIconSize(QSize(18, 18))
+        self.plot_area_title_bar_layout.addWidget(self.btnPrint)
+
         self.toggleSettingsButton = QToolButton()
         self.toggleSettingsButton.setObjectName("ToggleSettingsButton")
         self.toggleSettingsButton.setIconSize(QSize(18, 18))
@@ -509,6 +518,7 @@ class AnalysisPanel(QWidget):
         self.analysisTypeCombo.currentTextChanged.connect(self.on_analysis_type_changed)
         self.toggleSettingsButton.clicked.connect(self.toggle_settings_panel_slot)
         self.btnRefreshPlot.clicked.connect(self._refresh_current_plot_page_slot)
+        self.btnPrint.clicked.connect(self._print_analysis)
         self.btnApplySettings.clicked.connect(
             self._apply_settings_and_rerun_analysis_slot
         )
@@ -522,6 +532,7 @@ class AnalysisPanel(QWidget):
         self.update_pagination_ui()
         self.display_plot_page(self.current_plot_page_index)
         self.settings_area_widget.setVisible(False)
+        QShortcut(QKeySequence.StandardKey.Print, self, activated=self._print_analysis)
 
     # --- Layout and Widget Management ---
     def _cleanup_figure_canvas(self, canvas_widget: FigureCanvas):
@@ -956,6 +967,7 @@ class AnalysisPanel(QWidget):
         self.btnRun.setIcon(QIcon(f":/icons/{theme_name}/run.svg"))
         self.btnStop.setIcon(QIcon(f":/icons/{theme_name}/stop.svg"))
         self.btnRunAll.setIcon(QIcon(f":/icons/{theme_name}/run_all.svg"))
+        self.btnPrint.setIcon(QIcon(f":/icons/{theme_name}/print.svg"))
         self.btnApplySettings.setIcon(QIcon(f":/icons/{theme_name}/check_apply.svg"))
         self.btnSaveSettings.setIcon(QIcon(f":/icons/{theme_name}/save_settings.svg"))
         self.btnLoadSettings.setIcon(QIcon(f":/icons/{theme_name}/load_settings.svg"))
@@ -1647,9 +1659,11 @@ class AnalysisPanel(QWidget):
             print(f"Analysis Panel Error: {exc}\n{traceback.format_exc()}")
             return
 
+        self._stop_requested = False
         self._busy_overlay.show_busy()
         self.btnRun.setEnabled(False)
         self.btnRunAll.setEnabled(False)
+        self.btnStop.setEnabled(True)
 
         self._pending_analysis_context = {
             "name": analysis_name,
@@ -1677,13 +1691,45 @@ class AnalysisPanel(QWidget):
         worker.error.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         self._analysis_thread = thread
+        self._analysis_worker = worker
         thread.start()
+
+    def _reset_busy_state(self) -> None:
+        """Re-enable controls and hide the overlay after any run outcome."""
+        self._busy_overlay.hide_busy()
+        self.btnRun.setEnabled(True)
+        self.btnRunAll.setEnabled(True)
+        self.btnStop.setEnabled(False)
+        self._analysis_thread = None
+        self._analysis_worker = None
+        self._pending_analysis_context = None
 
     @Slot(object)
     def _on_analysis_computed(self, instance):
-        """Called on the main thread when background ray tracing completes."""
+        """Called on the main thread when background ray tracing completes.
+
+        Bumps the overlay to 100 % and defers the matplotlib render by one
+        event-loop cycle so the overlay can repaint before the main thread is
+        blocked by the (synchronous) figure draw.
+        """
+        if self._stop_requested:
+            self._reset_busy_state()
+            return
+
         ctx = self._pending_analysis_context
         self._pending_analysis_context = None
+        self._analysis_thread = None
+        self._analysis_worker = None
+
+        # Let the overlay show 100 % before the blocking render begins.
+        self._busy_overlay.set_progress(1.0)
+        QTimer.singleShot(60, lambda: self._render_and_finalise(ctx, instance))
+
+    def _render_and_finalise(self, ctx, instance):
+        """Build the matplotlib figure and finalise the analysis on the main thread."""
+        if self._stop_requested:
+            self._reset_busy_state()
+            return
         try:
             page_data = self._finish_analysis(
                 instance,
@@ -1706,17 +1752,16 @@ class AnalysisPanel(QWidget):
             print(f"Analysis Panel Error: {exc}\n{traceback.format_exc()}")
             self.logArea.append(f"{ctx['name']} failed.")
         finally:
-            self._busy_overlay.hide_busy()
-            self.btnRun.setEnabled(True)
-            self.btnRunAll.setEnabled(True)
-            self._analysis_thread = None
+            self._reset_busy_state()
 
     @Slot(object)
     def _on_analysis_error(self, exc):
         """Called on the main thread when background computation raised."""
+        if self._stop_requested:
+            self._reset_busy_state()
+            return
         ctx = self._pending_analysis_context or {}
         name = ctx.get("name", "Analysis")
-        self._pending_analysis_context = None
         msg = f"An error occurred during {name}:\n{exc}"
         tm = getattr(self.connector, "toast_manager", None)
         if tm:
@@ -1725,10 +1770,7 @@ class AnalysisPanel(QWidget):
             QMessageBox.critical(self, self.ANALYSIS_ERROR_TITLE, msg)
         print(f"Analysis Panel Error: {exc}")
         self.logArea.append(f"{name} failed.")
-        self._busy_overlay.hide_busy()
-        self.btnRun.setEnabled(True)
-        self.btnRunAll.setEnabled(True)
-        self._analysis_thread = None
+        self._reset_busy_state()
 
     @Slot()
     def _apply_settings_and_rerun_analysis_slot(self):
@@ -1779,7 +1821,30 @@ class AnalysisPanel(QWidget):
 
     @Slot()
     def stop_analysis_slot(self):
-        self.logArea.append("Stop: Not yet implemented.")
+        thread = self._analysis_thread
+        if thread is None or not thread.isRunning():
+            return
+
+        name = (self._pending_analysis_context or {}).get("name", "Analysis")
+        self._stop_requested = True
+
+        # Disconnect worker signals so no finished/error callback fires after stop.
+        worker = self._analysis_worker
+        if worker is not None:
+            try:
+                worker.finished.disconnect()
+                worker.error.disconnect()
+            except RuntimeError:
+                pass
+
+        # Ask the thread to exit cleanly, then force-terminate if it doesn't.
+        thread.quit()
+        if not thread.wait(500):
+            thread.terminate()
+            thread.wait(500)
+
+        self._reset_busy_state()
+        self.logArea.append(f"{name} stopped by user.")
 
     @Slot()
     def _save_analysis_settings_slot(self):
@@ -1819,6 +1884,212 @@ class AnalysisPanel(QWidget):
 
     def on_scroll_zoom(self, event):
         gui_plot_utils.handle_matplotlib_scroll_zoom(event)
+
+    @Slot()
+    def _print_analysis(self) -> None:
+        """Open a print preview dialog for the current analysis plot."""
+        if self.active_mpl_canvas_widget is None:
+            QMessageBox.information(self, "Print", "No analysis plot to print.")
+            return
+
+        try:
+            from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
+        except ImportError:
+            QMessageBox.warning(self, "Print", "Print support is not available on this system.")
+            return
+
+        from PySide6.QtWidgets import QStyleFactory
+
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        preview = QPrintPreviewDialog(printer, self)
+        preview.setWindowTitle(f"Print Preview – {self.plotTitleLabel.text()}")
+
+        fusion = QStyleFactory.create("Fusion")
+        if fusion:
+            preview.setStyle(fusion)
+            preview.setPalette(fusion.standardPalette())
+        preview.setStyleSheet("""
+            QWidget          { background-color: #f0f0f0; color: #202020; }
+            QToolBar         { background-color: #ececec; border: none; spacing: 2px; }
+            QToolBar::separator { width: 1px; background-color: #c8c8c8; margin: 4px 2px; }
+            QToolButton      { color: #202020; background-color: transparent;
+                               border: 1px solid transparent; padding: 2px; border-radius: 2px; }
+            QToolButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
+            QToolButton:pressed,
+            QToolButton:checked  { background-color: #b8d0ea; border-color: #4e8cc0; }
+            QToolButton:disabled { color: #909090; }
+            QPushButton      { background-color: #e1e1e1; color: #202020;
+                               border: 1px solid #adadad; border-radius: 3px;
+                               padding: 4px 12px; }
+            QPushButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
+            QPushButton:pressed  { background-color: #b8d0ea; border-color: #4e8cc0; }
+            QPushButton:default  { border-color: #0078d7; }
+            QPushButton:disabled { background-color: #d4d4d4; color: #888888; border-color: #d4d4d4; }
+            QLabel           { color: #202020; background-color: transparent; }
+            QCheckBox, QRadioButton, QGroupBox { color: #202020; }
+            QGroupBox        { border: 1px solid #b0b0b0; border-radius: 4px;
+                               margin-top: 8px; padding-top: 8px; }
+            QGroupBox::title { color: #202020; }
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
+                background-color: #ffffff; color: #202020;
+                border: 1px solid #aaaaaa; border-radius: 2px; padding: 1px 4px; }
+            QComboBox::drop-down { background-color: #e1e1e1; border-left: 1px solid #aaaaaa; }
+            QAbstractItemView{ background-color: #ffffff; color: #202020;
+                               border: 1px solid #aaaaaa; }
+            QScrollBar:vertical, QScrollBar:horizontal {
+                background-color: #e8e8e8; border: none; }
+            QScrollBar::handle:vertical   { background-color: #b0b0b0; border-radius: 3px; min-height: 20px; }
+            QScrollBar::handle:horizontal { background-color: #b0b0b0; border-radius: 3px; min-width:  20px; }
+            QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+                background-color: #909090; }
+            QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+        """)
+
+        preview.paintRequested.connect(self._render_analysis_for_print)
+        self._print_overlay = BusyOverlay(preview)
+
+        from PySide6.QtGui import QAction as _QAction
+        from PySide6.QtPrintSupport import QPrintDialog as _QPrintDialog
+
+        def _handle_print():
+            saved_layout = printer.pageLayout()
+            dlg = _QPrintDialog(printer, preview)
+            if dlg.exec():
+                printer.setPageLayout(saved_layout)
+                preview.paintRequested.emit(printer)
+
+        for _act in preview.findChildren(_QAction, "qt_print_action"):
+            try:
+                _act.triggered.disconnect()
+            except RuntimeError:
+                pass
+            _act.triggered.connect(_handle_print)
+            break
+
+        preview.exec()
+
+        try:
+            preview.paintRequested.disconnect(self._render_analysis_for_print)
+        except RuntimeError:
+            pass
+        self._print_overlay = None
+        preview.setParent(None)
+
+    def _render_analysis_for_print(self, printer) -> None:
+        """Render the current analysis figure onto *printer*."""
+        import io
+
+        from PySide6.QtCore import QEventLoop
+        from PySide6.QtGui import QImage, QPixmap
+
+        overlay = getattr(self, "_print_overlay", None)
+
+        def _flush(value: float) -> None:
+            if overlay is not None:
+                overlay.set_progress(value)
+                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+        if overlay is not None:
+            overlay.show_busy()
+            _flush(0.02)
+
+        try:
+            buf = io.BytesIO()
+            _flush(0.05)
+            self._save_analysis_figure_print_friendly(buf, on_progress=_flush)
+            buf.seek(0)
+            image = QImage.fromData(buf.getvalue())
+            _flush(0.95)
+            if image.isNull():
+                return
+
+            painter = QPainter(printer)
+            if not painter.isActive():
+                return
+            viewport = painter.viewport()
+            pixmap = QPixmap.fromImage(image)
+            scaled = pixmap.scaled(
+                viewport.width(),
+                viewport.height(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x = viewport.x() + (viewport.width() - scaled.width()) // 2
+            y = viewport.y() + (viewport.height() - scaled.height()) // 2
+            _flush(1.0)
+            painter.drawPixmap(x, y, scaled)
+            painter.end()
+        finally:
+            if overlay is not None:
+                overlay.hide_busy()
+
+    def _save_analysis_figure_print_friendly(self, buf, on_progress=None) -> None:
+        """Save the analysis figure to *buf* as PNG with white background and black text."""
+        import matplotlib.colors as mcolors
+
+        fig = self.active_mpl_canvas_widget.figure
+
+        def _luminance(color):
+            try:
+                r, g, b, *_ = mcolors.to_rgba(color)
+                return 0.299 * r + 0.587 * g + 0.114 * b
+            except Exception:
+                return 0.0
+
+        def _is_light(color):
+            return _luminance(color) > 0.55
+
+        restores = []
+
+        def _remap(obj, getter, setter, new_val):
+            restores.append((setter, getter()))
+            setter(new_val)
+
+        _remap(fig, fig.get_facecolor, fig.set_facecolor, "white")
+
+        for ax in fig.get_axes():
+            _remap(ax, ax.get_facecolor, ax.set_facecolor, "white")
+
+            for spine in ax.spines.values():
+                if _is_light(spine.get_edgecolor()):
+                    _remap(spine, spine.get_edgecolor, spine.set_edgecolor, "black")
+
+            for text_obj in (ax.title, ax.xaxis.label, ax.yaxis.label):
+                if _is_light(text_obj.get_color()):
+                    _remap(text_obj, text_obj.get_color, text_obj.set_color, "black")
+
+            for tl in ax.get_xticklabels() + ax.get_yticklabels():
+                if _is_light(tl.get_color()):
+                    _remap(tl, tl.get_color, tl.set_color, "black")
+
+            for axis in (ax.xaxis, ax.yaxis):
+                for tick in axis.get_major_ticks() + axis.get_minor_ticks():
+                    for line in (tick.tick1line, tick.tick2line):
+                        if _is_light(line.get_color()):
+                            _remap(line, line.get_color, line.set_color, "black")
+                    gl = tick.gridline
+                    if _is_light(gl.get_color()):
+                        _remap(gl, gl.get_color, gl.set_color, "#AAAAAA")
+
+            for text_obj in ax.texts:
+                if _is_light(text_obj.get_color()):
+                    _remap(text_obj, text_obj.get_color, text_obj.set_color, "black")
+
+        if on_progress is not None:
+            on_progress(0.30)
+
+        try:
+            if on_progress is not None:
+                on_progress(0.35)
+            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor="white")
+            if on_progress is not None:
+                on_progress(0.85)
+        finally:
+            for setter, original in reversed(restores):
+                try:
+                    setter(original)
+                except Exception:
+                    pass
 
     @Slot()
     def _load_analysis_settings_slot(self):

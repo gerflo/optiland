@@ -1702,6 +1702,9 @@ class MatplotlibViewer(QWidget):
 
         preview.paintRequested.connect(self._render_for_print)
 
+        # Attach a progress overlay so the user sees activity during slow renders
+        self._print_overlay = BusyOverlay(preview)
+
         # Intercept the preview's Print button to preserve the page layout
         # (orientation, paper size) set in the preview toolbar.  On Windows,
         # QPrintDialog re-reads the printer driver's DEVMODE when it opens,
@@ -1738,6 +1741,7 @@ class MatplotlibViewer(QWidget):
             preview.paintRequested.disconnect(self._render_for_print)
         except RuntimeError:
             pass
+        self._print_overlay = None
         preview.setParent(None)
 
     def _render_for_print(self, printer) -> None:
@@ -1748,37 +1752,61 @@ class MatplotlibViewer(QWidget):
         """
         import io
         from PySide6.QtGui import QImage, QPixmap
+        from PySide6.QtWidgets import QApplication
 
-        buf = io.BytesIO()
-        self._save_figure_print_friendly(buf)
-        buf.seek(0)
-        image = QImage.fromData(buf.getvalue())
-        if image.isNull():
-            return
+        from PySide6.QtCore import QEventLoop
 
-        painter = QPainter(printer)
-        if not painter.isActive():
-            return
-        viewport = painter.viewport()
-        pixmap = QPixmap.fromImage(image)
-        scaled = pixmap.scaled(
-            viewport.width(),
-            viewport.height(),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        x = viewport.x() + (viewport.width() - scaled.width()) // 2
-        y = viewport.y() + (viewport.height() - scaled.height()) // 2
-        painter.drawPixmap(x, y, scaled)
-        painter.end()
+        overlay = getattr(self, "_print_overlay", None)
 
-    def _save_figure_print_friendly(self, buf) -> None:
+        def _flush(value: float) -> None:
+            if overlay is not None:
+                overlay.set_progress(value)
+                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+
+        if overlay is not None:
+            overlay.show_busy()
+            _flush(0.02)
+
+        try:
+            buf = io.BytesIO()
+            _flush(0.05)
+            self._save_figure_print_friendly(buf, on_progress=_flush)
+            buf.seek(0)
+            image = QImage.fromData(buf.getvalue())
+            _flush(0.95)
+            if image.isNull():
+                return
+
+            painter = QPainter(printer)
+            if not painter.isActive():
+                return
+            viewport = painter.viewport()
+            pixmap = QPixmap.fromImage(image)
+            scaled = pixmap.scaled(
+                viewport.width(),
+                viewport.height(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            x = viewport.x() + (viewport.width() - scaled.width()) // 2
+            y = viewport.y() + (viewport.height() - scaled.height()) // 2
+            _flush(1.0)
+            painter.drawPixmap(x, y, scaled)
+            painter.end()
+        finally:
+            if overlay is not None:
+                overlay.hide_busy()
+
+    def _save_figure_print_friendly(self, buf, on_progress=None) -> None:
         """Save the figure to *buf* as PNG with white background and black text/chrome.
 
         Temporarily remaps all light-colored UI elements (text, ticks, spines)
         to black so they are readable on white paper, then restores the original
         dark-theme colors.  Data artists (ray lines, lens outlines) keep their
         colors unchanged.
+
+        *on_progress* is an optional ``(fraction: float) -> None`` callback
+        called at key stages so callers can update a progress indicator.
         """
         import matplotlib.colors as mcolors
 
@@ -1843,9 +1871,16 @@ class MatplotlibViewer(QWidget):
                 if _is_light(c) and _luminance(c) > 0.75:
                     _remap(line, line.get_color, line.set_color, "#444444")
 
+        if on_progress is not None:
+            on_progress(0.30)
+
         try:
+            if on_progress is not None:
+                on_progress(0.35)
             fig.savefig(buf, format="png", dpi=300, bbox_inches="tight",
                         facecolor="white")
+            if on_progress is not None:
+                on_progress(0.85)
         finally:
             for setter, original in reversed(restores):
                 try:
