@@ -263,7 +263,7 @@ class ZemaxDataParser:
             self._current_surf_data["material"] = AbbeMaterial(
                 self._current_surf_data["index"],
                 self._current_surf_data["abbe"],
-                model="polynomial",
+                model="buchdahl",
             )
 
     def _read_stop(self, data: list[str]) -> None:
