@@ -449,7 +449,11 @@ class MaterialFile(BaseMaterial):
         Returns:
             dict: Parsed YAML data.
         """
-        with open(self.filename) as stream:
+        # The RefractiveIndex.INFO YAML files contain non-ASCII characters
+        # (e.g. the degree sign, em dashes). Decode explicitly as UTF-8 so the
+        # read does not depend on the platform's default text encoding -- on
+        # Windows that is cp1252/cp936 (GBK), which raises UnicodeDecodeError.
+        with open(self.filename, encoding="utf-8") as stream:
             return yaml.safe_load(stream)
 
     def _set_formula_type(self, formula_type):
@@ -482,10 +486,10 @@ class MaterialFile(BaseMaterial):
 
     def _parse_formula_data(self, sub_data: dict, sub_data_type: str) -> None:
         """Parse formula-based material data."""
-        self.coefficients = be.array(
-            [float(k) for k in sub_data.get("coefficients", "").split()]
-        )
-        self.coefficients = be.reshape(self.coefficients, (-1, 1))
+        coeff_values = [float(k) for k in sub_data.get("coefficients", "").split()]
+        # Build a 2D column array directly from Python values so the result is
+        # always a graph-leaf (avoids a non-leaf view from reshape on a 1-D tensor).
+        self.coefficients = be.array([[c] for c in coeff_values])
         self._set_formula_type(sub_data_type)
 
     def _parse_tabulated_data(self, sub_data: dict, sub_data_type: str) -> None:
@@ -513,10 +517,8 @@ class MaterialFile(BaseMaterial):
         try:
             coeff = data["SPECS"]["thermal_dispersion"][0]
             if coeff.get("type", "").startswith("Schott"):
-                self.thermdispcoef = be.array(
-                    [float(k) for k in coeff.get("coefficients", "").split()]
-                )
-                self.thermdispcoef = be.reshape(self.thermdispcoef, (-1, 1))
+                td_values = [float(k) for k in coeff.get("coefficients", "").split()]
+                self.thermdispcoef = be.array([[c] for c in td_values])
 
             self._t0 = float(data["SPECS"]["temperature"].split(" ")[0])
         except KeyError:

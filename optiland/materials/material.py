@@ -12,6 +12,7 @@ Kramer Harrison, 2024
 # import pkg_resources
 from __future__ import annotations
 
+import warnings
 from importlib import resources
 import re
 from pathlib import Path
@@ -20,6 +21,8 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 
 from optiland.materials.material_file import MaterialFile
+from optiland.materials.material_spec import MatchPolicy
+from optiland.materials.registry import MaterialRegistry
 
 _WINLENS_N_PREFIX_RE = r"^([A-Z]+)N([0-9][A-Z0-9]*)$"
 _WINLENS_ALIAS_ENTRY_RE = re.compile(
@@ -44,14 +47,20 @@ class Material(MaterialFile):
         reference (str, optional): The reference for the material, typically
             the manufacturer or author name. This helps disambiguate materials
             with similar names. Defaults to None.
-        robust_search (bool, optional): If True, the search attempts to find the
-            closest match even if an exact match isn't found, and returns the
-            first one based on similarity scoring. If False, an error is raised
-            if multiple close matches are found. Defaults to True.
+        robust_search (bool | None, optional): Deprecated. Use ``match_policy``
+            instead.  ``True`` maps to ``MatchPolicy.BEST``; ``False`` maps to
+            ``MatchPolicy.STRICT``.  Passing this argument emits a
+            ``DeprecationWarning``.  Defaults to None.
         min_wavelength (float, optional): Minimum wavelength in microns for
             filtering materials based on their valid range. Defaults to None.
         max_wavelength (float, optional): Maximum wavelength in microns for
             filtering materials based on their valid range. Defaults to None.
+        catalog (str, optional): Manufacturer catalog to restrict lookup to
+            (e.g. ``"schott"``, ``"ohara"``).  Keyword-only.  Defaults to None.
+        match_policy (MatchPolicy, optional): Controls fuzzy-match behavior.
+            ``"warn"`` (default) emits ``OptilandMaterialWarning`` on fuzzy
+            match; ``"best"`` silently takes the best match; ``"strict"``
+            raises ``ValueError`` on any non-exact match.  Keyword-only.
 
     Attributes:
         name (str): The name of the material.
@@ -65,35 +74,65 @@ class Material(MaterialFile):
 
     def __init__(
         self,
-        name,
-        reference=None,
-        robust_search=True,
-        warn_on_inexact=True,
-        min_wavelength=None,
-        max_wavelength=None,
+        name: str,
+        reference: str | None = None,
+        robust_search: bool | None = None,
+        min_wavelength: float | None = None,
+        max_wavelength: float | None = None,
         propagation_model=None,
-    ):
+        *,
+        warn_on_inexact: bool = True,
+        catalog: str | None = None,
+        match_policy: MatchPolicy = MatchPolicy.WARN,
+    ) -> None:
         self.name = name
         self.reference = reference
-        self.robust = robust_search
         self.warn_on_inexact = warn_on_inexact
         self.min_wavelength = min_wavelength
         self.max_wavelength = max_wavelength
+        self._catalog = catalog
+
+        # Handle deprecated robust_search parameter
+        if robust_search is not None:
+            warnings.warn(
+                "robust_search is deprecated; use match_policy='strict' or "
+                "match_policy='best'.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            match_policy = MatchPolicy.BEST if robust_search else MatchPolicy.STRICT
+
+        # Backward-compat: warn_on_inexact=False silences fuzzy-match warnings,
+        # which maps onto the new "take the best match quietly" policy. An
+        # explicit stricter/looser match_policy still wins.
+        if not warn_on_inexact and match_policy == MatchPolicy.WARN:
+            match_policy = MatchPolicy.BEST
+
+        self._match_policy = match_policy
+        # Keep self.robust for backward compatibility
+        self.robust = match_policy != MatchPolicy.STRICT
+
         file, self.material_data = self._retrieve_file()
         super().__init__(file, propagation_model=propagation_model)
 
     @classmethod
     def _load_dataframe(cls):
-        """Load the DataFrame if not yet loaded."""
-        if cls._df is None:
-            frames = [pd.read_csv(cls._filename)]
-            for extra_file in cls._extra_catalog_csv_files():
-                try:
-                    frames.append(pd.read_csv(extra_file))
-                except (FileNotFoundError, EmptyDataError):
-                    continue
-            cls._df = pd.concat(frames, ignore_index=True)
-        return cls._df
+        """Load the catalog DataFrame.
+
+        The built-in catalog comes from :class:`MaterialRegistry`; any extra
+        WinLens catalog CSVs (``catalog_nk_winlens.csv``) are concatenated on
+        top so WinLens lookups and the GUI catalog browser still see them.
+        """
+        built_in = MaterialRegistry.instance().built_in_df
+        extra_frames = []
+        for extra_file in cls._extra_catalog_csv_files():
+            try:
+                extra_frames.append(pd.read_csv(extra_file))
+            except (FileNotFoundError, EmptyDataError):
+                continue
+        if extra_frames:
+            return pd.concat([built_in, *extra_frames], ignore_index=True)
+        return built_in
 
     @classmethod
     def _extra_catalog_csv_files(cls) -> list[Path]:
@@ -524,42 +563,139 @@ class Material(MaterialFile):
         if self.reference:
             message += f" with reference {self.reference}"
 
+        if self._catalog:
+            message += f" in catalog '{self._catalog}'"
+
         if self.min_wavelength or self.max_wavelength:
             wavelength_range = f"({self.min_wavelength}, {self.max_wavelength}) µm"
             message += f" within wavelength range {wavelength_range}"
 
         raise ValueError(message)
 
-    def _retrieve_file(self):
-        """Retrieves the file path for the material based on the given criteria.
+    @staticmethod
+    def _catalog_from_filename(filename: str) -> str:
+        """Extract the manufacturer catalog name from a material filename path.
+
+        The filename follows the pattern ``group/catalog/name.yml``, so the
+        manufacturer catalog is the second-to-last path segment.
+
+        Args:
+            filename: The filename string from the catalog DataFrame.
 
         Returns:
-            tuple[str, dict]: A tuple containing:
-                - The full file path to the material data file.
-                - A dictionary containing the material's metadata from the catalog.
+            str: The catalog name, or an empty string if not determinable.
+        """
+        parts = filename.split("/")
+        return parts[-2] if len(parts) >= 3 else ""
+
+    def _retrieve_file(self):
+        """Retrieve the file path for the material via MaterialRegistry.
+
+        Resolution order:
+
+        1. WinLens *alias* candidates beyond the raw name (e.g. ``"BAFN10"`` →
+           ``"N-BAF10"``) are tried for an *exact* registry match, so a verified
+           alias wins over a fuzzy guess.
+        2. Extra WinLens catalog CSVs (imported glasses unknown to the registry)
+           are searched for an exact match — skipped under ``STRICT`` so that
+           cross-catalog ambiguity still surfaces as an error.
+        3. The raw name is resolved with the configured ``match_policy`` — this
+           is the unmodified upstream path when no aliases/extra catalogs apply.
+
+        Returns:
+            tuple[str, dict]: The full file path to the material data file and
+            a dictionary of the material's catalog metadata.
 
         Raises:
             ValueError: If no matches are found for the material.
-            ValueError: If multiple matches are found for the material.
+            ValueError: If match_policy is STRICT and the match is not exact.
 
         """
-        df = self._load_dataframe()
-        filtered_df = self._find_material_matches(df)
+        registry = MaterialRegistry.instance()
 
-        if filtered_df.empty:
-            self._raise_material_error(no_matches=True)
+        # 1. Exact match on a WinLens alias of the name (not the name itself —
+        #    that goes through the normal policy path in step 3).
+        candidates = self._material_name_candidates(self.name, self.reference)
+        for candidate in candidates:
+            if candidate == self.name:
+                continue
+            try:
+                return registry._resolve_with_row(
+                    candidate,
+                    self._catalog,
+                    self.reference,
+                    MatchPolicy.STRICT,
+                    self.min_wavelength,
+                    self.max_wavelength,
+                )
+            except ValueError:
+                continue
 
-        if len(filtered_df) > 1 and not self.robust:
-            self._raise_material_error(multiple_matches=True)
+        # 2. WinLens-imported glasses in extra catalog CSVs the registry cannot
+        #    see. Skipped under STRICT so ambiguity is not silently resolved.
+        if self._match_policy != MatchPolicy.STRICT:
+            extra = self._retrieve_from_extra_catalogs()
+            if extra is not None:
+                return extra
 
-        material_data = filtered_df.loc[0].to_dict()
-        filename = filtered_df.loc[0, "filename"]
-
-        full_filename = str(
-            resources.files("optiland.database").joinpath("data-nk", filename),
+        # 3. Raw name with the configured policy (unmodified upstream behavior).
+        return registry._resolve_with_row(
+            self.name,
+            self._catalog,
+            self.reference,
+            self._match_policy,
+            self.min_wavelength,
+            self.max_wavelength,
         )
 
-        return full_filename, material_data
+    def _retrieve_from_extra_catalogs(self):
+        """Resolve against extra WinLens catalog CSVs unknown to the registry.
+
+        These CSVs share the built-in schema and relative-path convention, so a
+        matched row's ``filename`` is resolved against the same ``data-nk``
+        directory the registry uses.
+
+        Returns:
+            tuple[str, dict] | None: ``(full_path, row_metadata)`` for the best
+            match, or ``None`` if no extra catalog matched.
+        """
+        extra_frames = []
+        for extra_file in self._extra_catalog_csv_files():
+            try:
+                extra_frames.append(pd.read_csv(extra_file))
+            except (FileNotFoundError, EmptyDataError):
+                continue
+        if not extra_frames:
+            return None
+
+        df = pd.concat(extra_frames, ignore_index=True)
+        # This path only accepts exact matches (checked below), so suppress the
+        # legacy inexact-match print emitted by _find_material_matches for the
+        # candidates we are about to reject.
+        prev_warn = self.warn_on_inexact
+        self.warn_on_inexact = False
+        try:
+            matches = self._find_material_matches(df)
+        finally:
+            self.warn_on_inexact = prev_warn
+        if matches.empty:
+            return None
+
+        # Only accept an exact extra-catalog hit. Fuzzy resolution is left to
+        # the registry fallback so that strict match policies still raise and
+        # imported glasses are matched by their exact name.
+        if matches.iloc[0]["similarity_score"] != 0:
+            return None
+
+        row = matches.iloc[0].to_dict()
+        filename = row["filename"]
+        data_dir = Path(self._filename).parent / "data-nk"
+        full_path = (
+            filename
+            if Path(filename).is_absolute()
+            else str(data_dir / filename)
+        )
+        return full_path, row
 
     def to_dict(self):
         """Converts the material to a dictionary.
@@ -574,8 +710,9 @@ class Material(MaterialFile):
             {
                 "name": self.name,
                 "reference": self.reference,
-                "robust_search": self.robust,
-                "warn_on_inexact": self.warn_on_inexact,
+                "catalog": self._catalog,
+                "match_policy": self._match_policy.value,
+                "robust_search": None,
                 "min_wavelength": self.min_wavelength,
                 "max_wavelength": self.max_wavelength,
             },
@@ -597,11 +734,42 @@ class Material(MaterialFile):
         if "name" not in data:
             raise ValueError("Missing required key: name")
 
+        # Warn when loading a file that has no catalog field (legacy format).
+        if "catalog" not in data or data["catalog"] is None:
+            warnings.warn(
+                f"Material '{data['name']}' loaded from file has no 'catalog' "
+                "field. Re-save the lens file to record catalog information. "
+                "Lookup will fall back to fuzzy search.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        # Translate legacy robust_search to match_policy without triggering
+        # the deprecation warning — from_dict is the known old-format handler.
+        if "robust_search" in data and data["robust_search"] is not None:
+            rs = data["robust_search"]
+            match_policy = MatchPolicy.BEST if rs else MatchPolicy.STRICT
+        else:
+            mp_value = data.get("match_policy", MatchPolicy.WARN.value)
+            match_policy = MatchPolicy(mp_value)
+
         return cls(
             data["name"],
             data.get("reference", None),
-            data.get("robust_search", True),
+            None,  # robust_search=None avoids re-triggering DeprecationWarning
             data.get("min_wavelength", None),
             data.get("max_wavelength", None),
-            # propagation_model is handled by MaterialFile.from_dict
+            catalog=data.get("catalog", None),
+            match_policy=match_policy,
         )
+
+    def __repr__(self) -> str:
+        catalog_str = f", catalog='{self._catalog}'" if self._catalog else ""
+        wl_range = ""
+        md = getattr(self, "material_data", None)
+        if md:
+            min_wl = md.get("min_wavelength")
+            max_wl = md.get("max_wavelength")
+            if min_wl is not None and max_wl is not None:
+                wl_range = f", λ=[{min_wl:.2f}µm, {max_wl:.2f}µm]"
+        return f"Material(name='{self.name}'{catalog_str}{wl_range})"

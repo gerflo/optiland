@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import optiland.backend as be
 from optiland.apodization import BaseApodization
-from optiland.geometries import Plane, StandardGeometry
+from optiland.geometries import StandardGeometry
 from optiland.materials import IdealMaterial
 
 if TYPE_CHECKING:
@@ -44,14 +44,12 @@ class OpticUpdater:
 
         """
         surface = self.optic.surfaces[surface_number]
-
-        # change geometry from plane to standard
-        if isinstance(surface.geometry, Plane):
+        try:
+            surface.geometry.set_radius(value)
+        except AttributeError:
+            # Plane geometry does not support set_radius; replace with StandardGeometry
             cs = surface.geometry.cs
-            new_geometry = StandardGeometry(cs, radius=value, conic=0)
-            surface.geometry = new_geometry
-        else:
-            surface.geometry.radius = value
+            surface.geometry = StandardGeometry(cs, radius=value, conic=0)
 
     def set_conic(self, value, surface_number):
         """Set the conic constant of a surface.
@@ -82,25 +80,34 @@ class OpticUpdater:
             # No need to shift other surfaces as they are relative to S1 at z=0
             return
 
-        positions = self.optic.surfaces.positions
-        # Detach positions used as reference points to prevent stale computation
-        # graphs (from prior iterations) from being pulled into the current graph.
-        if hasattr(positions, "detach"):
-            positions = positions.detach()
-        delta_t = value - positions[surface_number + 1] + positions[surface_number]
-        if not be.all(be.isfinite(be.asarray(delta_t))):
-            # During interactive editing the system can be transiently invalid.
-            # Avoid propagating NaN position shifts through the whole optic.
-            if surface_number < len(self.optic.surfaces):
-                self.optic.surfaces[surface_number].thickness = value
+        # Source of truth for downstream positions is each surface's `.thickness`
+        # attribute. Update the requested one first, then rebuild every cs.z
+        # downstream from those thickness values (rather than incrementally
+        # mutating cs.z). This keeps every current-iteration thickness tensor
+        # in the autograd graph — the prior incremental form needed `detach()`
+        # to drop stale graphs from earlier iterations, but that also severed
+        # in-iteration grad paths when multiple thickness variables were
+        # updated sequentially (only the last one kept its gradient). See #569.
+        surfaces = self.optic.surfaces
+        n = len(surfaces)
+        if surface_number < n:
+            surfaces[surface_number].thickness = value
+
+        # During interactive editing the system can be transiently invalid
+        # (e.g. a half-typed value). Store the thickness above but don't
+        # propagate a non-finite value through every downstream cs.z; the
+        # positions rebuild on the next valid edit.
+        if not be.all(be.isfinite(be.asarray(value))):
             return
-        positions = be.copy(positions)  # required to avoid in-place modification
-        positions[surface_number + 1 :] = positions[surface_number + 1 :] + delta_t
-        positions = positions - positions[1]  # force surface 1 to be at zero
-        for k, surface in enumerate(self.optic.surfaces):
-            surface.geometry.cs.z = be.array(positions[k])
-        if surface_number < len(self.optic.surfaces):
-            self.optic.surfaces[surface_number].thickness = value
+
+        # Surface 1 anchored at z=0; cs.z[k] = sum of upstream thicknesses.
+        if n >= 2:
+            z = be.array(0.0)
+            surfaces[1].geometry.cs.z = be.array(z)
+            for k in range(2, n):
+                t_prev = surfaces[k - 1].thickness
+                z = z + (t_prev if hasattr(t_prev, "detach") else be.array(t_prev))
+                surfaces[k].geometry.cs.z = be.array(z)
 
     def set_index(self, value: float, surface_number: int) -> None:
         """Set the index of refraction of a surface.
@@ -265,9 +272,10 @@ class OpticUpdater:
         ya, ua = self.optic.paraxial.marginal_ray()
         offset = float(ya[-1, 0] / ua[-1, 0])
         surfaces = self.optic.surfaces
-        self.optic.surfaces[-1].geometry.cs.z -= offset
-        surfaces[-2].thickness = (
-            self.optic.surfaces[-1].geometry.cs.z - surfaces[-2].geometry.cs.z
+        old_z = float(surfaces[-1].geometry.cs.z)
+        surfaces[-1].geometry.cs.z = be.array(old_z - offset)
+        surfaces[-2].thickness = float(surfaces[-1].geometry.cs.z) - float(
+            surfaces[-2].geometry.cs.z
         )
 
     def flip(self):

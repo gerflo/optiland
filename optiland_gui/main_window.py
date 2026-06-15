@@ -700,15 +700,19 @@ class MainWindow(FramelessWindow):
         """Load and apply the current theme and sidebar stylesheets."""
         style_str = ""
         theme = get_theme(self.current_theme_id)
+        # The .qss files contain non-ASCII glyphs (e.g. the dropdown arrow);
+        # decode as UTF-8 so the read does not fall back to the platform
+        # default (cp1252/cp936 on Windows), which would raise and leave the
+        # app unstyled.
         try:
-            with open(theme.base_path) as f_theme:
+            with open(theme.base_path, encoding="utf-8") as f_theme:
                 style_str += f_theme.read()
         except Exception as e:
             print(f"Error loading main theme {theme.base_path}: {e}")
 
         if os.path.exists(SIDEBAR_QSS_PATH):
             try:
-                with open(SIDEBAR_QSS_PATH) as f_sidebar:
+                with open(SIDEBAR_QSS_PATH, encoding="utf-8") as f_sidebar:
                     style_str += "\n" + f_sidebar.read()
 
             except Exception as e:

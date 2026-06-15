@@ -5,7 +5,7 @@
 ![Stars](https://img.shields.io/github/stars/optiland/optiland.svg)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14588961.svg)](https://doi.org/10.5281/zenodo.14588961)
-[![Python Versions](https://img.shields.io/badge/python-3.10%20%7C%203.11%7C%203.12%20%7C%203.13%20-blue)](https://img.shields.io/badge/python-3.10%20%7C%203.11%7C%203.12%20%7C%203.13%20-blue)
+[![Python Versions](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14%20-blue)](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13%20%7C%203.14%20-blue)
 
 
 <div align="center">
@@ -20,22 +20,6 @@
 
 <p align="center"><em>The Optiland GUI showing a reverse telephoto system.</em></p>
 
-
-## Contents
-
-1. [Introduction](#introduction)
-2. [Documentation](#documentation)
-3. [Installation](#installation)
-4. [Core capabilities](#core-capabilities)
-5. [Learning Guide](#learning-guide)
-6. [Roadmap](#roadmap)
-7. [Get Involved](#get-involved)
-8. [Contributing](#contributing)
-9. [License](#license)
-10. [Contact and Support](#contact-and-support)
-
-
----
 
 ## Introduction
 
@@ -53,17 +37,11 @@ Whether you're developing prototypes in research or refining production systems,
 
 Under the hood, Optiland uses NumPy for fast CPU calculations and PyTorch for GPU acceleration and automatic differentiation. Switch between engines depending on your use case with the same interface.
 
-**Quickstart**  
-1. [Quickstart Tutorial](https://optiland.readthedocs.io/en/latest/examples/Tutorial_1a_Optiland_for_Beginners.html) – build your first lens in 5 minutes  
-2. [Full Learning Guide](https://optiland.readthedocs.io/en/latest/learning_guide.html) – in-depth guide to mastering Optiland 
-3. [Example Gallery](https://optiland.readthedocs.io/en/latest/gallery/introduction.html) – visual showcase of designs and core features
-4. [Cheat Sheet](https://optiland.readthedocs.io/en/latest/cheat_sheet.html) - an up-to-date cheat sheet to get you started ASAP with your first optical system
-
----
-
-## Documentation
-
-Optiland's full documentation is available on [Read the Docs](https://optiland.readthedocs.io/).
+**Get started in 5 minutes:**
+```python
+pip install optiland
+```
+→ [5-minute quickstart](https://optiland.readthedocs.io/en/latest/quickstart.html) · [Example Gallery](https://optiland.readthedocs.io/en/latest/gallery/introduction.html) · [Full Learning Guide](https://optiland.readthedocs.io/en/latest/learning_guide.html)
 
 
 
@@ -116,7 +94,7 @@ For more details, see the [installation guide](https://optiland.readthedocs.io/e
 | **📈 Tolerancing** | Monte Carlo and parametric sensitivity analysis to evaluate robustness and manufacturability. |
 | **📚 Material Library** | Integrated access to refractiveindex.info. Support for custom dispersion models and material creation. |
 | **🖼️ Visualization** | 2D plots via matplotlib, 3D interactive scenes with VTK, and debugging tools to inspect ray behavior. |
-| **🧩 Interoperability** | Import Zemax files, save/load systems in JSON, use full Python API for scripting and automation. |
+| **🧩 Interoperability** | Import/Export Zemax (.zmx), CODE V (.seq), and OSLO (.len) files, save/load systems in JSON, use full Python API for scripting and automation. |
 | **🚀 Performance** | GPU-accelerated ray tracing (150M+ ray-surfaces/s), Numba-optimized NumPy backend, JIT-compiled computations. |
 | **🤖 ML Integration** | Compatible with PyTorch pipelines for deep learning, differentiable modeling, and end-to-end training. |
 
@@ -136,11 +114,10 @@ Optiland is continually evolving to provide new functionalities for optical desi
 - [ ] **Non-sequential Ray Tracing** (Ghost analysis, stray light, etc.)
 - [ ] **Physical Optics Propagation** (Diffraction, beam clipping, Gaussian beam evolution)
 - [ ] **Multi-Path Sequential Ray Tracing**
-- [ ] **Thin Film Design** (Coatings, polarization effects)
 - [ ] **Additional Freeforms** (Superconic, etc.)
 
 ### Optimization & Algorithms
-- [ ] **Global Optimization Routines** (Genetic Algorithms, Particle Swarm, etc.)
+- [ ] **Global Optimization Routines** (Genetic Algorithms, etc.)
 - [ ] **AI-Assisted Starting Points** (Database lookup or ML-based design initialization)
 
 ### Engineering & Interoperability

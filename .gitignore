@@ -25,3 +25,4 @@ tests/_tmp_live_excelitas_check/
 .tmp*/
 .pytest_cache/
 tests/_tmp_*/
+scratch/
