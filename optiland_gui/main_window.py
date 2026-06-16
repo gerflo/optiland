@@ -37,6 +37,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDockWidget,
@@ -48,7 +49,6 @@ from PySide6.QtWidgets import (
     QMenuBar,
     QMessageBox,
     QPushButton,
-    QSpinBox,
     QTabWidget,
     QToolBar,
     QVBoxLayout,
@@ -336,6 +336,10 @@ class MainWindow(FramelessWindow):
         self._apply_window_chrome(False)
         self._restore_window_placement()
         self._restore_current_layout_state()
+        # restoreState() above can re-show the custom title-bar toolbar if a prior
+        # session was saved in fullscreen (or from stale forked QSettings). Re-assert
+        # native chrome LAST so startup is always a standard window with one menu bar.
+        self._sync_window_chrome()
         self._update_layout_slot_actions()
 
     def _apply_revised_default_dock_layout(self):
@@ -607,6 +611,9 @@ class MainWindow(FramelessWindow):
         self._was_maximized_before_fullscreen = self.isMaximized()
         self._apply_window_chrome(True)
         self.showFullScreen()
+        # Authoritative re-assert once fullscreen is actually active (symmetric with
+        # the exit path), so the custom title bar is shown and the native menu hidden.
+        self._sync_window_chrome()
 
     def _exit_fullscreen_to_previous_state(self) -> None:
         """Leave fullscreen and restore the prior maximized/normal state."""
@@ -626,15 +633,46 @@ class MainWindow(FramelessWindow):
     def _apply_window_chrome(self, frameless: bool) -> None:
         """Switch between native window chrome and fullscreen frameless chrome."""
         self.set_frameless_mode(frameless)
-        if hasattr(self, "title_bar_as_toolbar"):
+        self._sync_window_chrome()
+
+    def _sync_window_chrome(self) -> None:
+        """Re-assert the chrome invariant from the *actual* window state.
+
+        The custom title bar (and its embedded menu) is visible if and only if the
+        window is frameless/fullscreen; the native menu bar is visible if and only
+        if the window is in normal mode. This is idempotent and reads the live
+        window state, so it stays correct even after ``QMainWindow.restoreState``
+        re-shows the custom title-bar toolbar — and it self-heals stale QSettings
+        inherited from the original always-frameless fork (which is what produced
+        the "double menu").
+
+        The discriminator is ``isFullScreen()`` because frameless mode and
+        fullscreen are toggled together (F11 = true fullscreen). If fullscreen is
+        ever changed to a borderless-maximized mode, switch this to
+        ``self._frameless_enabled``.
+        """
+        frameless = self.isFullScreen()
+        if hasattr(self, "title_bar_as_toolbar") and self.title_bar_as_toolbar:
             self.title_bar_as_toolbar.setVisible(frameless)
-        if hasattr(self, "_native_menu_bar_instance") and self._native_menu_bar_instance:
-            native_menu_bar = self._native_menu_bar_instance
+        native_menu_bar = getattr(self, "_native_menu_bar_instance", None)
+        if native_menu_bar:
             menu_action = getattr(native_menu_bar, "menuAction", None)
             if callable(menu_action):
                 menu_action().setVisible(not frameless)
             else:
                 native_menu_bar.setVisible(not frameless)
+
+    def _normalize_chrome_for_save(self) -> None:
+        """Force the custom title-bar toolbar hidden before ``saveState``.
+
+        ``QMainWindow.saveState`` records toolbar visibility by object name, so a
+        session saved while in fullscreen would otherwise persist the custom title
+        bar as visible and re-create the double-menu on the next launch or layout
+        load. Pair with a following :meth:`_sync_window_chrome` to keep the
+        on-screen state correct.
+        """
+        if hasattr(self, "title_bar_as_toolbar") and self.title_bar_as_toolbar:
+            self.title_bar_as_toolbar.setVisible(False)
 
     def _capture_normal_window_geometry(self) -> None:
         """Remember the last non-maximized, non-fullscreen window geometry."""
@@ -675,11 +713,14 @@ class MainWindow(FramelessWindow):
             logger.warning("Failed to restore the last session dock layout.")
             return
         self._normalize_all_docks()
+        self._sync_window_chrome()
 
     def _save_current_layout_state(self) -> None:
         """Persist the current dock layout, including docking and visibility."""
         self._normalize_all_docks()
+        self._normalize_chrome_for_save()
         self.settings.setValue("Layouts/CurrentState", self.saveState())
+        self._sync_window_chrome()
 
     def changeEvent(self, event: QEvent) -> None:
         """Update the maximize button state when the window state changes."""
@@ -1345,24 +1386,25 @@ class MainWindow(FramelessWindow):
         dialog_layout = QVBoxLayout(save_dialog)
         form_layout = QFormLayout()
 
-        slot_spinbox = QSpinBox(save_dialog)
-        slot_spinbox.setRange(1, self.MAX_LAYOUT_SLOTS)
-        slot_spinbox.setValue(self.next_save_slot_index)
-        form_layout.addRow("Slot:", slot_spinbox)
+        slot_combo = QComboBox(save_dialog)
+        for slot in range(1, self.MAX_LAYOUT_SLOTS + 1):
+            slot_combo.addItem(self._layout_slot_combo_label(slot), slot)
+        slot_combo.setCurrentIndex(self.next_save_slot_index - 1)
+        form_layout.addRow("Slot:", slot_combo)
 
         name_edit = QLineEdit(save_dialog)
         name_edit.setMaxLength(20)
         name_edit.setText(
-            self._layout_slot_display_name(slot_spinbox.value(), include_slot=False)
+            self._layout_slot_display_name(slot_combo.currentData(), include_slot=False)
         )
         name_edit.selectAll()
         form_layout.addRow("Name:", name_edit)
 
-        slot_spinbox.valueChanged.connect(
-            lambda slot: (
-                not name_edit.text().strip()
-                and name_edit.setText(
-                    self._layout_slot_display_name(slot, include_slot=False)
+        # Selecting a slot loads that slot's current name into the editable field.
+        slot_combo.currentIndexChanged.connect(
+            lambda _index: name_edit.setText(
+                self._layout_slot_display_name(
+                    slot_combo.currentData(), include_slot=False
                 )
             )
         )
@@ -1380,10 +1422,17 @@ class MainWindow(FramelessWindow):
         if save_dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
-        target_slot = slot_spinbox.value()
+        target_slot = slot_combo.currentData()
         layout_name = name_edit.text().strip()[:20] or f"Layout {target_slot}"
 
         self._save_layout_to_slot(target_slot, layout_name)
+
+    def _layout_slot_combo_label(self, slot: int) -> str:
+        """Return a Save-dialog combo label for *slot*, flagging empty slots."""
+        name = self.settings.value(f"Layouts/Config{slot}Name", "", type=str).strip()
+        if not self.settings.contains(f"Layouts/Config{slot}Geometry"):
+            return f"Slot {slot}: (empty)"
+        return f"Slot {slot}: {name}" if name else f"Slot {slot}: (unnamed)"
 
     def _layout_slot_display_name(
         self, slot: int, include_slot: bool = True
@@ -1398,7 +1447,9 @@ class MainWindow(FramelessWindow):
         """Persist the current layout into a numbered slot with a user label."""
         layout_name = layout_name.strip()[:20] or f"Layout {target_slot}"
         window_geometry = self.saveGeometry()
+        self._normalize_chrome_for_save()
         dock_toolbar_state = self.saveState()
+        self._sync_window_chrome()
         self.settings.setValue(f"Layouts/Config{target_slot}Geometry", window_geometry)
         self.settings.setValue(f"Layouts/Config{target_slot}State", dock_toolbar_state)
         self.settings.setValue(f"Layouts/Config{target_slot}Name", layout_name)
@@ -1449,6 +1500,7 @@ class MainWindow(FramelessWindow):
                         slot_number,
                     )
                 self._normalize_all_docks()
+                self._sync_window_chrome()
                 if self.toast_manager:
                     self.toast_manager.notify(
                         f"Layout {self._layout_slot_display_name(slot_number)} loaded.",

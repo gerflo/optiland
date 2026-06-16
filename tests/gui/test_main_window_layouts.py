@@ -35,6 +35,11 @@ def _make_window_stub():
             }
             self.action_manager = MagicMock()
             self.action_manager.get_action.side_effect = self._actions.get
+            # Window-chrome attributes touched by _save_layout_to_slot via the
+            # _normalize_chrome_for_save / _sync_window_chrome helpers.
+            self.isFullScreen = lambda: False
+            self.title_bar_as_toolbar = MagicMock()
+            self._native_menu_bar_instance = MagicMock()
 
         def saveGeometry(self):  # noqa: ANN201
             return b"geometry"
@@ -47,6 +52,10 @@ def _make_window_stub():
         stub, _WindowStub
     )
     stub._update_layout_slot_actions = MainWindow._update_layout_slot_actions.__get__(
+        stub, _WindowStub
+    )
+    stub._sync_window_chrome = MainWindow._sync_window_chrome.__get__(stub, _WindowStub)
+    stub._normalize_chrome_for_save = MainWindow._normalize_chrome_for_save.__get__(
         stub, _WindowStub
     )
     return stub
@@ -87,3 +96,14 @@ def test_update_layout_slot_actions_uses_saved_names_and_fallback_slot_numbers()
     slot_three.setEnabled.assert_called_with(False)
     slot_three.setText.assert_called_with("3")
     slot_three.setToolTip.assert_called_with("Load Layout 3 (Alt+3)")
+
+
+def test_layout_slot_combo_label_marks_empty_named_and_unnamed_slots() -> None:
+    window = _make_window_stub()
+    window.settings.setValue("Layouts/Config1Geometry", b"geometry")
+    window.settings.setValue("Layouts/Config1Name", "Optik Lab")
+    window.settings.setValue("Layouts/Config2Geometry", b"geometry")  # occupied, unnamed
+
+    assert MainWindow._layout_slot_combo_label(window, 1) == "Slot 1: Optik Lab"
+    assert MainWindow._layout_slot_combo_label(window, 2) == "Slot 2: (unnamed)"
+    assert MainWindow._layout_slot_combo_label(window, 3) == "Slot 3: (empty)"
