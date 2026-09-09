@@ -1626,3 +1626,34 @@ def test_surface_properties_widget_update_theme_restyles_sections(qapp, mock_con
 
     widget.update_theme("dark")
     assert "rgba(255, 255, 255, 0.72)" in widget.styleSheet()
+
+
+def test_focus_cell_survives_commit_triggered_rebuild(qapp, mock_connector):
+    """Regression: setFocus() may commit an open cell editor, which rebuilds
+    the table and deletes every item. _focus_cell must fetch the target item
+    only after the focus change, or setCurrentItem() raises RuntimeError on
+    the already-deleted item.
+    """
+    from PySide6.QtWidgets import QTableWidgetItem
+
+    from optiland_gui.lens_editor import LensEditor
+
+    editor = LensEditor(mock_connector)
+    editor.load_data()
+    table = editor.tableWidget
+    row, col = 1, mock_connector.COL_RADIUS
+    assert table.item(row, col) is not None
+
+    def rebuild_on_focus():
+        # Simulates commitData -> data changed -> full table repopulation.
+        for r in range(table.rowCount()):
+            for c in range(table.columnCount()):
+                old = table.item(r, c)
+                if old is not None:
+                    table.setItem(r, c, QTableWidgetItem(old.text()))
+
+    table.setFocus = rebuild_on_focus
+
+    assert editor._focus_cell(row, col, edit=False)
+    assert table.currentRow() == row
+    assert table.currentColumn() == col

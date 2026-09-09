@@ -1518,11 +1518,18 @@ class LensEditor(QWidget):
         """Focus a table cell and optionally open it for editing."""
         if row < 0 or col < 0 or self._is_properties_row(row):
             return False
-        item = self.tableWidget.item(row, col)
-        widget = self.tableWidget.cellWidget(row, col)
-        if item is None and widget is None:
+        if (
+            self.tableWidget.item(row, col) is None
+            and self.tableWidget.cellWidget(row, col) is None
+        ):
             return False
+        # setFocus() commits any open cell editor, which can trigger a table
+        # rebuild that deletes every item — fetch the target item afterwards,
+        # never before.
         self.tableWidget.setFocus()
+        if row >= self.tableWidget.rowCount() or col >= self.tableWidget.columnCount():
+            return False
+        item = self.tableWidget.item(row, col)
         if item is not None:
             self.tableWidget.setCurrentItem(item)
             self.tableWidget.scrollToItem(item, QAbstractItemView.PositionAtCenter)
