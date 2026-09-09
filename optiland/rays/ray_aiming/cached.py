@@ -4,6 +4,11 @@ This module implements a caching wrapper for ray aiming algorithms.
 It stores previous results to speed up repetitive calculations, especially
 during optimization or tolerance analysis where system changes might be small.
 
+Retained for backward compatibility (explicit ``cache=True``) but no longer
+the default warm-start mechanism for ``"robust"``, which has its own
+intrinsic, always-on ``PupilMapCache`` (see ``pupil_map.py`` and
+``robust.py``).
+
 Kramer Harrison, 2025
 """
 
@@ -26,6 +31,14 @@ class CachedRayAimer(BaseRayAimer):
     if the inputs and the optical system state have changed. If they match
     a cached entry, the result is returned immediately. If the system has
     changed but inputs match, the previous result is used as a starting guess.
+
+    Coordinate-frame note: cached entries are full launch states in global
+    coordinates. The system hash covers every surface, so any rigid pose
+    change (translation, fold reorientation) misses the exact-reuse path
+    and the stale state is only ever passed as an ``initial_guess`` to the
+    wrapped aimer, which re-solves (and, for the robust aimer, falls back
+    to a fresh entry-frame calibration if the stale guess fails). A stale
+    global-coordinate state can therefore cost time but never correctness.
 
     Attributes:
         optic (Optic): The optical system being traced.

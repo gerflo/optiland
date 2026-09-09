@@ -61,6 +61,8 @@ if TYPE_CHECKING:
     from optiland.distribution import BaseDistribution
     from optiland.materials.base import BaseMaterial
     from optiland.rays import RealRays
+    from optiland.sequences.sequenced_optic import SequencedOptic
+    from optiland.sequences.steps import RawStep
     from optiland.surfaces.standard_surface import Surface
 
 
@@ -140,6 +142,7 @@ class Optic:
         self.solves: SolveManager = SolveManager(self)
         self.obj_space_telecentric: bool = False
         self.updater: OpticUpdater = OpticUpdater(self)
+        self.sequences: dict[str, SequencedOptic] = {}
 
     @property
     def surface_group(self) -> SurfaceGroup:
@@ -215,8 +218,9 @@ class Optic:
             return self.polarization
         else:
             raise ValueError(
-                "Invalid polarization state. Must be either "
-                'PolarizationState or "ignore".',
+                f"Invalid polarization state, got {self.polarization!r}. Set "
+                "it with lens.set_polarization(state), passing either a "
+                "PolarizationState instance or the string 'ignore'.",
             )
 
     def reset(self):
@@ -285,6 +289,39 @@ class Optic:
         self.surfaces.remove(
             index=index,
         )
+
+    def add_sequence(self, name: str, steps: list[RawStep]) -> SequencedOptic:
+        """Define a named sub-sequence over this optic's own surfaces.
+
+        A sub-sequence is an alternative traversal order over the *same*
+        surface objects (ghost paths, reverse traces, sub-component views).
+        Geometry and materials are shared by reference with the base optic,
+        so editing a surface here is immediately visible in every sequence.
+        Ray definition (conjugates, aperture stop, aiming) always comes from
+        this optic's own nominal sequence; the sub-sequence defines
+        traversal only.
+
+        Args:
+            name: A name for the sequence, unique within this optic.
+            steps: The raw step list, e.g. ``[0, 1, 2, (3, "reflect"),
+                (2, "reflect"), 3, 4]``. See
+                :func:`optiland.sequences.steps.parse_steps`.
+
+        Returns:
+            SequencedOptic: The resolved sequence, also stored in
+            ``self.sequences[name]``.
+
+        Raises:
+            ValueError: If ``steps`` is empty, malformed, or references an
+                out-of-range surface index.
+            SequenceValidationError: If adjacent steps are not physically
+                consistent.
+        """
+        from optiland.sequences.sequenced_optic import SequencedOptic
+
+        sequence = SequencedOptic(self, name, steps)
+        self.sequences[name] = sequence
+        return sequence
 
     @deprecated("optic.fields.add()")
     def add_field(self, y: float, x: float = 0.0, vx: float = 0.0, vy: float = 0.0):
@@ -591,6 +628,7 @@ class Optic:
         reference: ReferenceRay | None = None,
         projection: Literal["XY", "XZ", "YZ"] = "YZ",
         ax: Axes | None = None,
+        show: bool = True,
     ) -> tuple[Figure, Axes]:
         """Draw a 2D representation of the optical system.
 
@@ -622,6 +660,9 @@ class Optic:
                 plane. Defaults to "YZ".
             ax (matplotlib.axes.Axes, optional): The axes to plot on.
                 If None, a new figure and axes are created. Defaults to None.
+            show (bool, optional): If True (default), calls plt.show(). Set
+                False for headless use (e.g. saving to file, CI environments)
+                or when embedding in an existing figure via ``ax``.
 
         Returns:
             tuple[Figure, Axes]: A tuple containing the matplotlib Figure and
@@ -645,6 +686,7 @@ class Optic:
             reference=reference,
             projection=projection,
             ax=ax,
+            show=show,
         )
         return fig, ax
 
@@ -732,6 +774,7 @@ class Optic:
         wavelength: float,
         num_rays: int | None = 100,
         distribution: DistributionType | BaseDistribution | None = "hexapolar",
+        record: bool = True,
     ) -> RealRays:
         """Trace a distribution of rays through the optical system.
 
@@ -745,12 +788,19 @@ class Optic:
                 The distribution of rays. Can be a string identifier (e.g.,
                 'hexapolar', 'uniform') or a `BaseDistribution` object.
                 Defaults to 'hexapolar'.
+            record: Whether to store per-surface snapshots of the traced rays,
+                which analyses and visualization read afterwards. Passing
+                False roughly halves peak memory and is recommended for very
+                large GPU traces where only the returned rays are needed.
+                Defaults to True.
 
         Returns:
             RealRays: A `RealRays` object containing the traced rays.
 
         """
-        return self.ray_tracer.trace(Hx, Hy, wavelength, num_rays, distribution)
+        return self.ray_tracer.trace(
+            Hx, Hy, wavelength, num_rays, distribution, record=record
+        )
 
     def trace_generic(
         self,

@@ -63,6 +63,7 @@ class RealRayTracer(BaseRayTracer):
         wavelength,
         num_rays: int | None = 100,
         distribution: DistributionType | BaseDistribution | None = "hexapolar",
+        record: bool = True,
     ):
         """Trace a distribution of rays through the optical system.
 
@@ -74,6 +75,10 @@ class RealRayTracer(BaseRayTracer):
                 to 100.
             distribution (str or Distribution, optional): The distribution of
                 the rays. Defaults to 'hexapolar'.
+            record (bool, optional): Whether to store per-surface snapshots of
+                the traced rays for later analysis. Pass False to cut peak
+                memory roughly in half when only the returned rays are needed
+                (e.g. large GPU traces). Defaults to True.
 
         Returns:
             RealRays: The RealRays object containing the traced rays."
@@ -86,39 +91,40 @@ class RealRayTracer(BaseRayTracer):
         Px = distribution.x
         Py = distribution.y
 
-        Hx = be.atleast_1d(Hx)
-        Hy = be.atleast_1d(Hy)
+        # With gradients globally disabled, the whole trace runs without
+        # autograd bookkeeping; with gradients enabled this context is a
+        # no-op and differentiable tracing works as before.
+        with be.no_grad_unless_enabled():
+            Hx = be.atleast_1d(Hx)
+            Hy = be.atleast_1d(Hy)
 
-        # expand coordinates to create a ray for each field point at each pupil point
-        num_fields = len(Hx)
-        num_pupil_points = len(Px)
+            # expand coordinates: one ray per field point at each pupil point
+            num_fields = len(Hx)
+            num_pupil_points = len(Px)
 
-        Hx_full = be.repeat(Hx, num_pupil_points)
-        Hy_full = be.repeat(Hy, num_pupil_points)
-        Px_full = be.tile(Px, num_fields)
-        Py_full = be.tile(Py, num_fields)
+            Hx_full = be.repeat(Hx, num_pupil_points)
+            Hy_full = be.repeat(Hy, num_pupil_points)
+            Px_full = be.tile(Px, num_fields)
+            Py_full = be.tile(Py, num_fields)
 
-        rays = self.ray_generator.generate_rays(
-            Hx_full, Hy_full, Px_full, Py_full, wavelength
-        )
-        self.optic.surfaces.trace(rays)
-
-        # Propagate to the image surface
-        if self.optic.image_surface:
-            last_surface = self.optic.surfaces[-1]
-            last_surface.material_post.propagation_model.propagate(
-                rays, last_surface.thickness
+            rays = self.ray_generator.generate_rays(
+                Hx_full, Hy_full, Px_full, Py_full, wavelength
             )
+            self.optic.surfaces.trace(rays, record=record)
 
-        if isinstance(rays, PolarizedRays):
-            rays.update_intensity(self.optic.polarization_state)
+            # Propagate to the image surface
+            if self.optic.image_surface:
+                last_surface = self.optic.surfaces[-1]
+                last_surface.material_post.propagation_model.propagate(
+                    rays, last_surface.thickness
+                )
 
-        # update ray intensity
-        self.optic.surfaces.intensity[-1, :] = rays.i
+            if isinstance(rays, PolarizedRays):
+                rays.update_intensity(self.optic.polarization_state)
 
         return rays
 
-    def trace_generic(self, Hx, Hy, Px, Py, wavelength):
+    def trace_generic(self, Hx, Hy, Px, Py, wavelength, record: bool = True):
         """Trace generic rays through the optical system.
 
         Args:
@@ -127,30 +133,30 @@ class RealRayTracer(BaseRayTracer):
             Px (float or numpy.ndarray): The normalized x pupil coordinate.
             Py (float or numpy.ndarray): The normalized y pupil coordinate
             wavelength (float): The wavelength of the rays.
+            record (bool, optional): Whether to store per-surface snapshots of
+                the traced rays. Defaults to True.
 
         """
         self._validate_normalized_coordinates(Hx, Hy, "field")
         self._validate_normalized_coordinates(Px, Py, "pupil")
 
-        vx, vy = self.optic.fields.get_vig_factor(Hx, Hy)
+        with be.no_grad_unless_enabled():
+            vx, vy = self.optic.fields.get_vig_factor(Hx, Hy)
 
-        Px = Px * (1 - vx)
-        Py = Py * (1 - vy)
+            Px = Px * (1 - vx)
+            Py = Py * (1 - vy)
 
-        # assure all variables are arrays of the same size
-        Hx, Hy, Px, Py = self._validate_array_size(Hx, Hy, Px, Py)
+            # assure all variables are arrays of the same size
+            Hx, Hy, Px, Py = self._validate_array_size(Hx, Hy, Px, Py)
 
-        rays = self.ray_generator.generate_rays(Hx, Hy, Px, Py, wavelength)
-        self.optic.surfaces.trace(rays)
+            rays = self.ray_generator.generate_rays(Hx, Hy, Px, Py, wavelength)
+            self.optic.surfaces.trace(rays, record=record)
 
-        # Propagate to the image surface
-        last_surface = self.optic.surfaces[-1]
-        last_surface.material_post.propagation_model.propagate(
-            rays, last_surface.thickness
-        )
-
-        # update intensity
-        self.optic.surfaces.intensity[-1, :] = rays.i
+            # Propagate to the image surface
+            last_surface = self.optic.surfaces[-1]
+            last_surface.material_post.propagation_model.propagate(
+                rays, last_surface.thickness
+            )
 
         return rays
 
@@ -170,7 +176,10 @@ class RealRayTracer(BaseRayTracer):
         valid_y = be.all((y >= -1) & (y <= 1))
         if not (valid_x and valid_y):
             raise ValueError(
-                f"Normalized {coord_type} coordinates must be within (-1, 1)"
+                f"Normalized {coord_type} coordinates must lie within "
+                f"[-1, 1], got x={x!r}, y={y!r}. These are normalized "
+                f"coordinates: {coord_type} extremes are +/-1, not physical "
+                "units."
             )
 
     def _validate_array_size(self, *arrays):

@@ -1,3 +1,5 @@
+"""Image simulation engine combining PSF convolution and distortion."""
+
 from __future__ import annotations
 
 import numpy as np
@@ -18,6 +20,7 @@ class ImageSimulationEngine:
     Args:
         optic (Optic): The optical system model.
         config (dict): Configuration dictionary.
+
             - wavelength (list[float]): List of 3 wavelengths (um) for R, G, B.
             - psf_grid_shape (tuple): (ny, nx) for PSF basis generation.
             - psf_size (int): Pixel size for PSFs.
@@ -25,6 +28,13 @@ class ImageSimulationEngine:
             - n_components (int): Number of EigenPSFs.
             - oversample (int): Upsampling factor for simulation accuracy.
             - padding (int): Pixel padding (guard band) to avoid edge artifacts.
+            - psf_strategy (str): Wavefront reference strategy.
+            - psf_remove_tilt (bool): Whether to remove wavefront tilt.
+            - distortion_reference (ReferencePointStrategy): Strategy used to
+              locate per-field image reference points for the distortion warp.
+              Defaults to None (chief-ray intercept). Supply a
+              CentroidReferencePoint to simulate off-axis, freeform, or obscured
+              systems where no chief ray can be traced.
     """
 
     def __init__(self, optic, config=None):
@@ -40,6 +50,9 @@ class ImageSimulationEngine:
             "n_components": 3,
             "oversample": 1,
             "padding": 64,
+            "psf_strategy": "chief_ray",
+            "psf_remove_tilt": False,
+            "distortion_reference": None,
         }
         if config:
             self.config.update(config)
@@ -106,7 +119,9 @@ class ImageSimulationEngine:
         # 2. Simulation Loop per Channel
         processed_channels = []
         sim = SpatiallyVariableSimulator()
-        warper = DistortionWarper(self.optic)
+        warper = DistortionWarper(
+            self.optic, reference_point=self.config["distortion_reference"]
+        )
 
         for _i, (wave, channel_img) in enumerate(
             zip(wavelengths, input_channels, strict=False)
@@ -118,6 +133,8 @@ class ImageSimulationEngine:
                 grid_shape=self.config["psf_grid_shape"],
                 num_rays=self.config["num_rays"],
                 psf_grid_size=self.config["psf_size"],
+                strategy=self.config["psf_strategy"],
+                remove_tilt=self.config["psf_remove_tilt"],
             )
             eigen_psfs, coeffs, mean_psf = gen.generate_basis(
                 n_components=self.config["n_components"]

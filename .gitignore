@@ -3,6 +3,7 @@
 **/.venv/
 **/__pycache__/
 **/jupyter/
+docs/.jupyterlite.doit.db
 build/
 dist/
 **/.ipynb_checkpoints/
@@ -26,3 +27,7 @@ tests/_tmp_live_excelitas_check/
 .pytest_cache/
 tests/_tmp_*/
 scratch/
+**/*.doit.db
+# The rule above targets Windows virtualenv Scripts/ directories; on
+# case-insensitive filesystems it also hides the repository scripts/ tree.
+!/scripts/

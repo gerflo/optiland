@@ -7,6 +7,9 @@ Kramer Harrison, 2024
 
 from __future__ import annotations
 
+import warnings
+from typing import Any
+
 import matplotlib.pyplot as plt
 import numpy as np
 import vtk
@@ -14,6 +17,15 @@ from matplotlib.patches import Polygon
 
 import optiland.backend as be
 from optiland.visualization.system.utils import revolve_contour, transform, transform_3d
+
+
+def _to_float(val: Any, default: float = 0.0) -> float:
+    """Convert a scalar or 0-d backend array to a Python float."""
+    try:
+        arr = be.to_numpy(val)
+        return float(arr.item() if hasattr(arr, "item") else arr)
+    except Exception:
+        return default
 
 
 class Lens2D:
@@ -31,9 +43,95 @@ class Lens2D:
 
     """
 
-    def __init__(self, surfaces):
-        # TODO: raise warning when lens surfaces overlap
+    def __init__(self, surfaces: list[Any]) -> None:
         self.surfaces = surfaces
+        self._check_surface_overlap()
+
+    def _check_surface_overlap(self) -> None:
+        """Check if any neighboring surfaces in the lens physically overlap."""
+        if not self.surfaces or len(self.surfaces) < 2:
+            return
+
+        for k in range(len(self.surfaces) - 1):
+            surf1 = self.surfaces[k]
+            surf2 = self.surfaces[k + 1]
+
+            if not hasattr(surf1, "surf") or not hasattr(surf2, "surf"):
+                continue
+            if not hasattr(surf1.surf, "geometry") or not hasattr(
+                surf2.surf, "geometry"
+            ):
+                continue
+
+            if self._surfaces_overlap(surf1, surf2):
+                warnings.warn(
+                    "Lens surfaces overlap.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                break
+
+    def _surfaces_overlap(self, surf1: Any, surf2: Any) -> bool:
+        """Determine if two neighboring surfaces of a lens physically overlap.
+
+        Note:
+            Overlap sampling is performed along X and Y cross-sections. For
+            non-rotationally-symmetric surfaces (such as Zernike, biconic, or
+            freeform surfaces), off-axis intersections that occur outside these
+            cross-sections may not be detected.
+        """
+        t = _to_float(getattr(surf1.surf, "thickness", 0.0))
+        e1 = _to_float(getattr(surf1, "extent", 0.0))
+        e2 = _to_float(getattr(surf2, "extent", 0.0))
+
+        e_max = max(e1, e2)
+        if not np.isfinite(e_max) or e_max <= 0:
+            grid = np.array([0.0])
+        else:
+            grid = np.linspace(-e_max, e_max, 128)
+
+        # Cross-sectional sampling along Y (x=0) and along X (y=0)
+        pts = [(0.0, float(y)) for y in grid]
+        if e_max > 0:
+            pts.extend([(float(x), 0.0) for x in grid])
+
+        xs = be.array([p[0] for p in pts])
+        ys = be.array([p[1] for p in pts])
+        r = be.sqrt(xs**2 + ys**2)
+
+        # Surface 1 clamped sag
+        if e1 > 0:
+            scale1 = be.where(r > e1, e1 / be.where(r == 0, 1.0, r), 1.0)
+            x1_c, y1_c = xs * scale1, ys * scale1
+        else:
+            x1_c, y1_c = xs, ys
+        z1_loc = surf1.surf.geometry.sag(x1_c, y1_c)
+
+        # Surface 2 clamped sag
+        if e2 > 0:
+            scale2 = be.where(r > e2, e2 / be.where(r == 0, 1.0, r), 1.0)
+            x2_c, y2_c = xs * scale2, ys * scale2
+        else:
+            x2_c, y2_c = xs, ys
+        z2_loc = surf2.surf.geometry.sag(x2_c, y2_c)
+
+        # Transform surface 2 points into global coordinates, then into surface 1 CS
+        x2_g, y2_g, z2_g = transform(xs, ys, z2_loc, surf2.surf, is_global=False)
+        _, _, z2_in_1 = transform(x2_g, y2_g, z2_g, surf1.surf, is_global=True)
+
+        z1_np = be.to_numpy(z1_loc)
+        z2_np = be.to_numpy(z2_in_1)
+
+        finite_mask = np.isfinite(z1_np) & np.isfinite(z2_np)
+        if not np.any(finite_mask):
+            return t <= 0
+
+        z1_np = z1_np[finite_mask]
+        z2_np = z2_np[finite_mask]
+
+        separation = z2_np - z1_np if t >= 0 else z1_np - z2_np
+
+        return bool(np.any(separation <= 0))
 
     def plot(self, ax, theme=None, projection="YZ"):
         """Plots the lens on the given matplotlib axis.
@@ -67,10 +165,10 @@ class Lens2D:
 
             circle = plt.Circle(
                 (
-                    float(be.to_numpy(center_x_global).item()),
-                    float(be.to_numpy(center_y_global).item()),
+                    _to_float(center_x_global),
+                    _to_float(center_y_global),
                 ),
-                float(be.to_numpy(max_extent).item()),
+                _to_float(max_extent),
                 facecolor=facecolor,
                 edgecolor=edgecolor,
                 label="Lens",
@@ -177,15 +275,39 @@ class Lens2D:
         else:
             vertices = be.to_numpy(be.column_stack((z, y)))
 
-        polygon = Polygon(
-            vertices,
-            closed=True,
-            facecolor=facecolor,
-            edgecolor=edgecolor,
-            label="Lens",
-        )
-        ax.add_patch(polygon)
-        return polygon
+        polygons = []
+        for segment in self._finite_vertex_segments(vertices):
+            polygon = Polygon(
+                segment,
+                closed=True,
+                facecolor=facecolor,
+                edgecolor=edgecolor,
+                label="Lens",
+            )
+            ax.add_patch(polygon)
+            polygons.append(polygon)
+        return polygons
+
+    def _finite_vertex_segments(self, vertices):
+        """Split closed polygon vertices into finite contiguous segments."""
+        finite = np.isfinite(vertices).all(axis=1)
+        if finite.all():
+            return [vertices]
+
+        finite_indices = np.flatnonzero(finite)
+        if finite_indices.size == 0:
+            return []
+
+        breaks = np.where(np.diff(finite_indices) > 1)[0] + 1
+        segments = np.split(finite_indices, breaks)
+
+        # The polygon is closed, so finite runs at the start and end are
+        # contiguous across the closing edge and should form one patch.
+        if finite[0] and finite[-1] and len(segments) > 1:
+            segments[0] = np.concatenate([segments[-1], segments[0]])
+            segments = segments[:-1]
+
+        return [vertices[segment] for segment in segments if len(segment) > 2]
 
     def _plot_lenses(self, ax, sags, theme=None, projection="YZ"):
         """Plot the lenses on the given matplotlib axis.
@@ -211,10 +333,15 @@ class Lens2D:
             y = be.concatenate([y1, be.flip(y2)])
             z = be.concatenate([z1, be.flip(z2)])
 
-            artist = self._plot_single_lens(
+            artists_for_lens = self._plot_single_lens(
                 ax, x, y, z, theme=theme, projection=projection
             )
-            artists[artist] = self
+            if artists_for_lens is None:
+                continue
+            if not isinstance(artists_for_lens, list):
+                artists_for_lens = [artists_for_lens]
+            for artist in artists_for_lens:
+                artists[artist] = self
         return artists
 
 
@@ -238,7 +365,7 @@ class Lens3D(Lens2D):
 
     """
 
-    def __init__(self, surfaces):
+    def __init__(self, surfaces: list[Any]) -> None:
         super().__init__(surfaces)
 
     @property

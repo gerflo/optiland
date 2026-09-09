@@ -22,6 +22,45 @@ How to Contribute
 8. **Open** a pull request with a detailed description of your changes.
 
 
+Development Setup
+------------------
+
+1. Clone your fork and create a virtual environment (``.venv``) in the repository root.
+2. Install the project with its dev dependency group using `uv <https://docs.astral.sh/uv/>`_::
+
+       uv sync --group dev
+
+   This installs Optiland in editable mode plus ``pytest``, ``ruff``, ``mypy``, and ``vulture``.
+   Without ``uv``, ``pip install -e "." --group dev`` (requires pip 25.1+; or install the
+   packages listed under ``[dependency-groups].dev`` in ``pyproject.toml`` manually) works too.
+3. Run the test suite scoped to what you're changing — **never run the full suite blindly**::
+
+       pytest -v tests/<area_you_touched>/
+
+   The full suite (``pytest tests/``) is slow enough that it's rarely the right first check; let
+   CI run it in full and iterate locally on the scoped subset.
+
+Quality Gates
+-------------
+
+Every pull request runs the following in CI:
+
+- **Ruff (lint + format):** blocking, including docstring checks on public classes/functions
+  only — pre-existing undocumented internals elsewhere in a touched file never block a PR.
+- **mypy:** blocking, but only for modules listed under ``[[tool.mypy.overrides]]`` in
+  ``pyproject.toml``. Untouched, unlisted modules are never checked. If you refactor a file onto
+  the allowlist, add it to the override list in the same PR.
+- **Golden-value regression snapshots** (``tests/regression/``): required for changes touching
+  ``geometries/``, ``materials/``, ``psf/``, ``rays/``, or ``backend/``. Run locally with
+  ``pytest tests/regression/``; regenerate deliberately with ``--update-golden`` only after an
+  intentional numerical change, and explain why in the PR description.
+- **vulture (dead-code scan):** dev-only, not part of CI — see "Dead-Code Audits" in
+  ``CONTRIBUTING.md``.
+
+For the full plugin-package mechanism (shipping a new surface geometry, material catalog, or
+analysis as an installable package rather than editing Optiland's source) see
+:doc:`developers_guide/plugin_packages`.
+
 Task Workflow and Coordination
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -100,6 +139,42 @@ Docstrings and Comments
 - Write docstrings for all public functions, classes, and modules using the `Google docstring style <https://sphinxcontrib-napoleon.readthedocs.io/en/latest/example_google.html/>`_.
 - Use inline comments sparingly and only when necessary to explain complex logic.
 
+Building the Documentation
+--------------------------
+
+The documentation lives in ``docs/`` as reStructuredText pages, Jupyter
+notebooks (committed **with** their outputs; builds never execute them) and
+API pages generated from docstrings. It is published automatically at
+https://www.optiland.org/docs/ by the ``Docs`` GitHub Actions workflow on
+every push to ``master``, so a documentation change needs nothing beyond a
+normal pull request.
+
+Build it locally with the same pinned environment the hosted build uses::
+
+    # one-time: create/update the environment (needs micromamba or conda)
+    micromamba create -f docs/build-environment.yml
+    micromamba activate sphinx-build
+
+    # normal local build -> docs/_build/html/index.html
+    make -C docs html
+
+    # the exact build + validation CI runs
+    python scripts/docs/build_docs.py
+    python scripts/docs/validate_build.py docs/_build/html \
+        --warnings docs/_build/warnings.log \
+        --allowlist scripts/docs/warnings-allowlist.txt
+
+- ``pip install -r docs/requirements.txt`` mirrors the Python pins for pip/uv
+  users; ``pandoc`` must then be installed separately.
+- The :doc:`try_it` page is built by ``jupyterlite-xeus`` with ``micromamba``.
+  On hosts where that is not possible (for example Windows), pass
+  ``--skip-jupyterlite`` to ``build_docs.py``; CI always builds it.
+- CI treats every Sphinx warning as an error unless it is listed, with a
+  reason, in ``scripts/docs/warnings-allowlist.txt``. Fix the warning at the
+  source rather than extending the allowlist.
+- Never commit generated HTML. Never hardcode the version: it is derived from
+  the package metadata.
+
 Testing
 -------
 
@@ -118,3 +193,11 @@ Reporting Issues
 If you encounter any bugs or issues, please report them on our GitHub issue tracker. Include detailed steps to reproduce the issue, along with any relevant logs or error messages.
 
 Thank you for contributing to Optiland!
+
+.. toctree::
+   :hidden:
+   :maxdepth: 1
+
+   authors
+   license
+   references

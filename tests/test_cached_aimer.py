@@ -100,11 +100,15 @@ def test_system_change_uses_cached_as_guess(set_test_backend, mock_dependencies)
     )
 
 
-def test_robust_aimer_integration_with_cache(set_test_backend):
+def test_robust_aimer_integration_with_cache(set_test_backend, request):
     """Regression test for RobustRayAimer integration with caching.
 
     Ensures that RobustRayAimer accepts initial_guess passed by CachedRayAimer.
     """
+    import optiland.backend as be
+    from optiland.aperture import FloatByStopAperture
+    from optiland.rays.ray_aiming.pupil_map import PupilMapCache
+
     # Create valid dummy field/pupil data
     fields = (0.0, 0.0)
     pupil = (0.0, 0.0)
@@ -112,15 +116,21 @@ def test_robust_aimer_integration_with_cache(set_test_backend):
 
     # Mock Optic
     optic = MagicMock(spec=Optic)
+    optic.paraxial = MagicMock()
     surface_group_mock = MagicMock()
     surface_group_mock.to_dict.return_value = {"surfaces": []}
     surface_group_mock.stop_index = 1
+
+    stop_surface_mock = MagicMock()
+    stop_surface_mock.aperture.r_max = 1.0
+    surface_group_mock.__getitem__.return_value = stop_surface_mock
+
     optic.surfaces = surface_group_mock
     optic.fields = MagicMock()
     optic.fields.to_dict.return_value = {}
     optic.wavelengths = MagicMock()
     optic.wavelengths.to_dict.return_value = {}
-    optic.aperture = MagicMock()
+    optic.aperture = MagicMock(spec=FloatByStopAperture)
     optic.aperture.to_dict.return_value = {}
     optic.object_surface = MagicMock()
 
@@ -137,8 +147,42 @@ def test_robust_aimer_integration_with_cache(set_test_backend):
     paraxial_mock.aim_rays.return_value = (0, 0, 0, 0, 0, 1)  # Dummy sol
 
     # Mock Iterative Aimer (needed by Robust)
-    iterative_mock = MagicMock(spec=BaseRayAimer)
+    from optiland.rays.ray_aiming.iterative import IterativeRayAimer
+    iterative_mock = MagicMock(spec=IterativeRayAimer)
     iterative_mock.aim_rays.return_value = (1, 1, 1, 0, 0, 1)  # Dummy converged sol
+
+    # Mock _solve_core to avoid AttributeError and ValueError during
+    # unpacking; the report slot must be a genuine SolveReport because the
+    # robust aimer reads it to build its aggregate last_report.
+    from optiland.rays.ray_aiming.parameterization import SolveReport
+
+    iterative_mock._solve_core.side_effect = lambda *args, **kwargs: (
+        be.array([1.0]),
+        be.array([1.0]),
+        be.array([1.0]),
+        be.array([0.0]),
+        be.array([0.0]),
+        be.array([1.0]),
+        be.array([1.0]) > 0.0,
+        None,
+        SolveReport(
+            seed_residual=0.0,
+            final_residual=0.0,
+            converged=True,
+            iterations=1,
+            num_rays=1,
+            num_converged=1,
+        ),
+    )
+    iterative_mock.last_report = SolveReport(
+        seed_residual=0.0,
+        final_residual=0.0,
+        converged=True,
+        iterations=1,
+        num_rays=1,
+        num_converged=1,
+    )
+    iterative_mock.tol = 1e-6
     iterative_mock._paraxial_aimer = paraxial_mock
 
     # Instantiate RobustRayAimer with mocked internals
@@ -149,24 +193,47 @@ def test_robust_aimer_integration_with_cache(set_test_backend):
     robust_aimer._paraxial = paraxial_mock
     # Inject our mock iterative aimer
     robust_aimer._iterative = iterative_mock
+    robust_aimer._cache = PupilMapCache()
 
     # Create CachedRayAimer wrapping RobustRayAimer
     cached_aimer = CachedRayAimer(optic, robust_aimer)
+
+    # The launch parameterization is built from the optic's entry frame,
+    # which the MagicMock optic cannot provide; supply the canonical +z one.
+    from unittest.mock import patch
+
+    from optiland.rays.ray_aiming.parameterization import LaunchParameterization
+
+    legacy_param = LaunchParameterization(
+        is_infinite=True, u=(1.0, 0.0, 0.0), v=(0.0, 1.0, 0.0)
+    )
+    patcher = patch.object(
+        LaunchParameterization, "for_optic", return_value=legacy_param
+    )
+    # Exception-safe: a failure inside this test must not leak the patched
+    # class method into later tests (request.addfinalizer over bare stop()).
+    patcher.start()
+    request.addfinalizer(patcher.stop)
 
     # 1. First call (Cache Miss)
     # This will call robust_aimer -> _solve -> iterative.aim_rays
     res1 = cached_aimer.aim_rays(fields, wl, pupil)
 
     # Expectation: robust aimer uses iterative aimer result
-    expected_first_result = (1, 1, 1, 0, 0, 1)  # This is what iterative_mock returns
-    assert res1 == expected_first_result
+    expected_first_result = (1.0, 1.0, 1.0, 0.0, 0.0, 1.0)
+
+    def to_floats(tup):
+        return tuple(float(be.to_numpy(x).reshape(-1)[0]) for x in tup)
+
+    assert to_floats(res1) == expected_first_result
 
     # 2. Perturb System
     optic.surfaces.to_dict.return_value = {"surfaces": ["changed"]}
 
     # 3. Second call (System Change -> Pass cached result as initial_guess)
     # This calls robust_aimer.aim_rays(..., initial_guess=expected_first_result)
-    # robust_aimer should call _iterative.aim_rays(..., initial_guess=expected_first_result)
+    # robust_aimer should call _iterative.aim_rays(...,
+    # initial_guess=expected_first_result)
 
     # We update iterative mock return value to distinguish second call result
     iterative_mock.aim_rays.return_value = (9, 9, 9, 8, 8, 8)
@@ -186,7 +253,8 @@ def test_robust_aimer_integration_with_cache(set_test_backend):
     found_guess = False
     for c in calls:
         if "initial_guess" in c.kwargs:
-            if c.kwargs["initial_guess"] == expected_first_result:
+            guess = c.kwargs["initial_guess"]
+            if to_floats(guess) == expected_first_result:
                 found_guess = True
                 break
     assert found_guess, "Initial guess was not passed to iterative aimer on second call"
