@@ -2777,6 +2777,11 @@ class LensEditor(QWidget):
                 move_element_action.triggered.connect(
                     lambda _=False, si=surface_index: self._move_element(si)
                 )
+            add_to_catalog_action = menu.addAction("Add Element to Stock Catalog...")
+            add_to_catalog_action.triggered.connect(
+                lambda _=False, si=surface_index: self._add_element_to_catalog(si)
+            )
+            add_to_catalog_action.setEnabled(not is_obj_or_img)
 
             # ── stop / optimization ───────────────────────────────────────────
             menu.addSeparator()
@@ -2952,6 +2957,30 @@ class LensEditor(QWidget):
             self._expand_group_for_row(moved_rows[0])
             self.load_data()
         self._select_surface_rows(moved_rows)
+
+    def _add_element_to_catalog(self, surface_index: int) -> None:
+        """Save the element containing *surface_index* as a stock-catalog entry."""
+        from .widgets.add_to_catalog_dialog import AddToCatalogDialog
+
+        try:
+            draft = self.connector.get_element_catalog_draft(surface_index)
+        except ValueError as exc:
+            self._notify_toast(str(exc), "warning")
+            return
+        dialog = AddToCatalogDialog(self.connector, draft, parent=self._dialog_parent())
+        if dialog.exec() and dialog.saved_catalog_id:
+            self._notify_toast(
+                "Element saved to stock catalog.",
+                "success",
+            )
+
+    def _notify_toast(self, message: str, level: str = "info") -> None:
+        """Show a toast via the main window's manager when one is available."""
+        toast_manager = getattr(self.window(), "toast_manager", None) or getattr(
+            self.connector, "toast_manager", None
+        )
+        if toast_manager is not None:
+            toast_manager.notify(message, level)
 
     def _dialog_parent(self):
         """Return a safe top-level parent for modal dialogs."""

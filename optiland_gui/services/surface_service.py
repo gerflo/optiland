@@ -929,6 +929,172 @@ class SurfaceService:
             if getattr(surface, "group_id", None) == group_id
         ]
 
+    def get_element_rows(self, row: int) -> list[int]:
+        """Return the LDE rows of the logical element containing *row*.
+
+        Grouped surfaces use their group extent. Ungrouped surfaces are
+        expanded across the contiguous glass run around *row* plus the closing
+        air-spaced back surface, mirroring how a lens element reads in the LDE.
+        """
+        rows = self.get_group_rows(row)
+        if rows:
+            return sorted(rows)
+        last = self.get_surface_count() - 1
+        if not (0 < row < last):
+            return []
+
+        def _has_glass_after(idx: int) -> bool:
+            surface = self._connector._optic.surfaces.surfaces[idx]
+            return self._get_material_data(surface) != "Air"
+
+        start = row
+        while start - 1 > 0 and _has_glass_after(start - 1):
+            start -= 1
+        end = row
+        while end < last - 1 and _has_glass_after(end):
+            end += 1
+        return list(range(start, end + 1))
+
+    def get_element_catalog_draft(self, row: int) -> dict:
+        """Build a stock-catalog draft for the element containing *row*.
+
+        Returns a dict with normalized ``surfaces`` specs (JSON-ready, ``inf``
+        radii as strings), ``stop_surface_offset``, and prefill metadata
+        (product name, diameter, center thickness, material summary, EFL).
+
+        Raises:
+            ValueError: If *row* does not identify an element with glass data.
+        """
+        rows = self.get_element_rows(row)
+        if not rows:
+            raise ValueError("The selected row is not part of a lens element.")
+
+        surfaces = [self._surface_to_catalog_spec(r) for r in rows]
+        if all(spec["material"] in ("Air", "Unknown") for spec in surfaces):
+            raise ValueError("The selected surfaces contain no optical element.")
+
+        optic = self._connector._optic
+        stop_offset = None
+        with suppress(ValueError):
+            stop_row = optic.surfaces.stop_index
+            if stop_row in rows:
+                stop_offset = rows.index(stop_row)
+
+        semi_diameters = [
+            spec["semi_diameter"]
+            for spec in surfaces
+            if isinstance(spec["semi_diameter"], (int, float))
+        ]
+        glass_materials = list(
+            dict.fromkeys(
+                spec["material"]
+                for spec in surfaces
+                if spec["material"] not in ("Air", "Unknown")
+            )
+        )
+        # Center thickness: glass path only (every surface followed by glass).
+        center_thickness = sum(
+            spec["thickness"]
+            for spec in surfaces
+            if spec["material"] not in ("Air", "Mirror", "Unknown")
+        )
+
+        efl = None
+        try:
+            efl_value = float(be.to_numpy(optic.paraxial.f2_range(rows[0], rows[-1])))
+            if abs(efl_value) != float("inf") and efl_value == efl_value:
+                efl = round(efl_value, 4)
+        except Exception:  # noqa: BLE001 - EFL prefill is best-effort only
+            efl = None
+
+        group_meta = self.get_surface_group_metadata(rows[0])
+        return {
+            "surfaces": surfaces,
+            "stop_surface_offset": stop_offset,
+            "product_name": group_meta.get("group_name") or "",
+            "diameter_mm": (
+                round(2.0 * max(semi_diameters), 4) if semi_diameters else None
+            ),
+            "center_thickness_mm": (
+                round(center_thickness, 4) if center_thickness else None
+            ),
+            "material_summary": " / ".join(glass_materials) or None,
+            "efl_mm": efl,
+        }
+
+    def _surface_to_catalog_spec(self, row: int) -> dict:
+        """Extract one surface as a JSON-ready catalog surface spec."""
+        surface = self._connector._optic.surfaces.surfaces[row]
+        surface_type = getattr(surface, "surface_type", None) or "standard"
+        geometry = surface.geometry
+
+        if surface_type == "toroidal":
+            radius = getattr(geometry, "R_yz", float("inf"))
+            conic = getattr(geometry, "k_yz", 0.0)
+        elif surface_type == "biconic":
+            radius = getattr(geometry, "Ry", float("inf"))
+            conic = getattr(geometry, "ky", 0.0)
+        elif surface_type == "paraxial":
+            radius = float("inf")
+            conic = 0.0
+        else:
+            radius = getattr(geometry, "radius", float("inf"))
+            conic = getattr(geometry, "k", 0.0)
+
+        thickness = 0.0
+        thickness_values = self._connector._optic.surfaces.get_thickness(row)
+        if thickness_values is not None and len(thickness_values) > 0:
+            thickness = float(be.to_numpy(thickness_values[0]))
+
+        semi_diameter = None
+        if isinstance(surface.aperture, RadialAperture):
+            semi_diameter = float(surface.aperture.r_max)
+        elif surface.semi_aperture is not None:
+            semi_diameter = float(be.to_numpy(surface.semi_aperture))
+
+        extra_data: dict = {}
+        if surface_type in ("even_asphere", "odd_asphere") and hasattr(
+            geometry, "coefficients"
+        ):
+            extra_data["coefficients"] = [
+                self._catalog_number(c) for c in geometry.coefficients
+            ]
+        elif surface_type == "biconic":
+            extra_data["radius_x"] = self._catalog_number(
+                getattr(geometry, "Rx", float("inf"))
+            )
+            extra_data["conic_x"] = self._catalog_number(getattr(geometry, "kx", 0.0))
+
+        material = self._get_material_data(surface)
+        if material not in ("Air", "Mirror"):
+            reference = getattr(surface.material_post, "reference", None)
+            if reference:
+                extra_data["material_catalog"] = str(reference)
+
+        return {
+            "surface_type": surface_type,
+            "radius": self._catalog_number(radius),
+            "thickness": thickness,
+            "material": material,
+            "conic": self._catalog_number(conic, default=0.0),
+            "semi_diameter": semi_diameter,
+            "comment": surface.comment or None,
+            "extra_data": extra_data,
+        }
+
+    @staticmethod
+    def _catalog_number(value, default: float = 0.0) -> float | str:  # noqa: ANN001
+        """Convert a backend value into a JSON-safe number ('inf' as string)."""
+        try:
+            number = float(be.to_numpy(value))
+        except (TypeError, ValueError):
+            return default
+        if number == float("inf"):
+            return "inf"
+        if number == float("-inf"):
+            return "-inf"
+        return number
+
     def create_surface_group(
         self,
         rows: list[int],

@@ -777,6 +777,16 @@ class OptilandConnector(QObject):
         self.catalogChanged.emit()
         return count
 
+    def get_element_catalog_draft(self, surface_index: int) -> dict:
+        """Return a stock-catalog draft for the element at *surface_index*."""
+        return self._surface_service.get_element_catalog_draft(surface_index)
+
+    def add_catalog_record(self, record_data: dict) -> str:
+        """Persist a user-authored stock-catalog record and return its id."""
+        record = self._catalog_service.add_manual_record(record_data)
+        self.catalogChanged.emit()
+        return record.catalog_id
+
     def resolve_catalog_product_url(self, catalog_id: str) -> str | None:
         """Resolve a current product webpage URL for a catalog entry."""
         return self._catalog_service.resolve_product_url(catalog_id)

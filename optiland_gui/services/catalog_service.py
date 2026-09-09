@@ -7,6 +7,7 @@ import re
 import warnings
 import zipfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
@@ -34,7 +35,7 @@ from optiland_gui.catalogs.importers.excelitas_linos import (
 from optiland_gui.catalogs.matching import build_winlens_match_map
 from optiland_gui.catalogs.search import CatalogSearchQuery, CatalogSearchService
 from optiland_gui.catalogs.storage import CatalogStorage
-from optiland_gui.catalogs.schema import CatalogLensRecord, LensSurfaceSpec
+from optiland_gui.catalogs.schema import CatalogLensRecord, CatalogSource, LensSurfaceSpec
 
 EDMUND_ZEMAX_PAGE_URL = "https://www.edmundoptics.com/products/services/zemax-catalog/"
 EDMUND_PRODUCTS_PAGE_URL = "https://www.edmundoptics.com/products/"
@@ -176,6 +177,32 @@ class CatalogService:
         imported_records = self._load_records_from_import_paths(importer, filepath)
         self._persist_manufacturer_records(importer.manufacturer, imported_records)
         return len(imported_records)
+
+    def add_manual_record(self, record_data: dict) -> CatalogLensRecord:
+        """Create and persist a user-authored stock record from *record_data*.
+
+        The manufacturer named in the data decides which local cache file the
+        record is stored in; a new manufacturer simply creates a new cache.
+
+        Returns:
+            The persisted :class:`CatalogLensRecord`.
+
+        Raises:
+            ValueError: If manufacturer, part number, or surfaces are missing.
+        """
+        record = CatalogLensRecord.from_dict(record_data)
+        if not record.manufacturer or not record.part_number:
+            raise ValueError("A manufacturer and a part number are required.")
+        if not record.surfaces:
+            raise ValueError("A stock record needs at least one optical surface.")
+        record.source = CatalogSource(
+            manufacturer=record.manufacturer,
+            source_type="user",
+            imported_at=datetime.now(UTC).isoformat(timespec="seconds"),
+            license_note="Created from the current design in the Optiland GUI.",
+        )
+        self._persist_manufacturer_records(record.manufacturer, [record])
+        return record
 
     def import_winlens_library(self, root_path: str) -> CatalogImportResult:
         """Import a WinLens SPD library tree and refresh link suggestions."""
