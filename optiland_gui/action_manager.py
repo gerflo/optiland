@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtGui import QAction, QActionGroup, QKeySequence
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 
-from .theme_manager import THEMES
+from .theme_manager import THEMES, get_theme
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QMainWindow
@@ -33,6 +33,8 @@ class ActionManager:
         self.main_window = main_window
         self.connector = connector
         self.actions: dict[str, QAction | QActionGroup] = {}
+        # Maps action name -> themed-icon base name (resolved per theme mode).
+        self._action_icons: dict[str, str] = {}
 
     def create_all_actions(self) -> None:
         """Create all actions and store them in the :attr:`actions` dictionary."""
@@ -42,6 +44,7 @@ class ActionManager:
         self._create_layout_actions()
         self._create_theme_actions()
         self._create_help_actions()
+        self.apply_theme_icons(get_theme(self.main_window.current_theme_id).mode)
 
     def _create_action(
         self,
@@ -51,6 +54,7 @@ class ActionManager:
         triggered: object | None = None,
         tooltip: str | None = None,
         checkable: bool = False,
+        icon: str | None = None,
     ) -> QAction:
         """Factory method for creating and registering a single :class:`QAction`.
 
@@ -61,6 +65,8 @@ class ActionManager:
             triggered: Optional callable to connect to the ``triggered`` signal.
             tooltip: Optional tooltip text.
             checkable: Whether the action should be checkable.
+            icon: Optional themed-icon base name, resolved to
+                ``:/icons/<mode>/<icon>.svg`` by :meth:`apply_theme_icons`.
 
         Returns:
             The newly created :class:`QAction`.
@@ -72,31 +78,55 @@ class ActionManager:
             action.triggered.connect(triggered)
         if tooltip:
             action.setToolTip(tooltip)
+        if icon:
+            self._action_icons[name] = icon
         self.actions[name] = action
         return action
+
+    def apply_theme_icons(self, mode: str) -> None:
+        """Apply themed icons to every action that declared an icon.
+
+        Called once after creation and again on each theme switch so toolbar and
+        menu icons track the active light/dark palette.
+
+        Args:
+            mode: Active theme mode (``"dark"`` or ``"light"``), selecting the
+                icon variant under ``:/icons/<mode>/``.
+        """
+        for name, icon_base in self._action_icons.items():
+            action = self.actions.get(name)
+            if isinstance(action, QAction):
+                action.setIcon(QIcon(f":/icons/{mode}/{icon_base}.svg"))
 
     def _create_file_actions(self) -> None:
         """Create all File-menu actions."""
         self._create_action(
-            "new", "&New System", QKeySequence.New, self.main_window.new_system_action
+            "new",
+            "&New System",
+            QKeySequence.New,
+            self.main_window.new_system_action,
+            icon="add",
         )
         self._create_action(
             "open",
             "&Open System...",
             QKeySequence.Open,
             self.main_window.open_system_action,
+            icon="load_settings",
         )
         self._create_action(
             "save",
             "&Save System",
             QKeySequence.Save,
             self.main_window.save_system_action,
+            icon="save_settings",
         )
         self._create_action(
             "save_as",
             "Save System &As...",
             QKeySequence.SaveAs,
             self.main_window.save_system_as_action,
+            icon="save_settings",
         )
         self._create_action(
             "import_zemax",
@@ -165,11 +195,13 @@ class ActionManager:
             "dock_all",
             "Dock All Windows",
             triggered=self.main_window.reset_windows_action,
+            icon="dash",
         )
         self._create_action(
             "reset_layout",
             "Reset Window Layout",
             triggered=self.main_window.reset_windows_action,
+            icon="refresh",
         )
         self._create_action(
             "toggle_fullscreen",
@@ -200,6 +232,7 @@ class ActionManager:
                     shortcut=f"Alt+{slot}",
                     triggered=getattr(self.main_window, f"load_layout_{slot}_slot"),
                     tooltip=f"Load Layout from Slot {slot} (Alt+{slot})",
+                    icon="dash",
                 )
             )
         self._create_action(
@@ -207,6 +240,7 @@ class ActionManager:
             "Save Current Layout",
             triggered=self.main_window.save_layout_slot,
             tooltip="Save current window layout to a chosen slot (1 to 4)",
+            icon="save_settings",
         )
         for slot, action in enumerate(load_actions, start=1):
             action.setEnabled(settings.contains(f"Layouts/Config{slot}Geometry"))

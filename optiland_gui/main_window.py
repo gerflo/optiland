@@ -22,6 +22,7 @@ from PySide6.QtCore import (
     QEvent,
     QPropertyAnimation,
     QSettings,
+    QSize,
     Qt,
     QUrl,
     Slot,
@@ -283,6 +284,10 @@ class MainWindow(FramelessWindow):
         self.quick_actions_toolbar = QToolBar("QuickActionsToolbar")
         self.quick_actions_toolbar.setObjectName("QuickActionsToolbar")
         self.quick_actions_toolbar.setMovable(True)
+        self.quick_actions_toolbar.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        self.quick_actions_toolbar.setIconSize(QSize(16, 16))
         self._populate_quick_actions_toolbar(self.quick_actions_toolbar)
         self.addToolBarBreak(Qt.TopToolBarArea)
         self.addToolBar(Qt.TopToolBarArea, self.quick_actions_toolbar)
@@ -780,6 +785,8 @@ class MainWindow(FramelessWindow):
 
         if hasattr(self, "panel_manager"):
             self.panel_manager.update_theme(theme_name)
+        if hasattr(self, "action_manager"):
+            self.action_manager.apply_theme_icons(theme_name)
         if hasattr(self, "custom_title_bar_widget"):
             self.custom_title_bar_widget.setStyleSheet(style_str)
             self.custom_title_bar_widget.update_theme_icons(theme_name)
