@@ -561,6 +561,24 @@ class TestSurfaceSagViewer:
         assert plt.gcf() is not None
         plt.close()
 
+    def test_view_beyond_sag_domain_emits_no_runtime_warning(self, set_test_backend):
+        """Regression: sampling a steep sphere past its validity domain must
+        not spam sqrt RuntimeWarnings (out-of-domain sag is NaN by design)."""
+        import warnings
+
+        lens = Optic(name="Steep Sphere")
+        lens.surfaces.add(index=0, thickness=be.inf)
+        # |radius| = 1.155 mm — the default 5 mm grid extends far past it.
+        lens.surfaces.add(index=1, radius=1.155, thickness=2)
+        lens.surfaces.add(index=2, radius=be.inf)
+
+        viewer = SurfaceSagViewer(lens)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            viewer.view(surface_index=1, max_extent=5.0)
+        assert plt.gcf() is not None
+        plt.close()
+
 
 @pytest.mark.parametrize("projection, lens_class", [("2d", Lens2D), ("3d", Lens3D)])
 def test_mangin_mirror_visualization(projection, lens_class, set_test_backend):

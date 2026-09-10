@@ -106,16 +106,21 @@ class SurfaceSagViewer(BaseViewer):
         y_grid_coords = be.linspace(-max_extent_grid, max_extent_grid, num_points_grid)
         X_grid_map, Y_grid_map = be.meshgrid(x_grid_coords, y_grid_coords)
 
-        # Calculate the 2D sag map
-        sag_map_2d = surface.geometry.sag(X_grid_map, Y_grid_map)
-
         # Create arrays for cross-sections
         y_cross_section_array = be.full_like(x_grid_coords, y_cross_section)
         x_cross_section_array = be.full_like(y_grid_coords, x_cross_section)
 
-        # Calculate sag profiles at the specified cross-sections
-        sag_profile_x = surface.geometry.sag(x_grid_coords, y_cross_section_array)
-        sag_profile_y = surface.geometry.sag(x_cross_section_array, y_grid_coords)
+        # The grid may extend beyond the geometry's validity domain (e.g. a
+        # sphere sampled past its radius); sag() yields NaN there, which
+        # renders as an empty region. Suppress the sqrt RuntimeWarnings that
+        # accompany those out-of-domain samples.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            # Calculate the 2D sag map
+            sag_map_2d = surface.geometry.sag(X_grid_map, Y_grid_map)
+            # Calculate sag profiles at the specified cross-sections
+            sag_profile_x = surface.geometry.sag(x_grid_coords, y_cross_section_array)
+            sag_profile_y = surface.geometry.sag(x_cross_section_array, y_grid_coords)
 
         # --- Plotting using make_axes_locatable for robust alignment ---
         ax_map = fig.add_subplot(111)
