@@ -108,6 +108,35 @@ class TestAddManualRecord:
         finally:
             shutil.rmtree(tmp_path.parent, ignore_errors=True)
 
+    def test_add_manual_record_skips_full_refresh(self, monkeypatch) -> None:
+        """Regression: saving one element triggered a full catalog reload and
+        the WinLens fuzzy-match rebuild (75 s on a large library), freezing
+        the GUI. A manual add must stay incremental."""
+        tmp_path = _workspace_tmp_dir()
+        try:
+            service = self._make_service(monkeypatch, tmp_path)
+            winlens_calls: list[bool] = []
+            reload_calls: list[bool] = []
+            monkeypatch.setattr(
+                service,
+                "_refresh_winlens_record_links",
+                lambda: winlens_calls.append(True),
+            )
+            monkeypatch.setattr(
+                service, "_reload_all", lambda: reload_calls.append(True)
+            )
+
+            record = service.add_manual_record(_sample_record_data())
+
+            assert winlens_calls == []
+            assert reload_calls == []
+            # The record is still immediately visible in memory and on disk.
+            assert service.get_record(record.catalog_id) is not None
+            assert "MyVendor" in service.get_manufacturers()
+            assert (tmp_path / "catalogs" / "myvendor.json").exists()
+        finally:
+            shutil.rmtree(tmp_path.parent, ignore_errors=True)
+
     @pytest.mark.parametrize(
         "override",
         [

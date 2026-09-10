@@ -201,7 +201,9 @@ class CatalogService:
             imported_at=datetime.now(UTC).isoformat(timespec="seconds"),
             license_note="Created from the current design in the Optiland GUI.",
         )
-        self._persist_manufacturer_records(record.manufacturer, [record])
+        self._persist_manufacturer_records(
+            record.manufacturer, [record], full_refresh=False
+        )
         return record
 
     def import_winlens_library(self, root_path: str) -> CatalogImportResult:
@@ -473,8 +475,20 @@ class CatalogService:
         self,
         manufacturer: str,
         imported_records: list[CatalogLensRecord],
+        *,
+        full_refresh: bool = True,
     ) -> None:
-        """Merge *imported_records* into local storage for *manufacturer*."""
+        """Merge *imported_records* into local storage for *manufacturer*.
+
+        Args:
+            manufacturer: Manufacturer whose cache file is written.
+            imported_records: Records to merge into that cache.
+            full_refresh: When True (bulk imports), reload every cache file
+                and rebuild the WinLens link suggestions. Pass False for
+                small in-session additions: the WinLens fuzzy matching alone
+                takes over a minute on a large library, which would freeze
+                the GUI for a single added record.
+        """
         merged_records = {
             record.catalog_id: record
             for record in self._records
@@ -483,18 +497,28 @@ class CatalogService:
         for record in imported_records:
             merged_records[record.catalog_id] = record
 
-        self._storage.save_records(
-            manufacturer,
-            sorted(
-                merged_records.values(),
-                key=lambda item: (
-                    item.part_number.casefold(),
-                    item.product_name.casefold(),
-                ),
+        sorted_records = sorted(
+            merged_records.values(),
+            key=lambda item: (
+                item.part_number.casefold(),
+                item.product_name.casefold(),
             ),
         )
-        self._reload_all()
-        self._refresh_winlens_record_links()
+        self._storage.save_records(manufacturer, sorted_records)
+        if full_refresh:
+            self._reload_all()
+            self._refresh_winlens_record_links()
+        else:
+            # Splice the merged manufacturer records into the in-memory list
+            # and rebuild the (cheap) search indexes only. The persisted
+            # WinLens link suggestions stay as they are; they are rebuilt on
+            # the next bulk import.
+            self._records = [
+                record
+                for record in self._records
+                if record.manufacturer.casefold() != manufacturer.casefold()
+            ] + sorted_records
+            self._rebuild_record_indexes()
 
     def _merge_excelitas_records(
         self,
