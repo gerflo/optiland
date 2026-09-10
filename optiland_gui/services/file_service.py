@@ -164,6 +164,7 @@ class FileService:
             else:
                 with open(filepath, encoding="utf-8") as f:
                     data = json.load(f, object_hook=json_inf_nan_hook)
+                data, fixes_applied = self._validate_design_data(data, filepath)
                 self._connector._undo_redo_manager.clear_stacks()
                 self._connector._optic = Optic.from_dict(data)
                 # Restore (or clear) GUI-only state such as disabled
@@ -175,6 +176,10 @@ class FileService:
             )
             if extension.lower() == ".zmx":
                 self._connector.mark_current_state_requires_save_as()
+            elif fixes_applied:
+                # The loaded design differs from the file on disk now;
+                # saving persists the corrections.
+                self._connector.mark_current_state_requires_save_as()
             else:
                 self._connector.mark_current_state_clean()
             self._connector.opticLoaded.emit()
@@ -182,6 +187,25 @@ class FileService:
         except Exception as e:
             self._toast(f"Load failed: {e}", "error", sub=filepath)
             self.new_system()
+
+    def _validate_design_data(self, data: dict, filepath: str) -> tuple[dict, bool]:
+        """Run the design-validation hook, returning (data, fixes_applied).
+
+        The hook is installed by the main window (it shows the correction
+        dialog). Without a hook, or if the hook fails, the data is loaded
+        unchanged.
+        """
+        handler = getattr(self._connector, "design_validation_handler", None)
+        if handler is None:
+            return data, False
+        try:
+            result = handler(data, filepath)
+        except Exception as exc:  # noqa: BLE001 - validation must never block loading
+            self._toast(f"Design validation failed: {exc}", "warning")
+            return data, False
+        if isinstance(result, tuple) and len(result) == 2:
+            return result
+        return data, False
 
     def save(self, filepath: str) -> None:
         """Save the current optical system to *filepath* as Optiland JSON.

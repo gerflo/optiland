@@ -98,6 +98,10 @@ class OptilandConnector(QObject):
         self._optic = Optic("Default System")
         self._undo_redo_manager = UndoRedoManager(self)
         self._disabled_surface_indices: set[int] = set()
+        # Optional hook set by the main window: called with (data, filepath)
+        # before a loaded design dict is turned into an Optic; returns
+        # (possibly fixed data, fixes_applied). None disables validation.
+        self.design_validation_handler = None
 
         # Instantiate services — order does not matter; each receives *self*.
         self._file_service = FileService(self)

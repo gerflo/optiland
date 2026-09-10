@@ -236,6 +236,7 @@ class MainWindow(FramelessWindow):
         saved_slot_index = self.settings.value("Layouts/NextSaveSlot", 1, type=int)
         self.next_save_slot_index = min(max(saved_slot_index, 1), self.MAX_LAYOUT_SLOTS)
         self.connector = OptilandConnector()
+        self.connector.design_validation_handler = self._handle_design_validation
         self.iface = self.OptilandInterface(self)
         self.panel_manager = PanelManager(self, self.connector)
         self.action_manager = ActionManager(self, self.connector)
@@ -992,6 +993,30 @@ class MainWindow(FramelessWindow):
         logger.debug("New System action triggered")
 
     @Slot()
+    def _handle_design_validation(self, data: dict, filepath: str):
+        """Validate a design dict on load and offer corrections in a dialog.
+
+        Returns:
+            ``(data, fixes_applied)`` — possibly with selected fixes applied.
+        """
+        from .design_validation import apply_design_fixes, validate_design
+        from .widgets.design_validation_dialog import DesignValidationDialog
+
+        findings = validate_design(data)
+        if not findings:
+            return data, False
+        dialog = DesignValidationDialog(findings, filepath, parent=self)
+        if not dialog.exec() or not dialog.selected_findings:
+            return data, False
+        fixed = apply_design_fixes(data, dialog.selected_findings)
+        if self.toast_manager is not None:
+            self.toast_manager.notify(
+                f"{len(dialog.selected_findings)} correction(s) applied — "
+                "save the system to persist them.",
+                "info",
+            )
+        return fixed, True
+
     def open_system_action(self) -> None:
         """Slot for the *Open System* action — shows a file chooser dialog."""
         filepath, _ = QFileDialog.getOpenFileName(
