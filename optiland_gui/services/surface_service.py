@@ -10,6 +10,8 @@ from __future__ import annotations
 import ast
 import copy
 import logging
+import math
+import re
 import uuid
 from contextlib import suppress
 
@@ -812,10 +814,15 @@ class SurfaceService:
 
                 material_name = str(spec.get("material", "Air"))
                 material_reference = str(spec.get("material_reference", "")).strip()
-                if (
-                    material_reference
-                    and material_name.strip().lower() not in {"air", "mirror"}
-                ):
+                normalized_material = material_name.strip().lower()
+                ideal_index = self._parse_ideal_index(material_name)
+                if normalized_material in {"air", "mirror"}:
+                    # The factory's mirror special-casing compares against the
+                    # exact lowercase string, so normalize here.
+                    material_spec = normalized_material
+                elif ideal_index is not None:
+                    material_spec = IdealMaterial(n=ideal_index)
+                elif material_reference:
                     safe_material_name = OptilandMaterial.resolve_winlens_safe_name(
                         material_name,
                         material_reference,
@@ -870,6 +877,24 @@ class SurfaceService:
         except Exception:
             self._connector._restore_optic_state(old_state)
             raise
+
+    @staticmethod
+    def _parse_ideal_index(material_name: str) -> float | None:
+        """Parse an ideal-index material label into its refractive index.
+
+        Accepts the GUI's display label (``"Ideal n=1.6778"``) and bare
+        numeric strings (``"1.5"``), matching what the LDE material column
+        accepts. Returns None for anything else (catalog glass names etc.).
+        """
+        text = str(material_name).strip()
+        match = re.match(r"(?i)^ideal\s*n\s*=\s*([0-9]*\.?[0-9]+)$", text)
+        if match:
+            return float(match.group(1))
+        try:
+            value = float(text)
+        except ValueError:
+            return None
+        return value if math.isfinite(value) and value > 0 else None
 
     def _normalize_insert_value(self, value):  # noqa: ANN001
         """Convert serialized insertion values into geometry-factory-friendly types."""
@@ -1066,6 +1091,15 @@ class SurfaceService:
             extra_data["conic_x"] = self._catalog_number(getattr(geometry, "kx", 0.0))
 
         material = self._get_material_data(surface)
+        if material.startswith("Ideal n="):
+            # Re-derive at full precision; the display label rounds to 4
+            # decimals, which would subtly change the index on re-insert.
+            n_value = float(
+                be.to_numpy(
+                    surface.material_post.n(self._get_safe_primary_wavelength_value())
+                )
+            )
+            material = f"Ideal n={n_value:.9g}"
         if material not in ("Air", "Mirror"):
             reference = getattr(surface.material_post, "reference", None)
             if reference:

@@ -234,3 +234,130 @@ class TestAddToCatalogDialog:
 
         assert dialog.saved_catalog_id is None
         assert dialog.result() != dialog.DialogCode.Accepted
+
+
+class TestIdealMaterialRoundtrip:
+    """Regression: a cataloged element built from IdealMaterial surfaces
+    (e.g. a schematic eye) failed to insert with 'No matches found for
+    material Ideal n=...', because the display label went through the
+    glass-catalog lookup instead of being recognized as an ideal index.
+    """
+
+    def _make_mouse_eye_optic(self):
+        import optiland.backend as be
+        from optiland.materials import IdealMaterial
+        from optiland.optic import Optic
+
+        optic = Optic()
+        optic.surfaces.add(index=0, radius=be.inf, thickness=be.inf)
+        optic.surfaces.add(
+            index=1, radius=1.155, thickness=2.032, material=IdealMaterial(n=1.6778)
+        )
+        optic.surfaces.add(
+            index=2, radius=-1.248, thickness=0.452, material=IdealMaterial(n=1.3376),
+            is_stop=True,
+        )
+        optic.surfaces.add(index=3, radius=be.inf, thickness=0.0)
+        optic.set_aperture(aperture_type="EPD", value=2.0)
+        optic.fields.set_type("angle")
+        optic.fields.add(y=0.0)
+        optic.wavelengths.add(value=0.55, is_primary=True)
+        optic.updater.update()
+        return optic
+
+    def _make_service(self, optic):
+        from optiland_gui.services.surface_service import SurfaceService
+
+        connector = MagicMock()
+        connector._optic = optic
+        connector.DEFAULT_WAVELENGTH_UM = 0.55
+        connector._capture_optic_state.return_value = {}
+        return SurfaceService(connector)
+
+    def test_extracted_ideal_material_reinserts(self, qapp) -> None:
+        import pytest as _pytest
+
+        from optiland.materials import IdealMaterial
+        from optiland_gui.catalogs.insertion import record_to_insert_specs
+        from optiland_gui.catalogs.schema import CatalogLensRecord
+
+        source = self._make_mouse_eye_optic()
+        draft = self._make_service(source).get_element_catalog_draft(1)
+        assert draft["surfaces"][0]["material"].startswith("Ideal n=")
+
+        record = CatalogLensRecord.from_dict(
+            {
+                "manufacturer": "Imedos",
+                "part_number": "xx-001",
+                "product_name": "Mouse model",
+                "surfaces": draft["surfaces"],
+                "stop_surface_offset": draft["stop_surface_offset"],
+            }
+        )
+        specs, stop_offset = record_to_insert_specs(record)
+
+        import optiland.backend as be
+        from optiland.optic import Optic
+
+        target = Optic()
+        target.surfaces.add(index=0, radius=be.inf, thickness=be.inf)
+        target.surfaces.add(index=1, radius=be.inf, thickness=10.0, is_stop=True)
+        target.surfaces.add(index=2, radius=be.inf, thickness=0.0)
+        target.set_aperture(aperture_type="EPD", value=2.0)
+        target.fields.set_type("angle")
+        target.fields.add(y=0.0)
+        target.wavelengths.add(value=0.55, is_primary=True)
+        target.updater.update()
+
+        service = self._make_service(target)
+        service.insert_surface_sequence(2, specs, stop_offset, "xx-001", "stock_part")
+
+        assert target.surfaces.num_surfaces == 5
+        inserted = target.surfaces.surfaces[2]
+        assert isinstance(inserted.material_post, IdealMaterial)
+        n = float(inserted.material_post.n(0.55))
+        assert n == _pytest.approx(1.6778, abs=1e-6)
+
+    def test_parse_ideal_index_label_variants(self, qapp) -> None:
+        from optiland_gui.services.surface_service import SurfaceService
+
+        parse = SurfaceService._parse_ideal_index
+        assert parse("Ideal n=1.6778") == pytest.approx(1.6778)
+        assert parse("ideal n = 1.5") == pytest.approx(1.5)
+        assert parse("1.5") == pytest.approx(1.5)
+        assert parse("N-BK7") is None
+        assert parse("Mirror") is None
+        assert parse("inf") is None
+        assert parse("-1.5") is None
+
+    def test_mirror_material_is_normalized_for_insertion(self, qapp) -> None:
+        """The factory's mirror special-case compares against exact lowercase."""
+        import optiland.backend as be
+        from optiland.optic import Optic
+
+        target = Optic()
+        target.surfaces.add(index=0, radius=be.inf, thickness=be.inf)
+        target.surfaces.add(index=1, radius=be.inf, thickness=10.0, is_stop=True)
+        target.surfaces.add(index=2, radius=be.inf, thickness=0.0)
+        target.set_aperture(aperture_type="EPD", value=2.0)
+        target.fields.set_type("angle")
+        target.fields.add(y=0.0)
+        target.wavelengths.add(value=0.55, is_primary=True)
+        target.updater.update()
+
+        service = self._make_service(target)
+        specs = [
+            {
+                "surface_type": "standard",
+                "radius": -100.0,
+                "thickness": -10.0,
+                "material": "Mirror",
+                "conic": 0.0,
+                "semi_diameter": 5.0,
+                "comment": "Fold mirror",
+            }
+        ]
+        service.insert_surface_sequence(2, specs, None, "mirror", "stock_part")
+
+        inserted = target.surfaces.surfaces[2]
+        assert inserted.interaction_model.is_reflective
