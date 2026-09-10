@@ -99,21 +99,28 @@ class Lens2D:
         ys = be.array([p[1] for p in pts])
         r = be.sqrt(xs**2 + ys**2)
 
-        # Surface 1 clamped sag
-        if e1 > 0:
-            scale1 = be.where(r > e1, e1 / be.where(r == 0, 1.0, r), 1.0)
-            x1_c, y1_c = xs * scale1, ys * scale1
-        else:
-            x1_c, y1_c = xs, ys
-        z1_loc = surf1.surf.geometry.sag(x1_c, y1_c)
+        # A surface with no extent of its own is sampled over the neighbour's
+        # full extent, which can reach past its geometric validity domain (a
+        # steep surface in a heavily vignetted system). sag() is NaN there,
+        # which finite_mask below drops on purpose -- suppress the sqrt
+        # RuntimeWarnings that come with those out-of-domain samples.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            # Surface 1 clamped sag
+            if e1 > 0:
+                scale1 = be.where(r > e1, e1 / be.where(r == 0, 1.0, r), 1.0)
+                x1_c, y1_c = xs * scale1, ys * scale1
+            else:
+                x1_c, y1_c = xs, ys
+            z1_loc = surf1.surf.geometry.sag(x1_c, y1_c)
 
-        # Surface 2 clamped sag
-        if e2 > 0:
-            scale2 = be.where(r > e2, e2 / be.where(r == 0, 1.0, r), 1.0)
-            x2_c, y2_c = xs * scale2, ys * scale2
-        else:
-            x2_c, y2_c = xs, ys
-        z2_loc = surf2.surf.geometry.sag(x2_c, y2_c)
+            # Surface 2 clamped sag
+            if e2 > 0:
+                scale2 = be.where(r > e2, e2 / be.where(r == 0, 1.0, r), 1.0)
+                x2_c, y2_c = xs * scale2, ys * scale2
+            else:
+                x2_c, y2_c = xs, ys
+            z2_loc = surf2.surf.geometry.sag(x2_c, y2_c)
 
         # Transform surface 2 points into global coordinates, then into surface 1 CS
         x2_g, y2_g, z2_g = transform(xs, ys, z2_loc, surf2.surf, is_global=False)

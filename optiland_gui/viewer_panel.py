@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+import warnings
 
 import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -672,6 +673,9 @@ class MatplotlibViewer(QWidget):
 
         self._is_plotting = False
         self._user_initiated_view_change = False
+        # Layout warnings already reported to the user, so a standing
+        # condition is not re-announced on every repaint.
+        self._reported_drawing_warnings: set[str] = set()
 
         self.toolbar = CustomMatplotlibToolbar(self.canvas, self.toolbar_container)
         self.toolbar.on_view_limits_changed = self._handle_toolbar_view_limits_changed
@@ -953,6 +957,27 @@ class MatplotlibViewer(QWidget):
             toast_manager.notify(message, "warning")
         else:
             logger.warning(message)
+
+    def _report_drawing_warnings(self, caught: list) -> None:
+        """Surface layout warnings in the GUI, once per distinct message.
+
+        The 2D layout is redrawn on every edit, so a standing condition
+        (such as overlapping lens surfaces) would otherwise print on every
+        repaint. Re-notify only when the set of messages actually changes,
+        so a newly introduced problem is still reported.
+        """
+        messages = {str(entry.message).strip() for entry in caught}
+        messages.discard("")
+        if messages == getattr(self, "_reported_drawing_warnings", set()):
+            return
+        new_messages = messages - getattr(self, "_reported_drawing_warnings", set())
+        self._reported_drawing_warnings = messages
+        toast_manager = getattr(self.connector, "toast_manager", None)
+        for message in sorted(new_messages):
+            if toast_manager is not None:
+                toast_manager.notify(message, "warning")
+            else:
+                logger.warning(message)
 
     def on_ax_limit_changed(self, ax):
         """Callback for when axis limits change, to detect user interaction."""
@@ -2037,11 +2062,17 @@ class MatplotlibViewer(QWidget):
                         if "No stop surface found." not in str(exc):
                             raise
                         self._notify_missing_stop_surface()
-                    system_plotter.plot(
-                        self.ax, theme=theme,
-                        hide_internal_surfaces=hide_internal,
-                        show_apertures=show_apertures,
-                    )
+                    # The overlap check warns per drawn element on every
+                    # repaint; capture it here so the user is told once in
+                    # the GUI instead of the console filling up.
+                    with warnings.catch_warnings(record=True) as drawing_warnings:
+                        warnings.simplefilter("always")
+                        system_plotter.plot(
+                            self.ax, theme=theme,
+                            hide_internal_surfaces=hide_internal,
+                            show_apertures=show_apertures,
+                        )
+                    self._report_drawing_warnings(drawing_warnings)
                     self.ax.set_title(
                         f"System: {optic.name} (2D)",
                         color=matplotlib.rcParams["text.color"],

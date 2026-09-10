@@ -1878,6 +1878,7 @@ class LensEditor(QWidget):
 
     @Slot()
     def load_data(self):
+        self._close_active_cell_editor()
         self.tableWidget.blockSignals(True)
         self._prune_group_expansion_state()
         self._prune_disabled_state()
@@ -1901,6 +1902,28 @@ class LensEditor(QWidget):
             -1,
             -1,
         )
+
+    def _close_active_cell_editor(self) -> None:
+        """Close an in-progress cell editor before the table is rebuilt.
+
+        Rebuilding deletes the items an open editor is bound to. Qt then
+        tries to commit through that orphaned editor, which it reports as
+        "commitData called with an editor that does not belong to this
+        view" followed by "edit: editing failed". The optic is the source
+        of truth here, and the rebuild repaints the committed value, so the
+        in-progress edit is discarded rather than committed into a table
+        that is about to disappear.
+        """
+        table = self.tableWidget
+        if table.state() != QAbstractItemView.State.EditingState:
+            return
+        editor = table.viewport().focusWidget()
+        delegate = table.itemDelegate()
+        if editor is not None and delegate is not None:
+            delegate.closeEditor.emit(
+                editor, QAbstractItemDelegate.EndEditHint.NoHint
+            )
+        table.setState(QAbstractItemView.State.NoState)
 
     def _prune_group_expansion_state(self) -> None:
         """Drop expansion state entries that no longer exist in the optic."""
