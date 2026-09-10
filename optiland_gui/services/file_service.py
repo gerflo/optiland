@@ -134,6 +134,7 @@ class FileService:
         """
         self._connector._undo_redo_manager.clear_stacks()
         self._connector._optic = Optic("New Untitled System")
+        self._connector.restore_gui_state({})
         self._connector._initialize_optic_structure(
             self._connector._optic, is_specific_new_system=True
         )
@@ -158,12 +159,16 @@ class FileService:
             if extension.lower() == ".zmx":
                 self._connector._undo_redo_manager.clear_stacks()
                 self._connector._optic = load_zemax_file(filepath)
+                self._connector.restore_gui_state({})
                 self._current_filepath = None
             else:
                 with open(filepath, encoding="utf-8") as f:
                     data = json.load(f, object_hook=json_inf_nan_hook)
                 self._connector._undo_redo_manager.clear_stacks()
                 self._connector._optic = Optic.from_dict(data)
+                # Restore (or clear) GUI-only state such as disabled
+                # surfaces; never inherit it from the previous session.
+                self._connector.restore_gui_state(data)
                 self._current_filepath = filepath
             self._connector._initialize_optic_structure(
                 self._connector._optic, is_specific_new_system=False
@@ -188,6 +193,8 @@ class FileService:
             filepath: Absolute path to write to.
         """
         try:
+            # Let panels (e.g. System Properties) commit pending edits first.
+            self._connector.aboutToSave.emit()
             data = self._connector._capture_optic_state()
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, cls=SpecialFloatEncoder)
@@ -211,6 +218,7 @@ class FileService:
             optic_data = optic_instance.to_dict()
             self._connector._undo_redo_manager.clear_stacks()
             self._connector._optic = Optic.from_dict(optic_data)
+            self._connector.restore_gui_state({})
             self._current_filepath = None
             self._connector._initialize_optic_structure(self._connector._optic)
             self._connector.mark_current_state_requires_save_as()
@@ -232,6 +240,7 @@ class FileService:
         try:
             self._connector._undo_redo_manager.clear_stacks()
             self._connector._optic = load_zemax_file(filepath)
+            self._connector.restore_gui_state({})
             self._current_filepath = None
             self._connector._initialize_optic_structure(
                 self._connector._optic, is_specific_new_system=False
@@ -254,6 +263,7 @@ class FileService:
         try:
             self._connector._undo_redo_manager.clear_stacks()
             self._connector._optic = load_codev_file(filepath)
+            self._connector.restore_gui_state({})
             self._current_filepath = None
             self._connector._initialize_optic_structure(
                 self._connector._optic, is_specific_new_system=False

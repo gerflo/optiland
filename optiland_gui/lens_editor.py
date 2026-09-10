@@ -1962,13 +1962,7 @@ class LensEditor(QWidget):
     def _set_element_disabled(self, surface_index: int, disabled: bool) -> None:
         group_rows = self.connector.get_group_rows(surface_index)
         targets = group_rows if group_rows else [surface_index]
-        dis = self.connector.get_disabled_surface_indices()
-        for idx in targets:
-            if disabled:
-                dis.add(idx)
-            else:
-                dis.discard(idx)
-        self.connector.opticChanged.emit()
+        self.connector.set_surfaces_disabled(targets, disabled)
 
     def _group_infos(self) -> dict[str, dict[str, object]]:
         """Collect grouped-row metadata keyed by group id."""

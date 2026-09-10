@@ -365,6 +365,9 @@ class MetadataEditor(PropertyEditorBase):
         layout.addRow(self.btnApply)
 
         self.btnApply.clicked.connect(self._apply_changes)
+        # Commit pending (not yet applied) edits when the system is saved,
+        # so a typed description is never silently lost on Ctrl+S.
+        self.connector.aboutToSave.connect(self._apply_changes)
 
     @Slot()
     def _apply_changes(self) -> None:

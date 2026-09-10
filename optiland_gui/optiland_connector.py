@@ -56,6 +56,9 @@ class OptilandConnector(QObject):
     # ------------------------------------------------------------------
     opticLoaded = Signal()
     opticChanged = Signal()
+    #: Emitted synchronously right before the optic state is serialized for
+    #: saving, so panels can commit pending (not yet applied) edits.
+    aboutToSave = Signal()
     modifiedStateChanged = Signal(bool)
     surfaceDataChanged = Signal(int, int, object)
     surfaceAdded = Signal(int)
@@ -205,10 +208,27 @@ class OptilandConnector(QObject):
             surface_index: Index of the surface to toggle.
             disabled: ``True`` to disable, ``False`` to re-enable.
         """
-        if disabled:
-            self._disabled_surface_indices.add(surface_index)
-        else:
-            self._disabled_surface_indices.discard(surface_index)
+        self.set_surfaces_disabled([surface_index], disabled)
+
+    def set_surfaces_disabled(self, surface_indices, disabled: bool) -> None:  # noqa: ANN001
+        """Toggle several surfaces as one undoable, tracked operation.
+
+        Disabled state is part of the captured optic state, so it is saved
+        to file, restored by undo/redo, and marks the design as modified.
+        """
+        old_state = self._capture_optic_state()
+        changed = False
+        for idx in surface_indices:
+            if disabled and idx not in self._disabled_surface_indices:
+                self._disabled_surface_indices.add(idx)
+                changed = True
+            elif not disabled and idx in self._disabled_surface_indices:
+                self._disabled_surface_indices.discard(idx)
+                changed = True
+        if not changed:
+            return
+        self._undo_redo_manager.add_state(old_state)
+        self.set_modified(True)
         self.opticChanged.emit()
 
     def prune_disabled_state(self) -> None:
@@ -362,7 +382,28 @@ class OptilandConnector(QObject):
         ):
             self._optic.wavelengths.wavelengths[0].is_primary = True
         self._optic.updater.update()
-        return self._optic.to_dict()
+        data = self._optic.to_dict()
+        # GUI-only state rides along with the optic state so it is saved to
+        # file, restored by undo/redo, and part of the modified-flag diff.
+        # Optic.from_dict ignores the extra key, so files stay compatible.
+        data["gui"] = {
+            "disabled_surfaces": sorted(self._disabled_surface_indices),
+        }
+        return data
+
+    def restore_gui_state(self, state_data: dict) -> None:
+        """Apply the GUI-only portion of a captured/loaded state dict.
+
+        Missing or malformed GUI state clears it, so loading a file that
+        carries no GUI state never inherits stale session state.
+        """
+        gui_state = state_data.get("gui")
+        raw = gui_state.get("disabled_surfaces", []) if isinstance(gui_state, dict) else []
+        try:
+            self._disabled_surface_indices = {int(i) for i in raw}
+        except (TypeError, ValueError):
+            self._disabled_surface_indices = set()
+        self.prune_disabled_state()
 
     def _restore_optic_state(self, state_data: dict) -> None:
         """Restore the optic from a previously captured state dict.
@@ -371,6 +412,7 @@ class OptilandConnector(QObject):
             state_data: A dict returned by :meth:`_capture_optic_state`.
         """
         self._optic = Optic.from_dict(state_data)
+        self.restore_gui_state(state_data)
         self._initialize_optic_structure(self._optic, is_specific_new_system=False)
         self.opticLoaded.emit()
 

@@ -154,8 +154,16 @@ class SystemService:
         optic = self._connector._optic
         if optic is None:
             return
-        optic.name = name or None
-        optic.description = description or None
+        new_name = name or None
+        new_description = description or None
+        if (
+            getattr(optic, "name", None) == new_name
+            and getattr(optic, "description", None) == new_description
+        ):
+            return
+        optic.name = new_name
+        optic.description = new_description
+        self._connector.set_modified(True)
         self._connector.opticChanged.emit()
 
     def get_field_types(self) -> list[tuple[str, str]]:
