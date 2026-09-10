@@ -17,6 +17,10 @@ from contextlib import suppress
 
 import optiland.backend as be
 from optiland.geometries.biconic import BiconicGeometry
+from optiland.interactions import (
+    RefractiveReflectiveModel,
+    ThinLensInteractionModel,
+)
 from optiland.materials import IdealMaterial
 from optiland.materials import Material as OptilandMaterial
 from optiland.physical_apertures import DifferenceAperture, RadialAperture
@@ -209,6 +213,47 @@ class SurfaceService:
         optic.updater.update()
         return default
 
+    @staticmethod
+    def _parse_user_float(value: str) -> float:
+        """Parse a user-entered number, accepting a comma decimal separator.
+
+        A single comma without a dot is treated as a decimal comma
+        (``"97,1"`` -> 97.1); commas alongside a dot are treated as
+        thousands separators (``"1,234.5"`` -> 1234.5).
+        """
+        text = str(value).strip().replace(" ", "").replace(" ", "")
+        if "," in text:
+            if "." not in text and text.count(",") == 1:
+                text = text.replace(",", ".")
+            else:
+                text = text.replace(",", "")
+        return float(text)
+
+    @staticmethod
+    def _get_paraxial_focal_length(surface: object) -> float:
+        """Focal length of a paraxial surface, wherever it lives.
+
+        Paraxial surfaces built by the factory (e.g. loaded from file) carry
+        it on their ThinLensInteractionModel; surfaces converted in-session
+        by older code may still have a loose ``surface.f`` attribute.
+        """
+        model_f = getattr(getattr(surface, "interaction_model", None), "f", None)
+        if model_f is None:
+            model_f = getattr(surface, "f", float("inf"))
+        try:
+            return float(be.to_numpy(model_f))
+        except (TypeError, ValueError):
+            return float("inf")
+
+    @staticmethod
+    def _set_paraxial_focal_length(surface: object, value: float) -> None:
+        """Write a paraxial focal length where the ray trace actually reads it."""
+        model = getattr(surface, "interaction_model", None)
+        if isinstance(model, ThinLensInteractionModel):
+            model.f = be.array(value)
+        else:
+            surface.f = value
+
     def _get_material_data(self, surface: object) -> str:
         """Return the material label for *surface*.
 
@@ -253,7 +298,7 @@ class SurfaceService:
         geo = surface.geometry
         val = float("inf")
         if surface.surface_type == "paraxial":
-            val = surface.f
+            val = self._get_paraxial_focal_length(surface)
         elif surface.surface_type == "toroidal":
             val = getattr(geo, "R_yz", val)
         elif surface.surface_type == "biconic":
@@ -362,7 +407,7 @@ class SurfaceService:
                 surface.material_post = IdealMaterial(n=1.0)
             else:
                 try:
-                    n_val = float(new_material_name)
+                    n_val = self._parse_user_float(new_material_name)
                     surface.material_post = IdealMaterial(n=n_val)
                 except ValueError:
                     surface.material_post = OptilandMaterial(name=str(value).strip())
@@ -379,7 +424,7 @@ class SurfaceService:
         optic = self._connector._optic
         row = optic.surfaces.surfaces.index(surface)
         if row < self.get_surface_count() - 1:
-            optic.updater.set_thickness(float(value), row)
+            optic.updater.set_thickness(self._parse_user_float(value), row)
 
     def _set_semi_diameter_data(self, surface: object, value: str) -> None:
         """Set the semi-diameter aperture on *surface*.
@@ -389,7 +434,7 @@ class SurfaceService:
             value: Semi-diameter as a string-encoded float.
         """
         try:
-            surface.aperture = configure_aperture(float(value) * 2.0)
+            surface.aperture = configure_aperture(self._parse_user_float(value) * 2.0)
         except (ValueError, TypeError):
             surface.aperture = None
 
@@ -483,9 +528,9 @@ class SurfaceService:
             surface: Target surface object.
             value: New radius value as a string-encoded float.
         """
-        val = float(value)
+        val = self._parse_user_float(value)
         if surface.surface_type == "paraxial":
-            surface.f = val
+            self._set_paraxial_focal_length(surface, val)
         elif surface.surface_type == "toroidal":
             surface.geometry.R_yz = be.array(val)
             surface.geometry.c_yz = 1.0 / val if val != 0 else 0.0
@@ -504,7 +549,7 @@ class SurfaceService:
             surface: Target surface object.
             value: New conic value as a string-encoded float.
         """
-        val = float(value)
+        val = self._parse_user_float(value)
         if surface.surface_type == "paraxial":
             return
         if surface.surface_type == "toroidal":
@@ -609,8 +654,26 @@ class SurfaceService:
 
             surface.geometry = new_geo
             surface.surface_type = new_type
-            if new_type == "paraxial" and not hasattr(surface, "f"):
-                surface.f = float("inf")
+            # Keep the interaction model in sync with the type: the ray trace
+            # reads a paraxial focal length from a ThinLensInteractionModel,
+            # not from a loose `surface.f` attribute.
+            old_model = getattr(surface, "interaction_model", None)
+            if new_type == "paraxial":
+                if not isinstance(old_model, ThinLensInteractionModel):
+                    surface.interaction_model = ThinLensInteractionModel(
+                        parent_surface=surface,
+                        focal_length=getattr(surface, "f", float("inf")),
+                        is_reflective=False,
+                        coating=getattr(old_model, "coating", None),
+                        bsdf=getattr(old_model, "bsdf", None),
+                    )
+            elif isinstance(old_model, ThinLensInteractionModel):
+                surface.interaction_model = RefractiveReflectiveModel(
+                    parent_surface=surface,
+                    is_reflective=False,
+                    coating=getattr(old_model, "coating", None),
+                    bsdf=getattr(old_model, "bsdf", None),
+                )
 
             self._connector._optic.updater.update()
             self._connector._undo_redo_manager.add_state(old_state)
