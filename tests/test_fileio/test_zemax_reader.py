@@ -125,6 +125,21 @@ class TestZemaxDataParser:
         mat = self.parser._current_surf_data["material"]
         assert isinstance(mat, Material)
 
+    def test_read_glass_prefers_declared_catalog_without_nd_vd(self):
+        """Stock-lens ZMX files declare GCAT but write GLAS without Nd/Vd.
+
+        Regression: the bare fallback lookup took whichever catalog sorted
+        first, so Thorlabs' SF10 (GCAT SCHOTT ...) resolved to N-SF10 or, with
+        a WinLens import present, to Sumita's SF10.
+        """
+        self.parser._read_glass_catalog(
+            ["GCAT", "SCHOTT", "INFRARED", "MISC", "HIKARI"]
+        )
+        self.parser._read_glass(["GLAS", "SF10", "0", "0"])
+        material = self.parser._current_surf_data["material"]
+        assert isinstance(material, Material)
+        assert material.material_data["filename"] == "glass/schott/SF10.yml"
+
     def test_read_stop(self):
         self.parser._read_stop([])
         assert self.parser._current_surf_data["is_stop"]

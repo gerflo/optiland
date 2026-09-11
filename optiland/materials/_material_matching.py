@@ -250,4 +250,14 @@ def _find_matches(
         axis=1,
     )
 
+    # A query that names a material exactly ("SF10") must not tie with rows
+    # that merely belong to a refractiveindex.info shelf of that name: the
+    # "SF10" shelf lists N-SF10, J-SF10, ZF4 and E-FD10, none of which is SF10.
+    # Keeping those rows made "SF10" ambiguous even inside one catalog.
+    name_exact = (dfi["name"].str.lower() == name_lower) | (
+        dfi["filename_no_ext"].str.lower() == name_lower
+    )
+    if name_exact.any():
+        dfi = dfi[name_exact]
+
     return dfi.sort_values("similarity_score").reset_index(drop=True)

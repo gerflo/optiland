@@ -520,6 +520,9 @@ def _extract_surface_specs(
         radius, conic, extra_data = _extract_geometry_data(surface)
         thickness = _extract_thickness(optic, surface_index)
         material = _material_name(surface)
+        material_catalog = _material_catalog(surface)
+        if material_catalog:
+            extra_data["material_catalog"] = material_catalog
         semi_diameter = _extract_semi_diameter(surface)
         if semi_diameter is None and fallback_semi_diameters:
             semi_diameter = fallback_semi_diameters.get(surface_index)
@@ -600,6 +603,26 @@ def _material_name(surface) -> str:  # noqa: ANN001
             else f"{index:.4f}"
         )
     return str(getattr(material, "name", "Air"))
+
+
+def _material_catalog(surface) -> str | None:  # noqa: ANN001
+    """Return the manufacturer catalog the Zemax reader resolved the glass in.
+
+    Only set when the reader disambiguated the glass (declared GCAT catalogs
+    or an Nd/Vd match). Inserting the record later then resolves the same
+    glass instead of repeating a bare name lookup, which can land in another
+    manufacturer's catalog (e.g. an imported Sumita SF10 for a Schott design).
+    """
+    if surface.interaction_model.is_reflective:
+        return None
+    material = surface.material_post
+    if isinstance(material, IdealMaterial):
+        return None
+    catalog = getattr(material, "_catalog", None) or getattr(
+        material, "reference", None
+    )
+    catalog = str(catalog or "").strip()
+    return catalog or None
 
 
 def _extract_semi_diameter(surface):  # noqa: ANN001

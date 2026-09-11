@@ -966,6 +966,46 @@ class TestMaterial:
         assert material.material_data["filename_no_ext"] == "F2"
         assert material.material_data["filename"] == "glass/schott/F2.yml"
 
+    def test_exact_schott_sf10_match_is_not_shadowed_by_n_sf10_shelf(
+        self, set_test_backend
+    ):
+        """Regression: the catalog-insert path (reference + strict) raised
+        "matches exactly in multiple catalogs: ['schott']" for SF10 because
+        the N-SF10 shelf entry tied with the real SF10 row."""
+        material = materials.Material("SF10", reference="Schott", robust_search=False)
+        assert material.material_data["filename"] == "glass/schott/SF10.yml"
+
+    def test_catalog_kwarg_excludes_imported_winlens_glass_of_other_manufacturer(
+        self, set_test_backend, monkeypatch, tmp_path
+    ):
+        """Regression: catalog='schott' resolved to a WinLens-imported Sumita
+        SF10 because the extra-catalog path only honoured reference=."""
+        database_root = Path(materials.Material._filename).parent
+        schott_sf10 = database_root / "data-nk" / "glass" / "schott" / "SF10.yml"
+        imported = tmp_path / "glass" / "winlens" / "sumita" / "SF10.yml"
+        imported.parent.mkdir(parents=True)
+        imported.write_bytes(schott_sf10.read_bytes())
+        extra_csv = tmp_path / "catalog_nk_winlens.csv"
+        extra_csv.write_text(
+            "group,category_name,category_name_full,reference,name,filename,"
+            "min_wavelength,max_wavelength,filename_no_ext\n"
+            "glass,WinLens,WinLens imported Sumita,Sumita,SF10,"
+            f"{imported.as_posix()},0.4,1.55,SF10\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            materials.Material,
+            "_extra_catalog_csv_files",
+            classmethod(lambda cls: [extra_csv]),
+        )
+
+        # Without a catalog the imported glass keeps its precedence.
+        bare = materials.Material("SF10", warn_on_inexact=False)
+        assert Path(bare.filename) == imported
+
+        scoped = materials.Material("SF10", catalog="schott")
+        assert scoped.material_data["filename"] == "glass/schott/SF10.yml"
+
     def test_catalog_has_exact_manufacturer_material_detects_existing_schott_glass(
         self,
         set_test_backend,

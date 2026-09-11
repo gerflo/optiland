@@ -50,6 +50,16 @@ class TestCatalogKwarg:
         m = Material("N-BK7", catalog="schott", match_policy=MatchPolicy.BEST)
         assert m.n(0.55) > 1.4
 
+    def test_exact_name_beats_shelf_name_inside_catalog(self):
+        """'SF10' in catalog 'schott' is SF10.yml, not the N-SF10 shelf entry.
+
+        Regression: the refractiveindex.info shelf "SF10" (whose Schott page is
+        N-SF10) counted as an exact match, so "SF10" was ambiguous inside the
+        Schott catalog: STRICT raised and BEST/WARN returned N-SF10.
+        """
+        m = Material("SF10", catalog="schott", match_policy=MatchPolicy.STRICT)
+        assert m.material_data["filename"] == "glass/schott/SF10.yml"
+
     def test_material_catalog_exact_match_no_warning(self):
         """Exact catalog match emits no OptilandMaterialWarning."""
         with warnings.catch_warnings(record=True) as w:

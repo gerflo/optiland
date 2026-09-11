@@ -9,6 +9,7 @@ from struct import Struct
 from optiland_gui.catalogs.importers import EdmundCatalogImporter
 
 from optiland_gui.catalogs.importers import ThorlabsCatalogImporter
+from optiland_gui.catalogs.insertion import record_to_insert_specs
 
 
 def _zemax_file(name: str) -> Path:
@@ -355,3 +356,23 @@ def test_import_reads_negative_focal_length_from_title() -> None:
     assert record.part_number == "LD2746"
     assert record.efl_mm == -6.0
     assert record.diameter_mm == 6.0
+
+
+def test_import_records_declared_glass_catalog_for_each_glass_surface() -> None:
+    """GCAT SCHOTT plus bare GLAS names: the record must remember the catalog.
+
+    Regression: without it, inserting the record repeated a bare name lookup,
+    which on a machine with a WinLens import resolved Thorlabs' SF10 to
+    Sumita's SF10 instead of Schott's.
+    """
+    text = _doublet_zmx_text("Synthetic doublet", "AC254-050-A")
+
+    record = _import_zmx_text(ThorlabsCatalogImporter(), text, "AC254-050-A.zmx")
+
+    assert [s.extra_data.get("material_catalog") for s in record.surfaces] == [
+        "schott",
+        "schott",
+        None,
+    ]
+    specs, _ = record_to_insert_specs(record)
+    assert [s.get("material_reference") for s in specs] == ["schott", "schott", None]

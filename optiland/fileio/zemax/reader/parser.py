@@ -253,6 +253,8 @@ class ZemaxDataParser:
             self._current_surf_data["abbe"] = None
 
         resolved = self._resolve_glass_by_catalog_and_index(material_name)
+        if resolved is None:
+            resolved = self._resolve_glass_in_declared_catalogs(material_name)
 
         if resolved is not None:
             self._current_surf_data["material"] = resolved
@@ -334,6 +336,35 @@ class ZemaxDataParser:
                 return float("inf")
 
         return min(candidates, key=_distance)
+
+    def _resolve_glass_in_declared_catalogs(
+        self, material_name: str
+    ) -> BaseMaterial | None:
+        """Resolve a glass name exactly within the file's declared GCAT catalogs.
+
+        Stock-lens catalogs (e.g. Thorlabs' ZMF) declare their glass catalogs
+        but write GLAS lines without Nd/Vd, so the index-based disambiguation
+        above does not apply. A bare ``Material(name)`` lookup would then take
+        whichever catalog happens to sort first, including locally imported
+        ones, so a Schott design could silently trace through another
+        manufacturer's glass of the same name. Try the declared catalogs in
+        order and take the first exact match; names that are not material
+        catalogs (INFRARED, MISC, ...) are skipped.
+
+        Returns:
+            The resolved material, or None if no declared catalog holds an
+            exact match for the name.
+        """
+        for mfg in self.data_model.glass_catalogs or []:
+            try:
+                return Material(
+                    material_name,
+                    catalog=mfg.lower(),
+                    match_policy=MatchPolicy.STRICT,
+                )
+            except ValueError:
+                continue
+        return None
 
     def _read_stop(self, data: list[str]) -> None:
         self._current_surf_data["is_stop"] = True

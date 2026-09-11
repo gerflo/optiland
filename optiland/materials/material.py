@@ -687,6 +687,19 @@ class Material(MaterialFile):
             return None
 
         df = pd.concat(extra_frames, ignore_index=True)
+        if self._catalog:
+            # ``catalog=`` scopes the lookup to one manufacturer. Imported
+            # WinLens rows carry theirs in the reference column and in the
+            # file path (glass/winlens/<manufacturer>/...), so a Schott lookup
+            # must not be answered by an imported Sumita glass of the same name.
+            catalog_key = self._catalog.lower()
+            catalog_dirs = (
+                df["filename"].fillna("").apply(self._catalog_from_filename).str.lower()
+            )
+            references = df["reference"].fillna("").str.lower()
+            df = df[(catalog_dirs == catalog_key) | (references == catalog_key)]
+            if df.empty:
+                return None
         # This path only accepts exact matches (checked below), so suppress the
         # legacy inexact-match print emitted by _find_material_matches for the
         # candidates we are about to reject.
