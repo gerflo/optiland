@@ -58,13 +58,13 @@ _CATEGORY_KEYWORDS = (
 )
 _THORLABS_PART_RE = re.compile(r"\b[A-Z]{1,6}\d{2,}[A-Z0-9-]*\b")
 _EDMUND_PART_RE = re.compile(r"\b(?:\d{2}-\d{3}|\d{5})\b")
-_FOCAL_MM_RE = re.compile(r"\bf\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*mm\b", re.IGNORECASE)
+_FOCAL_MM_RE = re.compile(r"\bf\s*=\s*(-?[0-9]+(?:\.[0-9]+)?)\s*mm\b", re.IGNORECASE)
 _FOCAL_MM_ALT_RE = re.compile(
     r"\b([0-9]+(?:\.[0-9]+)?)\s*mm\s*(?:efl|fl|focal length)\b",
     re.IGNORECASE,
 )
 _DIAMETER_MM_RE = re.compile(
-    r"(?:[Øø]|diameter\s*=?|dia\.\s*=?|d\s*=)\s*([0-9]+(?:\.[0-9]+)?)\s*mm\b",
+    r"(?:[Øø]\s*=?|diameter\s*=?|dia\.\s*=?|d\s*=)\s*([0-9]+(?:\.[0-9]+)?)\s*mm\b",
     re.IGNORECASE,
 )
 _DIAMETER_MM_ALT_RE = re.compile(
@@ -162,8 +162,14 @@ def load_zemax_catalog_record(
     source_path_override: str | None = None,
     version_hint: str | None = None,
     raw_text_override: str | None = None,
+    part_number_hint: str | None = None,
 ) -> CatalogLensRecord:
-    """Load a single stock-lens record from a Zemax ``.zmx`` file."""
+    """Load a single stock-lens record from a Zemax ``.zmx`` file.
+
+    ``part_number_hint`` is an authoritative part-number candidate (for example
+    the entry name inside a ``.zmf`` catalog) that wins over any number found in
+    the prescription title.
+    """
     file_path = Path(path)
     raw_text = raw_text_override or _read_text_with_fallback(file_path)
     meta = _parse_zemax_text_metadata(raw_text)
@@ -173,10 +179,14 @@ def load_zemax_catalog_record(
         else load_zemax_file(str(file_path))
     )
 
-    part_number = _infer_part_number(manufacturer, meta, file_path)
+    part_number = _infer_part_number(manufacturer, meta, file_path, part_number_hint)
     product_name = _infer_product_name(manufacturer, part_number, meta, file_path)
     surface_specs, stop_offset = _extract_surface_specs(
-        optic, meta["surface_comments"], manufacturer, part_number
+        optic,
+        meta["surface_comments"],
+        manufacturer,
+        part_number,
+        meta["surface_semi_diameters"],
     )
     if not surface_specs:
         raise ValueError(
@@ -185,6 +195,9 @@ def load_zemax_catalog_record(
         )
 
     diameter_mm = _infer_diameter_mm(product_name, surface_specs, meta)
+    efl_mm = _infer_efl_mm(product_name, meta)
+    if efl_mm is None:
+        efl_mm = _paraxial_efl_mm(optic)
     bfl_mm = _safe_positive_float(surface_specs[-1].thickness)
     center_thickness_mm = _infer_center_thickness(surface_specs)
     material_summary = _build_material_summary(surface_specs)
@@ -204,7 +217,7 @@ def load_zemax_catalog_record(
         product_name=product_name,
         category=_infer_category(product_name),
         url=source_url,
-        efl_mm=_infer_efl_mm(product_name, meta),
+        efl_mm=efl_mm,
         bfl_mm=bfl_mm,
         diameter_mm=diameter_mm,
         center_thickness_mm=center_thickness_mm,
@@ -255,6 +268,7 @@ def load_zmf_catalog_records(
                 source_path_override=str(file_path),
                 version_hint=entry_name,
                 raw_text_override=raw_text,
+                part_number_hint=entry_name,
             )
         except Exception as exc:  # noqa: BLE001
             failed_entries.append(f"{entry_name}: {exc}")
@@ -374,7 +388,14 @@ def _parse_zemax_text_metadata(text: str) -> dict[str, Any]:
         "notes": [],
         "surface_comments": {},
         "surface_coatings": {},
+        # Physical semi-diameter per surface index. Zemax stores it in
+        # ``DIAM <semi-diameter> <fixed-flag> ...`` (only a fixed value is a
+        # user-entered physical size; an automatic one is just the ray footprint)
+        # and in ``CLAP <r_min> <r_max>`` clear apertures, which take precedence.
+        "surface_semi_diameters": {},
     }
+    fixed_semi_diameters: dict[int, float] = {}
+    clear_aperture_radii: dict[int, float] = {}
     current_surface: int | None = None
     for line in text.splitlines():
         tokens = line.split()
@@ -397,6 +418,15 @@ def _parse_zemax_text_metadata(text: str) -> dict[str, Any]:
             metadata["surface_comments"][current_surface] = " ".join(tokens[1:]).strip()
         elif operand == "COAT" and current_surface is not None and len(tokens) > 1:
             metadata["surface_coatings"][current_surface] = tokens[1].strip()
+        elif operand == "DIAM" and current_surface is not None and len(tokens) > 2:
+            value = _safe_positive_float(tokens[1])
+            if value and tokens[2] == "1":
+                fixed_semi_diameters[current_surface] = value
+        elif operand == "CLAP" and current_surface is not None and len(tokens) > 2:
+            value = _safe_positive_float(tokens[2])
+            if value:
+                clear_aperture_radii[current_surface] = value
+    metadata["surface_semi_diameters"] = {**fixed_semi_diameters, **clear_aperture_radii}
     return metadata
 
 
@@ -404,7 +434,14 @@ def _infer_part_number(
     manufacturer: str,
     metadata: dict[str, Any],
     path: Path,
+    hint: str | None = None,
 ) -> str:
+    """Return the vendor part number for a prescription.
+
+    Surface comments are checked before the title because vendor titles such as
+    ``"f=6.24mm, NA=0.40 H-LAK54 Asphere"`` contain glass names that look like
+    part numbers.
+    """
     name = str(metadata.get("name", "")).strip()
     comments = [
         str(comment).strip()
@@ -412,7 +449,7 @@ def _infer_part_number(
         if comment
     ]
     notes = [str(note).strip() for note in metadata.get("notes", []) if note]
-    for candidate in (name, *notes, *comments, path.stem):
+    for candidate in (str(hint or "").strip(), *comments, name, *notes, path.stem):
         part_number = _match_part_number(manufacturer, candidate)
         if part_number:
             return part_number
@@ -467,6 +504,7 @@ def _extract_surface_specs(
     surface_comments: dict[int, str],
     manufacturer: str,
     part_number: str,
+    fallback_semi_diameters: dict[int, float] | None = None,
 ) -> tuple[list[LensSurfaceSpec], int | None]:
     specs: list[LensSurfaceSpec] = []
     stop_offset: int | None = None
@@ -477,6 +515,8 @@ def _extract_surface_specs(
         thickness = _extract_thickness(optic, surface_index)
         material = _material_name(surface)
         semi_diameter = _extract_semi_diameter(surface)
+        if semi_diameter is None and fallback_semi_diameters:
+            semi_diameter = fallback_semi_diameters.get(surface_index)
         comment = (
             surface_comments.get(surface_index)
             or surface.comment
@@ -587,6 +627,17 @@ def _infer_diameter_mm(
     if semi_diameters:
         return max(semi_diameters) * 2.0
     return None
+
+
+def _paraxial_efl_mm(optic) -> float | None:  # noqa: ANN001
+    """Return the paraxial effective focal length of *optic* rounded to 0.01 mm."""
+    try:
+        value = float(optic.paraxial.f2())
+    except Exception:  # noqa: BLE001
+        return None
+    if math.isnan(value) or math.isinf(value) or value == 0.0:
+        return None
+    return round(value, 2)
 
 
 def _infer_center_thickness(surfaces: list[LensSurfaceSpec]) -> float | None:

@@ -176,3 +176,182 @@ def test_import_edmund_zmf_skips_unreadable_entries() -> None:
 
     assert len(records) == 1
     assert records[0].part_number == "08068"
+
+
+def _doublet_zmx_text(
+    name: str,
+    comment: str,
+    *,
+    fixed_semi_diameter: bool = True,
+    clear_aperture_radius: float | None = None,
+) -> str:
+    """Return a synthetic cemented-doublet prescription in Zemax text form."""
+    flag = "1" if fixed_semi_diameter else "0"
+    clap = (
+        [f"  CLAP 0 {clear_aperture_radius} 0"]
+        if clear_aperture_radius is not None
+        else []
+    )
+    lens_surface = lambda curv, disz, glas: [  # noqa: E731
+        "  TYPE STANDARD",
+        f"  CURV {curv}",
+        f"  DISZ {disz}",
+        *( [f"  GLAS {glas}"] if glas else [] ),
+        f'  DIAM 12.7 {flag} 0 0 1 ""',
+        "  FLAP 0 12.7 0",
+        *clap,
+    ]
+    lines = [
+        "VERS 230607",
+        "MODE SEQ",
+        f"NAME {name}",
+        "NOTE 0 FOR INFORMATION ONLY, NOT FOR MANUFACTURING.",
+        "UNIT MM X W X CM MR CPMM",
+        "ENPD 22.86",
+        "GCAT SCHOTT",
+        "WAVM 1 0.4861 1",
+        "WAVM 2 0.5876 1",
+        "WAVM 3 0.6563 1",
+        "PWAV 2",
+        "FTYP 0 0 1 3 0 0 0",
+        "XFLN 0",
+        "YFLN 0",
+        "FWGN 1",
+        "SURF 0",
+        "  TYPE STANDARD",
+        "  CURV 0.0",
+        "  DISZ INFINITY",
+        '  DIAM 0 0 0 0 1 ""',
+        "SURF 1",
+        f"  COMM {comment}",
+        "  STOP",
+        *lens_surface("0.03", "8", "N-BAF10"),
+        "SURF 2",
+        *lens_surface("-0.045", "2.5", "SF10"),
+        "SURF 3",
+        *lens_surface("-0.0035", "45", None),
+        "SURF 4",
+        "  TYPE STANDARD",
+        "  CURV 0.0",
+        "  DISZ 0",
+        '  DIAM 0 0 0 0 1 ""',
+    ]
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _import_zmx_text(importer, text: str, filename: str):  # noqa: ANN001
+    temp_dir = _workspace_tmp_dir()
+    path = temp_dir / filename
+    try:
+        path.write_text(text, encoding="utf-8")
+        records = importer.import_file(str(path))
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert len(records) == 1
+    return records[0]
+
+
+def _import_zmf_entry(importer, entry_name: str, text: str):  # noqa: ANN001
+    temp_dir = _workspace_tmp_dir()
+    zmf_path = temp_dir / "catalog.zmf"
+    try:
+        zmf_path.write_bytes(_build_test_zmf(entry_name, text.encode("utf-8")))
+        records = importer.import_file(str(zmf_path))
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    assert len(records) == 1
+    return records[0]
+
+
+def test_import_uses_fixed_zemax_semi_diameters_when_surfaces_have_no_aperture() -> None:
+    """Thorlabs prescriptions carry the physical size only in DIAM/FLAP lines."""
+    text = _doublet_zmx_text(
+        "AC254-050-A AC254-050-A POSITIVE VISIBLE ACHROMATS: Infinite 50",
+        "AC254-050-A",
+    )
+
+    record = _import_zmx_text(ThorlabsCatalogImporter(), text, "AC254-050-A.zmx")
+
+    assert record.part_number == "AC254-050-A"
+    assert [surface.semi_diameter for surface in record.surfaces] == [12.7, 12.7, 12.7]
+    assert record.diameter_mm == 25.4
+
+
+def test_import_computes_paraxial_efl_when_title_has_no_focal_length() -> None:
+    from optiland.fileio import load_zemax_text
+
+    text = _doublet_zmx_text(
+        "AC254-050-A AC254-050-A POSITIVE VISIBLE ACHROMATS: Infinite 50",
+        "AC254-050-A",
+    )
+    expected = round(float(load_zemax_text(text).paraxial.f2()), 2)
+
+    record = _import_zmx_text(ThorlabsCatalogImporter(), text, "AC254-050-A.zmx")
+
+    assert record.efl_mm == expected
+    assert 30.0 < record.efl_mm < 60.0
+
+
+def test_import_keeps_automatic_zemax_semi_diameters_unset() -> None:
+    """Automatic DIAM values are ray footprints, not the physical lens edge."""
+    text = _doublet_zmx_text("Synthetic doublet", "AC254-050-A", fixed_semi_diameter=False)
+
+    record = _import_zmx_text(ThorlabsCatalogImporter(), text, "AC254-050-A.zmx")
+
+    assert [surface.semi_diameter for surface in record.surfaces] == [None, None, None]
+    assert record.diameter_mm is None
+
+
+def test_import_prefers_clear_aperture_over_fixed_semi_diameter() -> None:
+    text = _doublet_zmx_text("Synthetic doublet", "AC254-050-A", clear_aperture_radius=11.43)
+
+    record = _import_zmx_text(ThorlabsCatalogImporter(), text, "AC254-050-A.zmx")
+
+    assert [surface.semi_diameter for surface in record.surfaces] == [11.43, 11.43, 11.43]
+    assert record.diameter_mm == 22.86
+
+
+def test_import_thorlabs_asphere_file_keeps_auto_back_surface_unset() -> None:
+    records = ThorlabsCatalogImporter().import_file(
+        str(_zemax_file("lens_thorlabs_iso_8859_1.zmx"))
+    )
+
+    record = records[0]
+    assert record.surfaces[0].semi_diameter == 9.0
+    assert record.surfaces[1].semi_diameter is None
+    assert record.diameter_mm == 18.0
+
+
+def test_import_zmf_entry_name_beats_glass_name_in_title() -> None:
+    text = _doublet_zmx_text(
+        "Ø=7.20mm, f=6.24mm, NA=0.40 H-LAK54 Asphere, -B Coated",
+        "Surface 1",
+    )
+
+    record = _import_zmf_entry(ThorlabsCatalogImporter(), "A110-B", text)
+
+    assert record.part_number == "A110-B"
+    assert record.catalog_id == "thorlabs:a110-b"
+    assert record.efl_mm == 6.24
+    assert record.diameter_mm == 7.2
+
+
+def test_import_zmx_surface_comment_beats_glass_name_in_title() -> None:
+    text = _doublet_zmx_text(
+        "Ø=7.20mm, f=6.24mm, NA=0.40 H-LAK54 Asphere, -B Coated",
+        "A110-B",
+    )
+
+    record = _import_zmx_text(ThorlabsCatalogImporter(), text, "download.zmx")
+
+    assert record.part_number == "A110-B"
+
+
+def test_import_reads_negative_focal_length_from_title() -> None:
+    text = _doublet_zmx_text("N-SF11 Bi-Concave Lens, Ø6 mm, f = -6.0 mm", "LD2746")
+
+    record = _import_zmx_text(ThorlabsCatalogImporter(), text, "LD2746.zmx")
+
+    assert record.part_number == "LD2746"
+    assert record.efl_mm == -6.0
+    assert record.diameter_mm == 6.0
