@@ -203,7 +203,13 @@ def test_lens_editor_context_menu_contains_copy_actions(qapp, mock_connector, mo
 
     editor.show_context_menu(editor.tableWidget.visualItemRect(target_item).center())
 
-    assert list(action_state)[:4] == ["Copy Cell", "Cut Cell", "Copy Row", "Paste Cell"]
+    assert list(action_state)[:5] == [
+        "Copy Cell",
+        "Cut Cell",
+        "Copy Row",
+        "Paste Row",
+        "Paste Cell",
+    ]
     assert "Create Element from Selected Surfaces" not in action_state
     assert "Select Entire Element" not in action_state
     assert "Rename Element" not in action_state
@@ -1043,12 +1049,19 @@ def test_lens_editor_paste_shortcuts_update_active_editable_cell(qapp, mock_conn
     assert editor.tableWidget.item(1, mock_connector.COL_THICKNESS).text() == "33.3333"
 
 
-def test_lens_editor_shift_insert_pastes_into_type_widget(qapp, mock_connector):
+def test_lens_editor_shift_insert_in_type_widget_inserts_after_instead_of_pasting(
+    qapp, mock_connector, monkeypatch
+):
+    """Shift+Insert is reserved for "insert surface after"; it must not paste."""
     from optiland_gui.lens_editor import LensEditor, SurfaceTypeWidget
 
     editor = LensEditor(mock_connector)
     editor.load_data()
     qapp.clipboard().setText("aspheric")
+    inserts: list[bool] = []
+    monkeypatch.setattr(
+        editor, "smart_insert_surface", lambda before: inserts.append(before)
+    )
 
     widget = editor.tableWidget.cellWidget(1, mock_connector.COL_TYPE)
     assert isinstance(widget, SurfaceTypeWidget)
@@ -1063,16 +1076,24 @@ def test_lens_editor_shift_insert_pastes_into_type_widget(qapp, mock_connector):
     )
 
     assert handled is True
-    assert widget.type_edit.text() == "Aspheric"
+    assert inserts == [False]
+    assert widget.type_edit.text() == "Standard"
 
 
-def test_lens_editor_shift_insert_pastes_from_table_viewport(qapp, mock_connector):
+def test_lens_editor_shift_insert_from_table_viewport_inserts_after_instead_of_pasting(
+    qapp, mock_connector, monkeypatch
+):
+    """Shift+Insert on the table body inserts a surface after the current one."""
     from optiland_gui.lens_editor import LensEditor
 
     editor = LensEditor(mock_connector)
     editor.load_data()
     qapp.clipboard().setText("33.3333")
     editor._remember_active_cell(1, mock_connector.COL_THICKNESS)
+    inserts: list[bool] = []
+    monkeypatch.setattr(
+        editor, "smart_insert_surface", lambda before: inserts.append(before)
+    )
 
     handled = editor.eventFilter(
         editor.tableWidget.viewport(),
@@ -1084,7 +1105,8 @@ def test_lens_editor_shift_insert_pastes_from_table_viewport(qapp, mock_connecto
     )
 
     assert handled is True
-    assert editor.tableWidget.item(1, mock_connector.COL_THICKNESS).text() == "33.3333"
+    assert inserts == [False]
+    assert editor.tableWidget.item(1, mock_connector.COL_THICKNESS).text() != "33.3333"
 
 
 def test_lens_editor_ctrl_x_cuts_active_editable_cell(qapp, mock_connector):

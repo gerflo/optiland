@@ -24,8 +24,11 @@ class _ConnectorStub(QObject):
     def get_optic(self):  # noqa: ANN201
         return self._optic
 
+    def get_effective_optic(self):  # noqa: ANN201
+        return self._optic
+
     def get_surface_count(self) -> int:
-        return self._optic.surface_group.num_surfaces
+        return self._optic.surfaces.num_surfaces
 
 
 def test_viewer_panel_preserve_xy_ratio_checkbox_updates_2d_aspect(
@@ -50,7 +53,8 @@ def test_viewer_panel_preserve_xy_ratio_checkbox_updates_2d_aspect(
 
     assert panel.viewer2D.ax.get_aspect() == "auto"
 
-    panel.preserve_xy_ratio_checkbox.setChecked(True)
+    panel.viewer2D.preserve_xy_ratio_checkbox.setChecked(True)
+    panel.viewer2D._plot_optic_sync()
 
     assert panel.viewer2D._preserve_xy_ratio is True
     assert panel.viewer2D.ax.get_aspect() == "auto"
@@ -63,7 +67,7 @@ def test_viewer_panel_preserve_xy_ratio_checkbox_updates_2d_aspect(
     data_ratio = abs((x1 - x0) / (y1 - y0))
     assert data_ratio == pytest.approx(box_ratio, rel=1e-3)
 
-    panel.preserve_xy_ratio_checkbox.setChecked(False)
+    panel.viewer2D.preserve_xy_ratio_checkbox.setChecked(False)
 
     assert panel.viewer2D._preserve_xy_ratio is False
     assert panel.viewer2D.ax.get_aspect() == "auto"
@@ -103,13 +107,13 @@ def test_viewer_panel_restores_persistent_2d_settings(
 
     panel = ViewerPanel(_ConnectorStub(minimal_optic))
 
-    assert panel.preserve_zoom_checkbox.isChecked() is True
-    assert panel.preserve_xy_ratio_checkbox.isChecked() is True
+    assert panel.viewer2D.preserve_zoom_checkbox.isChecked() is True
+    assert panel.viewer2D.preserve_xy_ratio_checkbox.isChecked() is True
     assert panel.viewer2D._preserve_xy_ratio is True
     assert panel.viewer2D.num_rays_spinbox.value() == 9
 
-    panel.preserve_zoom_checkbox.setChecked(False)
-    panel.preserve_xy_ratio_checkbox.setChecked(False)
+    panel.viewer2D.preserve_zoom_checkbox.setChecked(False)
+    panel.viewer2D.preserve_xy_ratio_checkbox.setChecked(False)
     panel.viewer2D.num_rays_spinbox.setValue(7)
 
     assert settings_store["Viewer2D/PreserveZoom"] is False
@@ -201,7 +205,7 @@ def test_viewer_toolbar_zoom_keeps_preserve_xy_ratio(
 
     monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
     panel = ViewerPanel(_ConnectorStub(minimal_optic))
-    panel.preserve_xy_ratio_checkbox.setChecked(True)
+    panel.viewer2D.preserve_xy_ratio_checkbox.setChecked(True)
 
     panel.viewer2D.ax.set_xlim(10.0, 70.0)
     panel.viewer2D.ax.set_ylim(-2.0, 8.0)
@@ -305,7 +309,7 @@ def test_viewer_toolbar_pan_zoom_keeps_ratio_while_dragging(
 
     monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _DefaultSettings)
     panel = ViewerPanel(_ConnectorStub(minimal_optic))
-    panel.preserve_xy_ratio_checkbox.setChecked(True)
+    panel.viewer2D.preserve_xy_ratio_checkbox.setChecked(True)
     panel.viewer2D.toolbar.mode = "pan/zoom"
     panel.viewer2D._enforce_equal_xy_on_toolbar_release = True
 
@@ -355,6 +359,7 @@ def test_viewer_without_stop_surface_keeps_layout_and_warns(
     connector.toast_manager = _ToastRecorder()
 
     panel = ViewerPanel(connector)
+    panel.viewer2D._plot_optic_sync()
 
     assert panel.viewer2D.ax.get_title() == f"System: {minimal_optic.name} (2D)"
     assert "Error plotting system" not in {
@@ -498,7 +503,7 @@ def test_viewer_panel_optic_changed_updates_without_forcing_view_reset(
 
     assert "2d-reset" not in calls
     assert "sag-plot" not in calls
-    assert ("2d-update", panel.preserve_zoom_checkbox.isChecked()) in calls
+    assert ("2d-update", panel.viewer2D.preserve_zoom_checkbox.isChecked()) in calls
     if panel._viewer3d_tab_index >= 0:
         assert not any(
             call[0] == "3d-render" for call in calls if isinstance(call, tuple)
@@ -543,7 +548,12 @@ def test_viewer_panel_passes_2d_ray_count_and_full_pupil_distribution_to_3d_rend
     panel.viewer2D.dist_combo.setCurrentText("line_x")
     panel._render_3d_from_2d_settings()
 
-    assert calls[-1] == {"num_rays": 2, "distribution": "hexapolar"}
+    assert calls[-1] == {
+        "num_rays": 2,
+        "distribution": "hexapolar",
+        "show_stop_apertures": True,
+        "show_non_stop_apertures": True,
+    }
 
 
 def test_viewer_panel_apply_2d_settings_refreshes_coupled_3d_renderer(
@@ -581,7 +591,12 @@ def test_viewer_panel_apply_2d_settings_refreshes_coupled_3d_renderer(
     panel.viewer2D.dist_combo.setCurrentText("random")
     panel.viewer2D.apply_settings()
 
-    assert calls[-1] == {"num_rays": 23, "distribution": "random"}
+    assert calls[-1] == {
+        "num_rays": 23,
+        "distribution": "random",
+        "show_stop_apertures": True,
+        "show_non_stop_apertures": True,
+    }
 
 
 def test_viewer_panel_maps_2d_line_sections_to_full_pupil_3d_distribution(

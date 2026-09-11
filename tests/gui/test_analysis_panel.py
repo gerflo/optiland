@@ -15,6 +15,8 @@ from PySide6.QtWidgets import QToolButton
 def mock_connector(minimal_optic, qapp):
     conn = MagicMock()
     conn._optic = minimal_optic
+    conn.get_optic.return_value = minimal_optic
+    conn.get_effective_optic.return_value = minimal_optic
     conn.toast_manager = MagicMock()
     conn.get_analysis_registry.return_value = []
     return conn
@@ -32,7 +34,7 @@ class TestMtfStringLiteralFix:
 
     def test_mtf_condition_uses_constants_not_strings(self, panel):
         """The MTF check must reference class constants, not quoted literals."""
-        src = inspect.getsource(panel._run_and_package_analysis)
+        src = inspect.getsource(panel._prepare_filtered_args)
         # The fixed code should not contain the buggy string literals
         assert '"self.GEOMETRIC_MTF"' not in src
         assert '"self.FFT_MTF"' not in src
@@ -41,44 +43,20 @@ class TestMtfStringLiteralFix:
 class TestFieldWavelengthDefaults:
     """Verify field/wavelength defaults are injected for wavefront/PSF analyses."""
 
-    def test_defaults_injected_for_opd(self, panel):
-        """_run_and_package_analysis injects field/wavelength for OPD."""
-        import inspect
-
+    def test_defaults_injected_for_opd(self, panel, minimal_optic):
+        """Missing field/wavelength are defaulted for OPD; given values are kept."""
         from optiland.wavefront import OPD
 
-        # Build a fake analysis class with the same signature as OPD but
-        # that records the args passed to it instead of computing anything.
-        sig = inspect.signature(OPD.__init__)
+        filtered, _final = panel._prepare_filtered_args(minimal_optic, OPD, "OPD", {})
+        assert filtered["optic"] is minimal_optic
+        assert filtered["field"] == (0.0, 0.0)
+        assert filtered["wavelength"] == "primary"
 
-        captured_kwargs = {}
-
-        class _FakeOPD:
-            def __init__(self, optic, field, wavelength, **rest):
-                captured_kwargs["field"] = field
-                captured_kwargs["wavelength"] = wavelength
-
-            def view(self, **kwargs):
-                pass
-
-        # Preserve the original signature so introspection works
-        _FakeOPD.__init__.__wrapped__ = OPD.__init__
-
-        with patch.object(
-            _FakeOPD,
-            "__init__",
-            side_effect=lambda s, **kw: captured_kwargs.update(kw)
-            or None.__class__.__init__(s),
-        ):
-            pass  # don't use this approach
-
-        # Simpler: directly call the source-level method and check injected keys
-        # by verifying the injection code exists in the source.
-        src = inspect.getsource(panel._run_and_package_analysis)
-        assert "_required_defaults" in src
-        assert '"field"' in src
-        assert '"wavelength"' in src
-        assert "_key not in filtered_args" in src or "not in filtered_args" in src
+        filtered, _final = panel._prepare_filtered_args(
+            minimal_optic, OPD, "OPD", {"field": (0.0, 1.0), "wavelength": 0.55}
+        )
+        assert filtered["field"] == (0.0, 1.0)
+        assert filtered["wavelength"] == 0.55
 
     def test_opd_signature_has_field_and_wavelength(self):
         """OPD.__init__ must declare field and wavelength for injection to work."""

@@ -49,3 +49,38 @@ def minimal_optic():
     optic.wavelengths.add(value=0.55, is_primary=True)
     optic.updater.update()
     return optic
+
+
+class _FakeClipboard:
+    """In-process stand-in for QClipboard.
+
+    The GUI code only uses ``text``/``setText``/``clear``. Going through the
+    real OS clipboard makes copy/paste tests fail whenever anything else on
+    the machine (a second test run, the running app, a clipboard manager)
+    touches the clipboard in between.
+    """
+
+    def __init__(self) -> None:
+        self._text = ""
+
+    def text(self, *_args) -> str:
+        return self._text
+
+    def setText(self, text, *_args) -> None:  # noqa: N802, ANN001
+        self._text = str(text)
+
+    def clear(self, *_args) -> None:
+        self._text = ""
+
+    def ownsClipboard(self) -> bool:  # noqa: N802
+        return True
+
+
+@pytest.fixture(autouse=True)
+def isolated_clipboard(monkeypatch):
+    """Route ``QApplication.clipboard()`` to a per-test in-memory clipboard."""
+    from PySide6.QtGui import QGuiApplication
+
+    fake = _FakeClipboard()
+    monkeypatch.setattr(QGuiApplication, "clipboard", staticmethod(lambda: fake))
+    return fake
