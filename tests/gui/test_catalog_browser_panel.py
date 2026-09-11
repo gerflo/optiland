@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QPoint, Signal
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QMessageBox, QWidget
@@ -994,3 +994,78 @@ def test_catalog_browser_text_filters_explain_wildcards(qapp) -> None:
         assert "*" in tooltip and "?" in tooltip, widget.placeholderText()
     assert panel.efl_filter.toolTip() == ""
 
+
+def _click_header_section(panel: CatalogBrowserPanel, column: int) -> None:
+    """Send a real mouse click to the centre of a horizontal header section."""
+    header = panel.results_table.horizontalHeader()
+    x = header.sectionViewportPosition(column) + header.sectionSize(column) // 2
+    QTest.mouseClick(
+        header.viewport(),
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        QPoint(x, header.height() // 2),
+    )
+
+
+def test_catalog_browser_header_click_toggles_sort_direction(monkeypatch, qapp) -> None:
+    monkeypatch.setattr("optiland_gui.catalog_browser_panel.QSettings", _FakeSettings)
+    _FakeSettings._store = {}
+
+    class _TwoRowConnector(_DummyConnector):
+        def search_catalog_lenses(self, query: dict) -> list[dict]:
+            rows = []
+            for part_number, efl in (("AC254-100-A", 100.0), ("AC254-050-A", 50.0)):
+                rows.append(
+                    {
+                        "catalog_id": f"thorlabs:{part_number.casefold()}",
+                        "manufacturer": "Thorlabs",
+                        "part_number": part_number,
+                        "product_name": "Achromatic Doublet",
+                        "category": "achromat",
+                        "efl_mm": efl,
+                        "diameter_mm": 25.4,
+                        "material_summary": "",
+                        "coating": "",
+                        "availability_status": "",
+                        "match_type": "",
+                    }
+                )
+            return rows
+
+    panel = CatalogBrowserPanel(_TwoRowConnector())
+    panel.resize(1400, 500)
+    panel.show()
+    QTest.qWaitForWindowExposed(panel)
+    header = panel.results_table.horizontalHeader()
+    header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
+    panel.refresh()
+
+    def sort_state() -> tuple[int, Qt.SortOrder]:
+        return header.sortIndicatorSection(), header.sortIndicatorOrder()
+
+    def part_numbers() -> list[str]:
+        return [
+            panel.results_table.item(row, 2).text()
+            for row in range(panel.results_table.rowCount())
+        ]
+
+    try:
+        _click_header_section(panel, 2)
+        assert sort_state() == (2, Qt.SortOrder.AscendingOrder)
+        assert part_numbers() == ["AC254-050-A", "AC254-100-A"]
+        assert panel.results_table.horizontalHeaderItem(2).text() == "Part No. ↑"
+
+        _click_header_section(panel, 2)
+        assert sort_state() == (2, Qt.SortOrder.DescendingOrder)
+        assert part_numbers() == ["AC254-100-A", "AC254-050-A"]
+        assert panel.results_table.horizontalHeaderItem(2).text() == "Part No. ↓"
+
+        _click_header_section(panel, 2)
+        assert sort_state() == (2, Qt.SortOrder.AscendingOrder)
+        assert part_numbers() == ["AC254-050-A", "AC254-100-A"]
+
+        _click_header_section(panel, 5)
+        assert sort_state() == (5, Qt.SortOrder.AscendingOrder)
+        assert part_numbers() == ["AC254-050-A", "AC254-100-A"]
+    finally:
+        panel.close()

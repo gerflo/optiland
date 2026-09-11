@@ -271,6 +271,9 @@ class CatalogBrowserPanel(QWidget):
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         header.setStretchLastSection(False)
         header.setSectionsMovable(True)
+        # QHeaderView flips the sort indicator itself on a section click
+        # (new column -> ascending, same column -> reversed); sortIndicatorChanged
+        # then re-sorts _current_results. Do not toggle again on sectionClicked.
         header.setSortIndicatorShown(True)
         self.results_table.setSortingEnabled(False)
         self.results_table.setHorizontalScrollBarPolicy(
@@ -406,7 +409,6 @@ class CatalogBrowserPanel(QWidget):
         self.results_table.customContextMenuRequested.connect(self._show_results_context_menu)
         self.results_table.itemChanged.connect(self._handle_results_item_changed)
         header = self.results_table.horizontalHeader()
-        header.sectionClicked.connect(self._toggle_sort_column)
         header.sectionMoved.connect(self._save_table_state)
         header.sectionResized.connect(self._sync_filter_row_geometry)
         header.sectionMoved.connect(self._sync_filter_row_geometry)
@@ -699,18 +701,6 @@ class CatalogBrowserPanel(QWidget):
                 self.results_table.setHorizontalHeaderItem(index, QTableWidgetItem(label))
             else:
                 item.setText(label)
-
-    def _toggle_sort_column(self, column: int) -> None:
-        """Toggle the active sort column/order when the user clicks a header."""
-        header = self.results_table.horizontalHeader()
-        current_column = header.sortIndicatorSection()
-        current_order = header.sortIndicatorOrder()
-        next_order = (
-            Qt.SortOrder.DescendingOrder
-            if current_column == column and current_order == Qt.SortOrder.AscendingOrder
-            else Qt.SortOrder.AscendingOrder
-        )
-        header.setSortIndicator(column, next_order)
 
     def _numeric_filter_bounds(self, text: str) -> tuple[float | None, float | None]:
         """Parse a numeric filter string like `10-20`, `10`, or `10 to 20`."""
