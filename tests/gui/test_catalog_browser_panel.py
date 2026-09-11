@@ -595,9 +595,10 @@ def test_catalog_browser_context_menu_prioritizes_insert_actions(monkeypatch, qa
 
     panel._show_results_context_menu(panel.results_table.visualItemRect(target_item).center())
 
-    assert action_texts[:6] == [
+    assert action_texts[:7] == [
         "Insert Before Selected Surface",
         "Insert After Selected Surface",
+        "Replace Selected Element",
         "",
         "Copy Cell",
         "Copy Row",
@@ -974,3 +975,22 @@ def test_insert_before_defaults_to_image_when_no_lde_row_selected(qapp) -> None:
     panel._insert_selected("before")
 
     assert connector.last_insert_call == ("edmund:49-847", 4, "before")
+
+
+def test_catalog_browser_text_filters_explain_wildcards(qapp) -> None:
+    panel = CatalogBrowserPanel(_DummyConnector())
+    panel.refresh()
+
+    for widget in (
+        panel.part_number_filter,
+        panel.name_filter,
+        panel.category_filter,
+        panel.material_filter,
+        panel.coating_filter,
+        panel.status_filter,
+        panel.match_filter,
+    ):
+        tooltip = widget.toolTip()
+        assert "*" in tooltip and "?" in tooltip, widget.placeholderText()
+    assert panel.efl_filter.toolTip() == ""
+

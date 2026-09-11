@@ -228,7 +228,7 @@ class TestCatalogSurfaceInsertion:
         assert surface.material_post.reference == "Schott"
 
     def test_insert_surface_sequence_rejects_unverified_winlens_material_mapping(self, service):
-        with pytest.raises(ValueError, match="No matches found for material ZZ_UNKNOWN"):
+        with pytest.raises(ValueError, match="No matches found for material 'ZZ_UNKNOWN'"):
             service.insert_surface_sequence(
                 1,
                 [
@@ -618,3 +618,182 @@ class TestCatalogSearchNormalization:
         )
 
         assert [item.part_number for item in matches] == ["322307"]
+
+
+def _search_record(
+    part_number: str,
+    *,
+    manufacturer: str = "Thorlabs",
+    product_name: str = "",
+    category: str = "achromat",
+    material_summary: str | None = None,
+    coating: str | None = None,
+    availability_status: str | None = None,
+) -> CatalogLensRecord:
+    return CatalogLensRecord(
+        catalog_id=f"{manufacturer.casefold()}:{part_number.casefold()}",
+        manufacturer=manufacturer,
+        part_number=part_number,
+        product_name=product_name,
+        category=category,
+        material_summary=material_summary,
+        coating=coating,
+        availability_status=availability_status,
+        source=CatalogSource(manufacturer=manufacturer, source_type="test"),
+    )
+
+
+def _part_numbers(records: list[CatalogLensRecord], query: CatalogSearchQuery) -> list[str]:
+    return [item.part_number for item in CatalogSearchService().search(records, query)]
+
+
+class TestCatalogSearchWildcards:
+    """The filter row accepts ``*`` (any text) and ``?`` (one character)."""
+
+    def test_star_matches_any_string_in_part_number_filter(self) -> None:
+        records = [
+            _search_record("AC254-050-A"),
+            _search_record("AC254-100-A"),
+            _search_record("AC254-050-B"),
+            _search_record("AC508-050-A"),
+        ]
+
+        assert _part_numbers(records, CatalogSearchQuery(part_number="AC254-0*A")) == [
+            "AC254-050-A"
+        ]
+        assert _part_numbers(records, CatalogSearchQuery(part_number="AC254-*-A")) == [
+            "AC254-050-A",
+            "AC254-100-A",
+        ]
+
+    def test_question_mark_matches_exactly_one_character(self) -> None:
+        records = [
+            _search_record("AC254-05A"),
+            _search_record("AC254-0A"),
+            _search_record("AC254-050-A"),
+        ]
+
+        assert _part_numbers(records, CatalogSearchQuery(part_number="AC254-0?A")) == [
+            "AC254-05A"
+        ]
+        assert _part_numbers(records, CatalogSearchQuery(part_number="AC254-0??-A")) == [
+            "AC254-050-A"
+        ]
+
+    def test_wildcard_pattern_must_match_the_whole_value(self) -> None:
+        records = [
+            _search_record("AC254-050-A"),
+            _search_record("AC254-050-A-ML"),
+        ]
+
+        assert _part_numbers(records, CatalogSearchQuery(part_number="AC254-0*A")) == [
+            "AC254-050-A"
+        ]
+        assert _part_numbers(records, CatalogSearchQuery(part_number="*-ML")) == [
+            "AC254-050-A-ML"
+        ]
+        assert _part_numbers(records, CatalogSearchQuery(part_number="*050*")) == [
+            "AC254-050-A",
+            "AC254-050-A-ML",
+        ]
+
+    def test_plain_text_filter_remains_a_substring_match(self) -> None:
+        records = [_search_record("AC254-050-A"), _search_record("AC508-050-A")]
+
+        assert _part_numbers(records, CatalogSearchQuery(part_number="254")) == [
+            "AC254-050-A"
+        ]
+
+    def test_wildcards_are_case_insensitive(self) -> None:
+        records = [_search_record("AC254-050-A")]
+
+        assert _part_numbers(records, CatalogSearchQuery(part_number="ac254-0*a")) == [
+            "AC254-050-A"
+        ]
+
+    def test_wildcards_ignore_part_number_separators(self) -> None:
+        records = [_search_record("AC254-050-A"), _search_record("AC254-050-B")]
+
+        assert _part_numbers(records, CatalogSearchQuery(part_number="AC2540*A")) == [
+            "AC254-050-A"
+        ]
+
+    def test_wildcard_part_number_keeps_optional_g_prefix(self) -> None:
+        records = [
+            _search_record("063213000", manufacturer="WinLens Library 2002"),
+            _search_record("G063214000", manufacturer="Excelitas LINOS"),
+            _search_record("322307", manufacturer="WinLens Library 2002"),
+        ]
+
+        assert _part_numbers(records, CatalogSearchQuery(part_number="G0632*")) == [
+            "G063214000",
+            "063213000",
+        ]
+
+    def test_wildcards_apply_to_every_text_column_of_the_filter_row(self) -> None:
+        records = [
+            _search_record(
+                "AC254-050-A",
+                product_name="Achromatic Doublet f = 50 mm",
+                category="achromat",
+                material_summary="N-BK7 / SF5",
+                coating="AR 400-700 nm",
+                availability_status="legacy",
+            ),
+            _search_record(
+                "AL1815-C",
+                product_name="Asphere f = 15 mm",
+                category="asphere",
+                material_summary="S-LAH64",
+                coating="AR 1050-1700 nm",
+                availability_status="active",
+            ),
+        ]
+
+        assert _part_numbers(records, CatalogSearchQuery(product_name="achromat* = 50*")) == [
+            "AC254-050-A"
+        ]
+        assert _part_numbers(records, CatalogSearchQuery(category="a?hromat")) == [
+            "AC254-050-A"
+        ]
+        assert _part_numbers(records, CatalogSearchQuery(material_text="*SF?")) == [
+            "AC254-050-A"
+        ]
+        assert _part_numbers(records, CatalogSearchQuery(coating_text="AR 4*")) == [
+            "AC254-050-A"
+        ]
+        assert _part_numbers(records, CatalogSearchQuery(availability_text="leg*")) == [
+            "AC254-050-A"
+        ]
+
+    def test_match_type_filter_supports_wildcards(self, monkeypatch) -> None:
+        from optiland_gui.services.catalog_service import CatalogService
+
+        tmp_path = Path(".tmp_testdata") / "catalog_search_wildcards"
+        shutil.rmtree(tmp_path, ignore_errors=True)
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(
+            "optiland_gui.catalogs.storage.QStandardPaths.writableLocation",
+            lambda *_args, **_kwargs: str(tmp_path),
+        )
+        confirmed = _search_record("322307", manufacturer="WinLens Library 2002")
+        candidate = _search_record("317703", manufacturer="WinLens Library 2002")
+        service = CatalogService(MagicMock(), session=MagicMock())
+        service._records = [confirmed, candidate]
+        monkeypatch.setattr(
+            service,
+            "_load_winlens_match_links",
+            lambda: {
+                confirmed.catalog_id: [{"match_type": "confirmed"}],
+                candidate.catalog_id: [{"match_type": "candidate"}],
+            },
+        )
+        monkeypatch.setattr(service, "resolve_insertable_record", lambda _catalog_id: None)
+
+        try:
+            summaries = service.search({"match_type_text": "c*d"})
+            assert [item["part_number"] for item in summaries] == ["322307"]
+            summaries = service.search({"match_type_text": "c?ndidate"})
+            assert [item["part_number"] for item in summaries] == ["317703"]
+        finally:
+            shutil.rmtree(tmp_path, ignore_errors=True)

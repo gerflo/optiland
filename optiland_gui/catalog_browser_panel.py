@@ -593,6 +593,23 @@ class CatalogBrowserPanel(QWidget):
         self.status_filter.setPlaceholderText("legacy")
         self.match_filter.setPlaceholderText("confirmed")
 
+        wildcard_hint = (
+            "Case-insensitive text filter.\n"
+            "Wildcards: * = any text, ? = exactly one character.\n"
+            "With wildcards the pattern must match the whole value,\n"
+            "e.g. AC254-0*A or *-ML."
+        )
+        for widget in (
+            self.part_number_filter,
+            self.name_filter,
+            self.category_filter,
+            self.material_filter,
+            self.coating_filter,
+            self.status_filter,
+            self.match_filter,
+        ):
+            widget.setToolTip(wildcard_hint)
+
         self.manufacturer_filter.setMinimumWidth(0)
         for widget in (
             self.part_number_filter,

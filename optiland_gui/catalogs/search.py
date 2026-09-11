@@ -7,6 +7,8 @@ import re
 
 from .schema import CatalogLensRecord
 
+WILDCARD_CHARACTERS = "*?"
+
 
 @dataclass(slots=True)
 class CatalogSearchQuery:
@@ -26,6 +28,39 @@ class CatalogSearchQuery:
     availability_text: str = ""
 
 
+class TextFilter:
+    """Case-insensitive text filter with optional ``*`` and ``?`` wildcards.
+
+    Without wildcards the filter is a plain substring test.  When the pattern
+    contains ``*`` (any string, including the empty one) or ``?`` (exactly one
+    character) it has to match the whole value: ``AC254-0*A`` matches
+    ``AC254-050-A`` but not ``AC254-050-A-ML``.  Wrap a pattern in ``*`` to get
+    substring behaviour together with wildcards.
+    """
+
+    __slots__ = ("pattern", "_regex")
+
+    def __init__(self, pattern: str) -> None:
+        self.pattern = pattern.casefold().strip()
+        self._regex = _compile_wildcard_pattern(self.pattern)
+
+    def __bool__(self) -> bool:
+        return bool(self.pattern)
+
+    @property
+    def has_wildcards(self) -> bool:
+        return self._regex is not None
+
+    def matches(self, value: str) -> bool:
+        """Return True when *value* satisfies the filter; empty filters match."""
+        if not self.pattern:
+            return True
+        value = value.casefold()
+        if self._regex is None:
+            return self.pattern in value
+        return self._regex.fullmatch(value) is not None
+
+
 class CatalogSearchService:
     """Perform simple in-memory filtering over cached catalog records."""
 
@@ -39,16 +74,16 @@ class CatalogSearchService:
         text_variants = _part_number_search_variants(text)
         normalized_text_variants = {_normalize_compact_token(value) for value in text_variants}
         manufacturer = query.manufacturer.casefold().strip()
-        part_number = query.part_number.casefold().strip()
-        part_number_variants = _part_number_search_variants(part_number)
-        normalized_part_number_variants = {
-            _normalize_compact_token(value) for value in part_number_variants
-        }
-        product_name = query.product_name.casefold().strip()
-        category = query.category.casefold().strip()
-        material_text = query.material_text.casefold().strip()
-        coating_text = query.coating_text.casefold().strip()
-        availability_text = query.availability_text.casefold().strip()
+        part_number = TextFilter(query.part_number)
+        part_number_variants = [
+            TextFilter(_normalize_compact_pattern(variant))
+            for variant in _part_number_search_variants(part_number.pattern)
+        ]
+        product_name = TextFilter(query.product_name)
+        category = TextFilter(query.category)
+        material_text = TextFilter(query.material_text)
+        coating_text = TextFilter(query.coating_text)
+        availability_text = TextFilter(query.availability_text)
         matches: list[CatalogLensRecord] = []
 
         for record in records:
@@ -62,23 +97,17 @@ class CatalogSearchService:
                     continue
             if manufacturer and record.manufacturer.casefold() != manufacturer:
                 continue
-            record_part_number = record.part_number.casefold()
-            if part_number and part_number not in record_part_number:
-                normalized_record_part_number = _normalize_compact_token(record_part_number)
-                if not normalized_part_number_variants or not any(
-                    variant and variant in normalized_record_part_number
-                    for variant in normalized_part_number_variants
-                ):
-                    continue
-            if product_name and product_name not in record.product_name.casefold():
+            if not _matches_part_number(record.part_number, part_number, part_number_variants):
                 continue
-            if category and category not in record.category.casefold():
+            if not product_name.matches(record.product_name):
                 continue
-            if material_text and material_text not in (record.material_summary or "").casefold():
+            if not category.matches(record.category):
                 continue
-            if coating_text and coating_text not in (record.coating or "").casefold():
+            if not material_text.matches(record.material_summary or ""):
                 continue
-            if availability_text and availability_text not in (record.availability_status or "").casefold():
+            if not coating_text.matches(record.coating or ""):
+                continue
+            if not availability_text.matches(record.availability_status or ""):
                 continue
             if not _matches_range(record.efl_mm, query.efl_min, query.efl_max):
                 continue
@@ -96,6 +125,35 @@ class CatalogSearchService:
                 item.product_name.casefold(),
             ),
         )
+
+
+def _compile_wildcard_pattern(pattern: str) -> re.Pattern[str] | None:
+    """Translate ``*``/``?`` wildcards into a regex; None when there are none."""
+    if not any(char in pattern for char in WILDCARD_CHARACTERS):
+        return None
+    parts: list[str] = []
+    for char in pattern:
+        if char == "*":
+            parts.append(".*")
+        elif char == "?":
+            parts.append(".")
+        else:
+            parts.append(re.escape(char))
+    return re.compile("".join(parts), re.DOTALL)
+
+
+def _matches_part_number(
+    value: str,
+    part_number: TextFilter,
+    compact_variants: list[TextFilter],
+) -> bool:
+    """Match a part number literally first, then separator-insensitively."""
+    if not part_number:
+        return True
+    if part_number.matches(value):
+        return True
+    compact_value = _normalize_compact_token(value)
+    return any(variant and variant.matches(compact_value) for variant in compact_variants)
 
 
 def _matches_range(
@@ -119,12 +177,17 @@ def _normalize_compact_token(value: str) -> str:
     return re.sub(r"[^0-9a-z]+", "", value.casefold())
 
 
+def _normalize_compact_pattern(value: str) -> str:
+    """Like :func:`_normalize_compact_token` but keeps ``*``/``?`` wildcards."""
+    return re.sub(r"[^0-9a-z*?]+", "", value.casefold())
+
+
 def _part_number_search_variants(value: str) -> set[str]:
     """Return normalized query variants for common vendor part-number prefixes."""
     variants = {value}
-    compact = _normalize_compact_token(value)
-    if re.fullmatch(r"g\d{5,}", compact):
+    compact = _normalize_compact_pattern(value)
+    if re.fullmatch(r"g[0-9*?]{5,}", compact):
         variants.add(compact[1:])
-    elif re.fullmatch(r"\d{5,}", compact):
+    elif re.fullmatch(r"[0-9*?]{5,}", compact):
         variants.add(f"g{compact}")
     return {variant for variant in variants if variant}

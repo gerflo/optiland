@@ -33,7 +33,11 @@ from optiland_gui.catalogs.importers.excelitas_linos import (
     looks_like_excelitas_family_page,
 )
 from optiland_gui.catalogs.matching import build_winlens_match_map
-from optiland_gui.catalogs.search import CatalogSearchQuery, CatalogSearchService
+from optiland_gui.catalogs.search import (
+    CatalogSearchQuery,
+    CatalogSearchService,
+    TextFilter,
+)
 from optiland_gui.catalogs.storage import CatalogStorage
 from optiland_gui.catalogs.schema import CatalogLensRecord, CatalogSource, LensSurfaceSpec
 
@@ -750,7 +754,7 @@ class CatalogService:
     def search(self, query_dict: dict | None = None) -> list[dict]:
         """Return GUI summary dicts matching *query_dict*."""
         query_dict = query_dict or {}
-        match_type_text = str(query_dict.get("match_type_text", "")).casefold().strip()
+        match_type_filter = TextFilter(str(query_dict.get("match_type_text", "")))
         query = CatalogSearchQuery(
             text=str(query_dict.get("text", "")),
             manufacturer=str(query_dict.get("manufacturer", "")),
@@ -777,7 +781,7 @@ class CatalogService:
             summary["insertable_surface_count"] = len(
                 insertable_record.surfaces if insertable_record is not None else []
             )
-            if match_type_text and match_type_text not in summary["match_type"].casefold():
+            if not match_type_filter.matches(summary["match_type"]):
                 continue
             summaries.append(summary)
         return summaries
