@@ -18,7 +18,15 @@ import matplotlib
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QColor, QCursor, QIcon, QKeySequence, QPainter, QPen, QShortcut
+from PySide6.QtGui import (
+    QColor,
+    QCursor,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPen,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -45,6 +53,7 @@ try:
 except ImportError:
     VTK_AVAILABLE = False
 
+import contextlib
 from typing import TYPE_CHECKING
 
 from optiland.visualization.analysis.surface_sag import SurfaceSagViewer
@@ -338,7 +347,9 @@ class ViewerPanel(QWidget):
         self._chk_3d_non_stop = QCheckBox("Other Apertures")
         self._chk_3d_non_stop.setToolTip("Show non-stop surface apertures")
         self._chk_3d_non_stop.setChecked(True)
-        self._chk_3d_non_stop.toggled.connect(lambda _: self._render_3d_from_2d_settings())
+        self._chk_3d_non_stop.toggled.connect(
+            lambda _: self._render_3d_from_2d_settings()
+        )
 
         toolbar_layout.addWidget(self._btn_3d_refresh)
         toolbar_layout.addWidget(self._chk_3d_stop)
@@ -432,8 +443,14 @@ class ViewerPanel(QWidget):
         if not (self.viewer2D and self._ensure_3d_viewer() and self.viewer3D):
             return
         num_rays, distribution = self.viewer2D.ray_sampling_for_3d()
-        show_stop = self._chk_3d_stop.isChecked() if hasattr(self, "_chk_3d_stop") else True
-        show_non_stop = self._chk_3d_non_stop.isChecked() if hasattr(self, "_chk_3d_non_stop") else True
+        show_stop = (
+            self._chk_3d_stop.isChecked() if hasattr(self, "_chk_3d_stop") else True
+        )
+        show_non_stop = (
+            self._chk_3d_non_stop.isChecked()
+            if hasattr(self, "_chk_3d_non_stop")
+            else True
+        )
         self._rendering_3d = True
         try:
             self.viewer3D.render_optic(
@@ -491,9 +508,11 @@ class _DraggablePanel(QLabel):
         super().__init__("", parent)
         self._drag_offset: QPoint | None = None
         self._on_right_click = None  # callable, set by the viewer after creation
-        self._on_drag_end = None    # callable(panel, QPoint) called after a drag ends
-        self._user_moved = False    # True once the user has dragged this panel manually
-        self._data_pos: tuple[float, float] | None = None  # top-left in data coords when user-moved
+        self._on_drag_end = None  # callable(panel, QPoint) called after a drag ends
+        self._user_moved = False  # True once the user has dragged this panel manually
+        self._data_pos: tuple[float, float] | None = (
+            None  # top-left in data coords when user-moved
+        )
 
     def enterEvent(self, event) -> None:
         self.setCursor(Qt.CursorShape.SizeAllCursor)
@@ -519,7 +538,10 @@ class _DraggablePanel(QLabel):
             self.move(new_x, new_y)
 
     def mouseReleaseEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self._drag_offset is not None:
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._drag_offset is not None
+        ):
             self._user_moved = True
             self._drag_offset = None
             self.releaseMouse()
@@ -531,7 +553,7 @@ class _DraggablePanel(QLabel):
 class _MeasureOverlay(QWidget):
     """Transparent canvas overlay that draws the measurement dot and line."""
 
-    def __init__(self, viewer: "MatplotlibViewer") -> None:
+    def __init__(self, viewer: MatplotlibViewer) -> None:
         super().__init__(viewer.canvas)
         self._viewer = viewer
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -582,10 +604,8 @@ class _MeasureOverlay(QWidget):
 
         tpx = tpy = None
         if v._measure_target is not None:
-            try:
+            with contextlib.suppress(Exception):
                 tpx, tpy = v._data_to_canvas_pixel(*v._measure_target)
-            except Exception:
-                pass
         elif v._cursor_pixel is not None:
             tpx, tpy = v._cursor_pixel
 
@@ -707,18 +727,22 @@ class MatplotlibViewer(QWidget):
         self.settings_form_layout.addRow("Num Rays:", self.num_rays_spinbox)
 
         _DIST_DESCRIPTIONS = {
-            "line_y":    "Fan of rays along the Y axis (vertical cross-section).",
-            "line_x":    "Fan of rays along the X axis (horizontal cross-section).",
+            "line_y": "Fan of rays along the Y axis (vertical cross-section).",
+            "line_x": "Fan of rays along the X axis (horizontal cross-section).",
             "hexapolar": "Rays in concentric hexagonal rings across the pupil.",
-            "random":    "Uniformly random ray positions across the entrance pupil.",
+            "random": "Uniformly random ray positions across the entrance pupil.",
         }
         self.dist_combo = QComboBox()
         self.dist_combo.addItems(list(_DIST_DESCRIPTIONS.keys()))
         self.settings_form_layout.addRow("Distribution:", self.dist_combo)
 
-        self.dist_desc_label = QLabel(_DIST_DESCRIPTIONS.get(self.dist_combo.currentText(), ""))
+        self.dist_desc_label = QLabel(
+            _DIST_DESCRIPTIONS.get(self.dist_combo.currentText(), "")
+        )
         self.dist_desc_label.setWordWrap(True)
-        self.dist_desc_label.setStyleSheet("color:#8A9BAD;font-size:8pt;padding:2px 0 4px 0;")
+        self.dist_desc_label.setStyleSheet(
+            "color:#8A9BAD;font-size:8pt;padding:2px 0 4px 0;"
+        )
         self.dist_combo.currentTextChanged.connect(
             lambda text: self.dist_desc_label.setText(_DIST_DESCRIPTIONS.get(text, ""))
         )
@@ -732,7 +756,9 @@ class MatplotlibViewer(QWidget):
             self.settings.value("Viewer2D/PreserveZoom", False, type=bool)
         )
         self.preserve_zoom_checkbox.toggled.connect(
-            lambda checked: self.settings.setValue("Viewer2D/PreserveZoom", bool(checked))
+            lambda checked: self.settings.setValue(
+                "Viewer2D/PreserveZoom", bool(checked)
+            )
         )
         self.settings_form_layout.addRow("Preserve Zoom:", self.preserve_zoom_checkbox)
 
@@ -746,9 +772,13 @@ class MatplotlibViewer(QWidget):
         self._preserve_xy_ratio = self.preserve_xy_ratio_checkbox.isChecked()
         self.preserve_xy_ratio_checkbox.toggled.connect(self.set_preserve_xy_ratio)
         self.preserve_xy_ratio_checkbox.toggled.connect(
-            lambda checked: self.settings.setValue("Viewer2D/PreserveXYRatio", bool(checked))
+            lambda checked: self.settings.setValue(
+                "Viewer2D/PreserveXYRatio", bool(checked)
+            )
         )
-        self.settings_form_layout.addRow("Preserve XY Ratio:", self.preserve_xy_ratio_checkbox)
+        self.settings_form_layout.addRow(
+            "Preserve XY Ratio:", self.preserve_xy_ratio_checkbox
+        )
 
         self.center_line_checkbox = QCheckBox()
         self.center_line_checkbox.setChecked(
@@ -770,7 +800,9 @@ class MatplotlibViewer(QWidget):
                 self.plot_optic(),
             )
         )
-        self.settings_form_layout.addRow("Rays Reach Image:", self.rays_reach_image_checkbox)
+        self.settings_form_layout.addRow(
+            "Rays Reach Image:", self.rays_reach_image_checkbox
+        )
 
         self.hide_internal_surfaces_checkbox = QCheckBox()
         self.hide_internal_surfaces_checkbox.setToolTip(
@@ -785,7 +817,9 @@ class MatplotlibViewer(QWidget):
                 self.plot_optic(),
             )
         )
-        self.settings_form_layout.addRow("Hide Internal Surfaces:", self.hide_internal_surfaces_checkbox)
+        self.settings_form_layout.addRow(
+            "Hide Internal Surfaces:", self.hide_internal_surfaces_checkbox
+        )
 
         self.show_apertures_checkbox = QCheckBox()
         self.show_apertures_checkbox.setToolTip(
@@ -800,7 +834,9 @@ class MatplotlibViewer(QWidget):
                 self.plot_optic(),
             )
         )
-        self.settings_form_layout.addRow("Show Apertures:", self.show_apertures_checkbox)
+        self.settings_form_layout.addRow(
+            "Show Apertures:", self.show_apertures_checkbox
+        )
 
         self.display_y_measures_checkbox = QCheckBox()
         self.display_y_measures_checkbox.setToolTip(
@@ -815,7 +851,9 @@ class MatplotlibViewer(QWidget):
                 self.plot_optic(),
             )
         )
-        self.settings_form_layout.addRow("Display Y Measures:", self.display_y_measures_checkbox)
+        self.settings_form_layout.addRow(
+            "Display Y Measures:", self.display_y_measures_checkbox
+        )
 
         apply_button = QPushButton("Apply")
         apply_button.clicked.connect(self.apply_settings)
@@ -886,12 +924,18 @@ class MatplotlibViewer(QWidget):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents
         )
 
-        self._measure_anchor = None   # (xdata, ydata) — first right-click (active)
-        self._measure_target = None   # (xdata, ydata) — second right-click (locks panel)
-        self._cursor_pixel = None     # current cursor in Qt canvas coords (px, py)
-        self._dragging_point = None   # "anchor" | "target" | "kept_anchor" | "kept_target" | None
-        self._dragging_kept_idx = None  # index into _kept_measurements when dragging a kept dot
-        self._kept_measurements: list[tuple] = []  # list of (anchor, target), max 10, FIFO
+        self._measure_anchor = None  # (xdata, ydata) — first right-click (active)
+        self._measure_target = None  # (xdata, ydata) — second right-click (locks panel)
+        self._cursor_pixel = None  # current cursor in Qt canvas coords (px, py)
+        self._dragging_point = (
+            None  # "anchor" | "target" | "kept_anchor" | "kept_target" | None
+        )
+        self._dragging_kept_idx = (
+            None  # index into _kept_measurements when dragging a kept dot
+        )
+        self._kept_measurements: list[
+            tuple
+        ] = []  # list of (anchor, target), max 10, FIFO
 
         _KEPT_MAX = 10
 
@@ -948,9 +992,10 @@ class MatplotlibViewer(QWidget):
         """Warn once that rays cannot be shown until a stop surface is defined."""
         if getattr(self.connector, "_missing_stop_surface_warned", False):
             return
-        setattr(self.connector, "_missing_stop_surface_warned", True)
+        self.connector._missing_stop_surface_warned = True
         message = (
-            "No stop surface is defined. The optical layout is shown, but rays are hidden."
+            "No stop surface is defined. "
+            "The optical layout is shown, but rays are hidden."
         )
         toast_manager = getattr(self.connector, "toast_manager", None)
         if toast_manager is not None:
@@ -988,7 +1033,13 @@ class MatplotlibViewer(QWidget):
         if (
             self._enforce_equal_xy_on_toolbar_release
             and self._toolbar_navigation_mode_active()
-            and (self._preserve_xy_ratio or bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ControlModifier))
+            and (
+                self._preserve_xy_ratio
+                or bool(
+                    QApplication.keyboardModifiers()
+                    & Qt.KeyboardModifier.ControlModifier
+                )
+            )
         ):
             self._adjusting_equal_xy_limits = True
             try:
@@ -1005,7 +1056,11 @@ class MatplotlibViewer(QWidget):
         _apply_equal_xy_limits already reflects the new pixel dimensions.
         """
         self._measure_overlay.resize(self.canvas.size())
-        if not self._preserve_xy_ratio or self._is_plotting or self._adjusting_equal_xy_limits:
+        if (
+            not self._preserve_xy_ratio
+            or self._is_plotting
+            or self._adjusting_equal_xy_limits
+        ):
             return
         self._adjusting_equal_xy_limits = True
         try:
@@ -1015,10 +1070,12 @@ class MatplotlibViewer(QWidget):
             self._adjusting_equal_xy_limits = False
 
     def eventFilter(self, obj, event) -> bool:
-        if (obj is self.canvas
-                and event.type() == QEvent.Type.KeyPress
-                and event.key() == Qt.Key.Key_Escape
-                and self._measure_anchor is not None):
+        if (
+            obj is self.canvas
+            and event.type() == QEvent.Type.KeyPress
+            and event.key() == Qt.Key.Key_Escape
+            and self._measure_anchor is not None
+        ):
             self._measure_anchor = None
             self._measure_target = None
             self._cursor_pixel = None
@@ -1052,7 +1109,7 @@ class MatplotlibViewer(QWidget):
         disp = self.ax.transData.transform((data_x, data_y))
         return int(disp[0]), int(self.canvas.height() - disp[1])
 
-    def _on_panel_drag_end(self, panel: "_DraggablePanel", pos: "QPoint") -> None:
+    def _on_panel_drag_end(self, panel: _DraggablePanel, pos: QPoint) -> None:
         """Store the dragged panel's top-left corner in data coordinates."""
         try:
             py_mpl = self.canvas.height() - pos.y()
@@ -1080,7 +1137,9 @@ class MatplotlibViewer(QWidget):
             try:
                 px, py = self._data_to_canvas_pixel(*self._measure_panel._data_pos)
                 px = min(px, self.canvas.width() - self._measure_panel.width() - 4)
-                py = min(max(py, 4), self.canvas.height() - self._measure_panel.height() - 4)
+                py = min(
+                    max(py, 4), self.canvas.height() - self._measure_panel.height() - 4
+                )
                 self._measure_panel.move(px, py)
             except Exception:
                 pass
@@ -1093,7 +1152,9 @@ class MatplotlibViewer(QWidget):
             px = tpx + 15
             py = tpy + 5
             px = min(px, self.canvas.width() - self._measure_panel.width() - 4)
-            py = min(max(py, 4), self.canvas.height() - self._measure_panel.height() - 4)
+            py = min(
+                max(py, 4), self.canvas.height() - self._measure_panel.height() - 4
+            )
             self._measure_panel.move(px, py)
         self._measure_panel.setVisible(True)
         self._measure_panel.raise_()
@@ -1145,8 +1206,10 @@ class MatplotlibViewer(QWidget):
         if self._kept_measurements:
             self._update_kept_measure_panels()
 
-    def _snap_anchor(self, pixel_x: float, pixel_y: float, data_x: float, data_y: float) -> tuple[float, float]:
-        """Snap anchor to nearest surface Z and/or Y=0 when within the pixel threshold."""
+    def _snap_anchor(
+        self, pixel_x: float, pixel_y: float, data_x: float, data_y: float
+    ) -> tuple[float, float]:
+        """Snap anchor to nearest surface Z and/or Y=0 within the pixel threshold."""
         snap_text = self.snap_combo.currentText()
         if snap_text == "Off":
             return data_x, data_y
@@ -1177,8 +1240,10 @@ class MatplotlibViewer(QWidget):
 
         return snapped_x, snapped_y
 
-    def _is_near_dot(self, event_x: float, event_y: float, data_x: float, data_y: float) -> bool:
-        """Return True if matplotlib display coords are within grab radius of the data point."""
+    def _is_near_dot(
+        self, event_x: float, event_y: float, data_x: float, data_y: float
+    ) -> bool:
+        """Return True if display coords lie within the grab radius of the point."""
         try:
             disp = self.ax.transData.transform((data_x, data_y))
             return math.hypot(event_x - disp[0], event_y - disp[1]) <= _GRAB_RADIUS_PX
@@ -1202,7 +1267,7 @@ class MatplotlibViewer(QWidget):
             p.setVisible(False)
         self._measure_overlay.update()
 
-    def _on_kept_panel_right_click(self, panel: "_DraggablePanel") -> None:
+    def _on_kept_panel_right_click(self, panel: _DraggablePanel) -> None:
         """Delete the kept measurement whose panel was right-clicked."""
         try:
             i = self._kept_measure_panels.index(panel)
@@ -1210,12 +1275,18 @@ class MatplotlibViewer(QWidget):
             return
         menu = QMenu(self)
         delete_action = menu.addAction("Delete")
-        if menu.exec(QCursor.pos()) == delete_action and i < len(self._kept_measurements):
+        if menu.exec(QCursor.pos()) == delete_action and i < len(
+            self._kept_measurements
+        ):
             self._kept_measurements.pop(i)
             # Shift panel positions down so each panel keeps its data-space location
             for j in range(i, len(self._kept_measurements)):
-                self._kept_measure_panels[j]._data_pos = self._kept_measure_panels[j + 1]._data_pos
-                self._kept_measure_panels[j]._user_moved = self._kept_measure_panels[j + 1]._user_moved
+                self._kept_measure_panels[j]._data_pos = self._kept_measure_panels[
+                    j + 1
+                ]._data_pos
+                self._kept_measure_panels[j]._user_moved = self._kept_measure_panels[
+                    j + 1
+                ]._user_moved
             freed = len(self._kept_measurements)
             self._kept_measure_panels[freed]._data_pos = None
             self._kept_measure_panels[freed]._user_moved = False
@@ -1234,8 +1305,12 @@ class MatplotlibViewer(QWidget):
             if evicted:
                 self._kept_measurements.pop(0)
                 for j in range(len(self._kept_measure_panels) - 1):
-                    self._kept_measure_panels[j]._data_pos = self._kept_measure_panels[j + 1]._data_pos
-                    self._kept_measure_panels[j]._user_moved = self._kept_measure_panels[j + 1]._user_moved
+                    self._kept_measure_panels[j]._data_pos = self._kept_measure_panels[
+                        j + 1
+                    ]._data_pos
+                    self._kept_measure_panels[
+                        j
+                    ]._user_moved = self._kept_measure_panels[j + 1]._user_moved
                 self._kept_measure_panels[-1]._data_pos = None
                 self._kept_measure_panels[-1]._user_moved = False
             self._kept_measurements.append((self._measure_anchor, self._measure_target))
@@ -1280,16 +1355,15 @@ class MatplotlibViewer(QWidget):
 
         if event.button == 3 and event.inaxes:
             # Right-click near active target dot → Keep/Delete menu
-            near_active_target = (
-                self._measure_target is not None
-                and self._is_near_dot(event.x, event.y, *self._measure_target)
+            near_active_target = self._measure_target is not None and self._is_near_dot(
+                event.x, event.y, *self._measure_target
             )
             if near_active_target:
                 self._show_measurement_context_menu()
                 return
 
             # Right-click near any kept target dot → Delete-only menu
-            for i, (ka, kt) in enumerate(self._kept_measurements):
+            for i, (_ka, kt) in enumerate(self._kept_measurements):
                 near = self._is_near_dot(event.x, event.y, *kt)
                 if near:
                     menu = QMenu(self)
@@ -1297,8 +1371,12 @@ class MatplotlibViewer(QWidget):
                     if menu.exec(QCursor.pos()) == delete_action:
                         self._kept_measurements.pop(i)
                         for j in range(i, len(self._kept_measurements)):
-                            self._kept_measure_panels[j]._data_pos = self._kept_measure_panels[j + 1]._data_pos
-                            self._kept_measure_panels[j]._user_moved = self._kept_measure_panels[j + 1]._user_moved
+                            self._kept_measure_panels[
+                                j
+                            ]._data_pos = self._kept_measure_panels[j + 1]._data_pos
+                            self._kept_measure_panels[
+                                j
+                            ]._user_moved = self._kept_measure_panels[j + 1]._user_moved
                         freed = len(self._kept_measurements)
                         self._kept_measure_panels[freed]._data_pos = None
                         self._kept_measure_panels[freed]._user_moved = False
@@ -1309,15 +1387,21 @@ class MatplotlibViewer(QWidget):
             # State machine
             if self._measure_anchor is None or self._measure_target is not None:
                 # State 0 / State 2 → State 1: start new measurement
-                snap_x, snap_y = self._snap_anchor(event.x, event.y, event.xdata, event.ydata)
+                snap_x, snap_y = self._snap_anchor(
+                    event.x, event.y, event.xdata, event.ydata
+                )
                 self._measure_anchor = (snap_x, snap_y)
                 self._measure_target = None
                 self._measure_panel.setVisible(False)
             else:
                 # State 1 → State 2: lock target
-                snap_x, snap_y = self._snap_anchor(event.x, event.y, event.xdata, event.ydata)
+                snap_x, snap_y = self._snap_anchor(
+                    event.x, event.y, event.xdata, event.ydata
+                )
                 self._measure_target = (snap_x, snap_y)
-                self._measure_panel._user_moved = False  # fresh placement for new target
+                self._measure_panel._user_moved = (
+                    False  # fresh placement for new target
+                )
                 self._measure_panel._data_pos = None
                 self._update_locked_measure_panel()
             self._measure_overlay.update()
@@ -1325,11 +1409,15 @@ class MatplotlibViewer(QWidget):
 
         if event.button == 1 and event.inaxes:
             # Left-click near a dot → start drag instead of pan
-            if self._measure_anchor is not None and self._is_near_dot(event.x, event.y, *self._measure_anchor):
+            if self._measure_anchor is not None and self._is_near_dot(
+                event.x, event.y, *self._measure_anchor
+            ):
                 self._dragging_point = "anchor"
                 self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
                 return
-            if self._measure_target is not None and self._is_near_dot(event.x, event.y, *self._measure_target):
+            if self._measure_target is not None and self._is_near_dot(
+                event.x, event.y, *self._measure_target
+            ):
                 self._dragging_point = "target"
                 self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
                 return
@@ -1394,7 +1482,9 @@ class MatplotlibViewer(QWidget):
 
         # Handle drag mode — move anchor or target with snap
         if self._dragging_point is not None and event.inaxes:
-            snap_x, snap_y = self._snap_anchor(event.x, event.y, event.xdata, event.ydata)
+            snap_x, snap_y = self._snap_anchor(
+                event.x, event.y, event.xdata, event.ydata
+            )
             if self._dragging_point == "anchor":
                 self._measure_anchor = (snap_x, snap_y)
                 if self._measure_target is not None:
@@ -1404,12 +1494,18 @@ class MatplotlibViewer(QWidget):
             elif self._dragging_point == "target":
                 self._measure_target = (snap_x, snap_y)
                 self._update_locked_measure_panel()
-            elif self._dragging_point == "kept_anchor" and self._dragging_kept_idx is not None:
+            elif (
+                self._dragging_point == "kept_anchor"
+                and self._dragging_kept_idx is not None
+            ):
                 i = self._dragging_kept_idx
                 _, kt = self._kept_measurements[i]
                 self._kept_measurements[i] = ((snap_x, snap_y), kt)
                 self._update_kept_measure_panels()
-            elif self._dragging_point == "kept_target" and self._dragging_kept_idx is not None:
+            elif (
+                self._dragging_point == "kept_target"
+                and self._dragging_kept_idx is not None
+            ):
                 i = self._dragging_kept_idx
                 ka, _ = self._kept_measurements[i]
                 self._kept_measurements[i] = (ka, (snap_x, snap_y))
@@ -1431,15 +1527,24 @@ class MatplotlibViewer(QWidget):
         # Cursor: open hand when hovering over any grabbable dot, arrow otherwise
         if event.inaxes:
             near_any = (
-                (self._measure_anchor is not None and self._is_near_dot(event.x, event.y, *self._measure_anchor))
-                or (self._measure_target is not None and self._is_near_dot(event.x, event.y, *self._measure_target))
+                (
+                    self._measure_anchor is not None
+                    and self._is_near_dot(event.x, event.y, *self._measure_anchor)
+                )
+                or (
+                    self._measure_target is not None
+                    and self._is_near_dot(event.x, event.y, *self._measure_target)
+                )
                 or any(
-                    self._is_near_dot(event.x, event.y, *ka) or self._is_near_dot(event.x, event.y, *kt)
+                    self._is_near_dot(event.x, event.y, *ka)
+                    or self._is_near_dot(event.x, event.y, *kt)
                     for ka, kt in self._kept_measurements
                 )
             )
             self.canvas.setCursor(
-                Qt.CursorShape.OpenHandCursor if near_any else Qt.CursorShape.ArrowCursor
+                Qt.CursorShape.OpenHandCursor
+                if near_any
+                else Qt.CursorShape.ArrowCursor
             )
         else:
             self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
@@ -1512,7 +1617,7 @@ class MatplotlibViewer(QWidget):
         ax.figure.canvas.draw_idle()
 
     def _style_settings_controls(self, theme: str) -> None:
-        """Apply widget-level stylesheets to spinbox/combobox to guarantee text visibility."""
+        """Apply widget-level stylesheets to spinbox/combobox so text stays visible."""
         if theme == "dark":
             fg, bg, border, btn_bg = "#F0F6FC", "#111821", "#3A4551", "#212B36"
         else:
@@ -1522,9 +1627,11 @@ class MatplotlibViewer(QWidget):
             f"padding:3px 22px 3px 4px;border-radius:3px;}}"
             f"QSpinBox::up-button,QSpinBox::down-button{{width:16px;background-color:{btn_bg};"
             f"border-left:1px solid {border};}}"
-            f"QSpinBox::up-button{{subcontrol-origin:border;subcontrol-position:top right;"
+            f"QSpinBox::up-button{{subcontrol-origin:border;"
+            f"subcontrol-position:top right;"
             f"border-top-right-radius:3px;}}"
-            f"QSpinBox::down-button{{subcontrol-origin:border;subcontrol-position:bottom right;"
+            f"QSpinBox::down-button{{subcontrol-origin:border;"
+            f"subcontrol-position:bottom right;"
             f"border-top:1px solid {border};border-bottom-right-radius:3px;}}"
         )
         self.dist_combo.setStyleSheet(
@@ -1616,7 +1723,9 @@ class MatplotlibViewer(QWidget):
         bbox = self.ax.get_position()
         figure_width = max(float(self.figure.get_figwidth()), 1.0)
         figure_height = max(float(self.figure.get_figheight()), 1.0)
-        box_ratio = max((bbox.width * figure_width) / (bbox.height * figure_height), 1e-6)
+        box_ratio = max(
+            (bbox.width * figure_width) / (bbox.height * figure_height), 1e-6
+        )
 
         x0, x1 = xlim
         y0, y1 = ylim
@@ -1670,7 +1779,10 @@ class MatplotlibViewer(QWidget):
             from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
         except ImportError:
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Print", "Print support is not available on this system.")
+
+            QMessageBox.warning(
+                self, "Print", "Print support is not available on this system."
+            )
             return
 
         from PySide6.QtWidgets import QStyleFactory
@@ -1691,9 +1803,11 @@ class MatplotlibViewer(QWidget):
         preview.setStyleSheet("""
             QWidget          { background-color: #f0f0f0; color: #202020; }
             QToolBar         { background-color: #ececec; border: none; spacing: 2px; }
-            QToolBar::separator { width: 1px; background-color: #c8c8c8; margin: 4px 2px; }
+            QToolBar::separator { width: 1px; background-color: #c8c8c8;
+                                  margin: 4px 2px; }
             QToolButton      { color: #202020; background-color: transparent;
-                               border: 1px solid transparent; padding: 2px; border-radius: 2px; }
+                               border: 1px solid transparent; padding: 2px;
+                               border-radius: 2px; }
             QToolButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
             QToolButton:pressed,
             QToolButton:checked  { background-color: #b8d0ea; border-color: #4e8cc0; }
@@ -1704,7 +1818,8 @@ class MatplotlibViewer(QWidget):
             QPushButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
             QPushButton:pressed  { background-color: #b8d0ea; border-color: #4e8cc0; }
             QPushButton:default  { border-color: #0078d7; }
-            QPushButton:disabled { background-color: #d4d4d4; color: #888888; border-color: #d4d4d4; }
+            QPushButton:disabled { background-color: #d4d4d4; color: #888888;
+                                   border-color: #d4d4d4; }
             QLabel           { color: #202020; background-color: transparent; }
             QCheckBox, QRadioButton, QGroupBox { color: #202020; }
             QGroupBox        { border: 1px solid #b0b0b0; border-radius: 4px;
@@ -1713,13 +1828,16 @@ class MatplotlibViewer(QWidget):
             QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
                 background-color: #ffffff; color: #202020;
                 border: 1px solid #aaaaaa; border-radius: 2px; padding: 1px 4px; }
-            QComboBox::drop-down { background-color: #e1e1e1; border-left: 1px solid #aaaaaa; }
+            QComboBox::drop-down { background-color: #e1e1e1;
+                                   border-left: 1px solid #aaaaaa; }
             QAbstractItemView{ background-color: #ffffff; color: #202020;
                                border: 1px solid #aaaaaa; }
             QScrollBar:vertical, QScrollBar:horizontal {
                 background-color: #e8e8e8; border: none; }
-            QScrollBar::handle:vertical   { background-color: #b0b0b0; border-radius: 3px; min-height: 20px; }
-            QScrollBar::handle:horizontal { background-color: #b0b0b0; border-radius: 3px; min-width:  20px; }
+            QScrollBar::handle:vertical   { background-color: #b0b0b0;
+                                            border-radius: 3px; min-height: 20px; }
+            QScrollBar::handle:horizontal { background-color: #b0b0b0;
+                                            border-radius: 3px; min-width:  20px; }
             QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
                 background-color: #909090; }
             QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
@@ -1748,10 +1866,8 @@ class MatplotlibViewer(QWidget):
                 preview.paintRequested.emit(printer)
 
         for _act in preview.findChildren(_QAction, "qt_print_action"):
-            try:
+            with contextlib.suppress(RuntimeError):
                 _act.triggered.disconnect()
-            except RuntimeError:
-                pass
             _act.triggered.connect(_handle_print)
             break
 
@@ -1762,10 +1878,8 @@ class MatplotlibViewer(QWidget):
         # is released.  Without this, the Qt parent-child chain keeps the dialog's
         # C++ object alive while the Python-owned QPrinter (no Qt parent) is GC'd
         # first, leaving the dialog with a dangling QPrinter*.
-        try:
+        with contextlib.suppress(RuntimeError):
             preview.paintRequested.disconnect(self._render_for_print)
-        except RuntimeError:
-            pass
         self._print_overlay = None
         preview.setParent(None)
 
@@ -1776,17 +1890,19 @@ class MatplotlibViewer(QWidget):
         (e.g. after an orientation or paper-size change).
         """
         import io
-        from PySide6.QtGui import QImage, QPixmap
-        from PySide6.QtWidgets import QApplication
 
         from PySide6.QtCore import QEventLoop
+        from PySide6.QtGui import QImage, QPixmap
+        from PySide6.QtWidgets import QApplication
 
         overlay = getattr(self, "_print_overlay", None)
 
         def _flush(value: float) -> None:
             if overlay is not None:
                 overlay.set_progress(value)
-                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+                QApplication.processEvents(
+                    QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+                )
 
         if overlay is not None:
             overlay.show_busy()
@@ -1902,16 +2018,15 @@ class MatplotlibViewer(QWidget):
         try:
             if on_progress is not None:
                 on_progress(0.35)
-            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight",
-                        facecolor="white")
+            fig.savefig(
+                buf, format="png", dpi=300, bbox_inches="tight", facecolor="white"
+            )
             if on_progress is not None:
                 on_progress(0.85)
         finally:
             for setter, original in reversed(restores):
-                try:
+                with contextlib.suppress(Exception):
                     setter(original)
-                except Exception:
-                    pass
 
     def _draw_surface_dimensions(self, ax, optic):
         """Draw Z-spacing dimension annotations below the 2D layout.
@@ -1934,17 +2049,12 @@ class MatplotlibViewer(QWidget):
         # Build ordered list of external surface z-positions.
         # Skip only the object surface; include the image surface so the
         # distance to the image plane is shown.
-        num_surf = optic.surfaces.num_surfaces
         ext_z = []
         for idx, surf in enumerate(optic.surfaces):
             if idx == 0:
                 continue  # skip object surface
             gid = getattr(surf, "group_id", None)
-            if gid is None:
-                z = float(surf.geometry.cs.z)
-                if not ext_z or abs(z - ext_z[-1]) > 1e-9:
-                    ext_z.append(z)
-            elif idx in (group_bounds[gid][0], group_bounds[gid][1]):
+            if gid is None or idx in (group_bounds[gid][0], group_bounds[gid][1]):
                 z = float(surf.geometry.cs.z)
                 if not ext_z or abs(z - ext_z[-1]) > 1e-9:
                     ext_z.append(z)
@@ -2006,14 +2116,27 @@ class MatplotlibViewer(QWidget):
         for i, (z1, z2, dz, zm) in enumerate(dims):
             label_y = label_y_row1 if rows[i] == 1 else label_y_row0
 
-            ax.plot([z1, z2], [dim_y, dim_y], color=dim_color, linewidth=0.8,
-                    clip_on=False)
+            ax.plot(
+                [z1, z2], [dim_y, dim_y], color=dim_color, linewidth=0.8, clip_on=False
+            )
             for zz in (z1, z2):
-                ax.plot([zz, zz], [dim_y - tick_h, dim_y + tick_h],
-                        color=dim_color, linewidth=0.8, clip_on=False)
-            ax.text(zm, label_y, f"{dz:.2f}",
-                    ha="center", va="top", fontsize=6.5,
-                    color=text_color, clip_on=False)
+                ax.plot(
+                    [zz, zz],
+                    [dim_y - tick_h, dim_y + tick_h],
+                    color=dim_color,
+                    linewidth=0.8,
+                    clip_on=False,
+                )
+            ax.text(
+                zm,
+                label_y,
+                f"{dz:.2f}",
+                ha="center",
+                va="top",
+                fontsize=6.5,
+                color=text_color,
+                clip_on=False,
+            )
 
         # Extend y-axis to include both rows
         bottom = label_y_row1 - tick_h * 2
@@ -2042,6 +2165,7 @@ class MatplotlibViewer(QWidget):
                         optic, rays2d_plotter, projection="2d"
                     )
                     from optiland.visualization.themes import get_active_theme
+
                     theme = get_active_theme()
                     hide_vignetted = self.rays_reach_image_checkbox.isChecked()
                     hide_internal = self.hide_internal_surfaces_checkbox.isChecked()
@@ -2057,7 +2181,7 @@ class MatplotlibViewer(QWidget):
                             theme=theme,
                             hide_vignetted=hide_vignetted,
                         )
-                        setattr(self.connector, "_missing_stop_surface_warned", False)
+                        self.connector._missing_stop_surface_warned = False
                     except ValueError as exc:
                         if "No stop surface found." not in str(exc):
                             raise
@@ -2068,7 +2192,8 @@ class MatplotlibViewer(QWidget):
                     with warnings.catch_warnings(record=True) as drawing_warnings:
                         warnings.simplefilter("always")
                         system_plotter.plot(
-                            self.ax, theme=theme,
+                            self.ax,
+                            theme=theme,
                             hide_internal_surfaces=hide_internal,
                             show_apertures=show_apertures,
                         )
@@ -2096,11 +2221,17 @@ class MatplotlibViewer(QWidget):
                         left=0.06, right=0.995, top=0.92, bottom=bottom_margin
                     )
                     if self._preserve_xy_ratio:
-                        self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
+                        self._apply_equal_xy_limits(
+                            self.ax.get_xlim(), self.ax.get_ylim()
+                        )
                     if self.center_line_checkbox.isChecked():
                         self.ax.axhline(
-                            y=0, color="yellow", linestyle="-.",
-                            linewidth=0.9, alpha=0.85, zorder=1,
+                            y=0,
+                            color="yellow",
+                            linestyle="-.",
+                            linewidth=0.9,
+                            alpha=0.85,
+                            zorder=1,
                         )
                 except Exception:
                     self.ax.text(
@@ -2201,9 +2332,10 @@ class VTKViewer(QWidget):
         """Warn once that 3D rays cannot be shown until a stop surface is defined."""
         if getattr(self.connector, "_missing_stop_surface_warned", False):
             return
-        setattr(self.connector, "_missing_stop_surface_warned", True)
+        self.connector._missing_stop_surface_warned = True
         message = (
-            "No stop surface is defined. The optical layout is shown, but rays are hidden."
+            "No stop surface is defined. "
+            "The optical layout is shown, but rays are hidden."
         )
         toast_manager = getattr(self.connector, "toast_manager", None)
         if toast_manager is not None:
@@ -2255,6 +2387,7 @@ class VTKViewer(QWidget):
             ):
                 try:
                     from optiland.visualization.themes import get_active_theme
+
                     rays3d_plotter = Rays3D(optic)
                     system_plotter = OptilandOpticalSystemPlotter(
                         optic, rays3d_plotter, projection="3d"
@@ -2269,7 +2402,7 @@ class VTKViewer(QWidget):
                             distribution=self._last_distribution,
                             theme=theme,
                         )
-                        setattr(self.connector, "_missing_stop_surface_warned", False)
+                        self.connector._missing_stop_surface_warned = False
                     except ValueError as exc:
                         if "No stop surface found." not in str(exc):
                             raise
