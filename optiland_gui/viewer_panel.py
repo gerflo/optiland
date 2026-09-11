@@ -74,6 +74,44 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _describe_ray_trace_error(exc: BaseException) -> str:
+    """Return a user-facing explanation for a ray trace that failed."""
+    message = str(exc) or type(exc).__name__
+    if "Object surface is at infinity" in message:
+        return (
+            "Rays are hidden: the selected field type needs a finite object "
+            "distance, but the object surface is at infinity. Give surface 0 a "
+            "finite thickness or switch the field type to 'Angle'."
+        )
+    return f"Rays are hidden because tracing failed: {message}"
+
+
+def _notify_viewer_issue(
+    connector, key: str, message: str | None, level: str = "warning"
+) -> None:
+    """Surface *message* once per distinct text under *key*.
+
+    The layout is redrawn on every model change, so a persistent problem
+    would otherwise toast on every keystroke. Passing ``None`` clears the
+    remembered text so the same problem is reported again if it comes back.
+    """
+    cache = getattr(connector, "_viewer_issue_cache", None)
+    if cache is None:
+        cache = {}
+        connector._viewer_issue_cache = cache
+    if message is None:
+        cache.pop(key, None)
+        return
+    if cache.get(key) == message:
+        return
+    cache[key] = message
+    toast_manager = getattr(connector, "toast_manager", None)
+    if toast_manager is not None:
+        toast_manager.notify(message, level)
+    else:
+        logger.log(logging.ERROR if level == "error" else logging.WARNING, message)
+
+
 class SagViewer(QWidget):
     """A widget for displaying a 2D sag plot of a selected optical surface."""
 
@@ -2171,6 +2209,7 @@ class MatplotlibViewer(QWidget):
                     hide_internal = self.hide_internal_surfaces_checkbox.isChecked()
                     show_measures = self.display_y_measures_checkbox.isChecked()
                     show_apertures = self.show_apertures_checkbox.isChecked()
+                    ray_error = None
                     try:
                         rays2d_plotter.plot(
                             self.ax,
@@ -2182,10 +2221,18 @@ class MatplotlibViewer(QWidget):
                             hide_vignetted=hide_vignetted,
                         )
                         self.connector._missing_stop_surface_warned = False
-                    except ValueError as exc:
-                        if "No stop surface found." not in str(exc):
-                            raise
-                        self._notify_missing_stop_surface()
+                        _notify_viewer_issue(self.connector, "rays", None)
+                    except Exception as exc:
+                        if "No stop surface found." in str(exc):
+                            self._notify_missing_stop_surface()
+                        else:
+                            # Tracing failed (e.g. object-height fields with the
+                            # object at infinity): still show the layout and say why.
+                            ray_error = str(exc) or type(exc).__name__
+                            logger.debug("2D ray trace failed", exc_info=True)
+                            _notify_viewer_issue(
+                                self.connector, "rays", _describe_ray_trace_error(exc)
+                            )
                     # The overlap check warns per drawn element on every
                     # repaint; capture it here so the user is told once in
                     # the GUI instead of the console filling up.
@@ -2198,6 +2245,17 @@ class MatplotlibViewer(QWidget):
                             show_apertures=show_apertures,
                         )
                     self._report_drawing_warnings(drawing_warnings)
+                    if ray_error is not None:
+                        self.ax.text(
+                            0.01,
+                            0.01,
+                            f"Rays hidden: {ray_error}",
+                            transform=self.ax.transAxes,
+                            ha="left",
+                            va="bottom",
+                            fontsize=8,
+                            color=matplotlib.rcParams["text.color"],
+                        )
                     self.ax.set_title(
                         f"System: {optic.name} (2D)",
                         color=matplotlib.rcParams["text.color"],
@@ -2233,9 +2291,21 @@ class MatplotlibViewer(QWidget):
                             alpha=0.85,
                             zorder=1,
                         )
-                except Exception:
+                except Exception as exc:
+                    logger.debug("2D layout plot failed", exc_info=True)
+                    _notify_viewer_issue(
+                        self.connector,
+                        "2d-layout",
+                        f"Error plotting the 2D layout: {exc}",
+                        "error",
+                    )
                     self.ax.text(
-                        0.5, 0.5, "Error plotting system", ha="center", va="center"
+                        0.5,
+                        0.5,
+                        f"Error plotting system:\n{exc}",
+                        ha="center",
+                        va="center",
+                        wrap=True,
                     )
             else:
                 self.ax.text(0.5, 0.5, "No system loaded", ha="center", va="center")
@@ -2393,6 +2463,7 @@ class VTKViewer(QWidget):
                         optic, rays3d_plotter, projection="3d"
                     )
                     theme = get_active_theme()
+                    ray_error = None
                     try:
                         rays3d_plotter.plot(
                             self.renderer,
@@ -2403,23 +2474,40 @@ class VTKViewer(QWidget):
                             theme=theme,
                         )
                         self.connector._missing_stop_surface_warned = False
-                    except ValueError as exc:
-                        if "No stop surface found." not in str(exc):
-                            raise
-                        self._notify_missing_stop_surface()
+                        _notify_viewer_issue(self.connector, "rays", None)
+                    except Exception as exc:
+                        if "No stop surface found." in str(exc):
+                            self._notify_missing_stop_surface()
+                        else:
+                            ray_error = str(exc) or type(exc).__name__
+                            logger.debug("3D ray trace failed", exc_info=True)
+                            _notify_viewer_issue(
+                                self.connector, "rays", _describe_ray_trace_error(exc)
+                            )
                     system_plotter.plot(
                         self.renderer,
                         theme=theme,
                         show_stop_apertures=self._show_stop_apertures,
                         show_non_stop_apertures=self._show_non_stop_apertures,
                     )
+                    if ray_error is not None:
+                        textActor = vtk.vtkTextActor()
+                        textActor.SetInput(f"Rays hidden: {ray_error}")
+                        textActor.GetTextProperty().SetColor(1, 0.8, 0.2)
+                        self.renderer.AddActor2D(textActor)
                     if not self.renderer.GetActiveCamera():
                         self.setup_default_camera()
                     else:
                         self.renderer.ResetCameraClippingRange()
                         self.renderer.ResetCamera()
                 except Exception as e:
-                    print(f"VTKViewer Error: {e}")
+                    logger.debug("3D layout render failed", exc_info=True)
+                    _notify_viewer_issue(
+                        self.connector,
+                        "3d-layout",
+                        f"Error rendering the 3D view: {e}",
+                        "error",
+                    )
                     textActor = vtk.vtkTextActor()
                     textActor.SetInput(f"Error rendering 3D view:\n{e}")
                     textActor.GetTextProperty().SetColor(1, 0, 0)
