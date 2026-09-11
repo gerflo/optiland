@@ -7,7 +7,7 @@ import math
 import re
 import warnings
 from abc import ABC
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from struct import Struct
 from typing import Any
@@ -77,7 +77,7 @@ _UNCOATED_RE = re.compile(r"\buncoated\b", re.IGNORECASE)
 _ZMF_ENTRY_HEADER = Struct("<100s24xIdd")
 
 
-class CatalogImporter(ABC):
+class CatalogImporter(ABC):  # noqa: B024 - vendor subclasses only override hooks
     """Abstract base class for vendor-specific catalog importers."""
 
     manufacturer: str = ""
@@ -117,7 +117,9 @@ class CatalogImporter(ABC):
         return self.catalog_url
 
 
-def load_normalized_json_records(path: str, manufacturer: str) -> list[CatalogLensRecord]:
+def load_normalized_json_records(
+    path: str, manufacturer: str
+) -> list[CatalogLensRecord]:
     """Load Optiland-normalized catalog records from a JSON file."""
     file_path = Path(path)
     payload = json.loads(file_path.read_text(encoding="utf-8"))
@@ -128,7 +130,7 @@ def load_normalized_json_records(path: str, manufacturer: str) -> list[CatalogLe
     else:
         raw_records = []
 
-    imported_at = datetime.now(timezone.utc).isoformat()
+    imported_at = datetime.now(UTC).isoformat()
     records: list[CatalogLensRecord] = []
     for item in raw_records:
         if not isinstance(item, dict):
@@ -202,7 +204,9 @@ def load_zemax_catalog_record(
     center_thickness_mm = _infer_center_thickness(surface_specs)
     material_summary = _build_material_summary(surface_specs)
     coating = _infer_coating(product_name, meta)
-    wavelengths = [float(wavelength.value) for wavelength in optic.wavelengths.wavelengths]
+    wavelengths = [
+        float(wavelength.value) for wavelength in optic.wavelengths.wavelengths
+    ]
     source_url = (
         product_url(part_number)
         if callable(product_url) and part_number
@@ -233,7 +237,7 @@ def load_zemax_catalog_record(
             source_type=source_type,
             source_path=source_path_override or str(file_path),
             source_url=source_url,
-            imported_at=datetime.now(timezone.utc).isoformat(),
+            imported_at=datetime.now(UTC).isoformat(),
             license_note=(
                 "Imported from a user-provided Zemax stock-lens file. "
                 "Review vendor license terms before redistribution."
@@ -258,7 +262,9 @@ def load_zmf_catalog_records(
         saw_entries = True
         try:
             raw_text = _decode_zemax_bytes_with_fallback(payload)
-            virtual_path = str(file_path.with_name(_safe_zmf_entry_filename(entry_name)))
+            virtual_path = str(
+                file_path.with_name(_safe_zmf_entry_filename(entry_name))
+            )
             record = load_zemax_catalog_record(
                 virtual_path,
                 manufacturer=manufacturer,
@@ -277,14 +283,17 @@ def load_zmf_catalog_records(
     if not saw_entries:
         raise ValueError(f"No readable ZMF entries found in {file_path.name}.")
     if not records:
-        summary = "; ".join(failed_entries[:3]) if failed_entries else "unknown decode error"
+        summary = (
+            "; ".join(failed_entries[:3]) if failed_entries else "unknown decode error"
+        )
         raise ValueError(
             f"Could not import any readable Zemax entries from {file_path.name}. "
             f"Sample failures: {summary}"
         )
     if failed_entries:
         warnings.warn(
-            f"Skipped {len(failed_entries)} unreadable ZMF entries from {file_path.name}.",
+            f"Skipped {len(failed_entries)} unreadable ZMF entries "
+            f"from {file_path.name}.",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -321,22 +330,14 @@ def _score_decoded_zemax_text(text: str) -> float:
     upper = text.upper()
     marker_hits = sum(upper.count(marker) for marker in _ZEMAX_TEXT_MARKERS)
     operand_lines = sum(
-        1
-        for line in text.splitlines()
-        if re.match(r"^\s*[A-Z]{4}\b", line)
+        1 for line in text.splitlines() if re.match(r"^\s*[A-Z]{4}\b", line)
     )
-    printable = sum(
-        1
-        for char in text
-        if char in "\r\n\t" or 32 <= ord(char) <= 126
-    )
+    printable = sum(1 for char in text if char in "\r\n\t" or 32 <= ord(char) <= 126)
     printable_ratio = printable / max(len(text), 1)
-    weird_penalty = sum(
-        1
-        for char in text
-        if ord(char) > 255
+    weird_penalty = sum(1 for char in text if ord(char) > 255)
+    return (
+        marker_hits * 1000 + operand_lines * 25 + printable_ratio * 100 - weird_penalty
     )
-    return marker_hits * 1000 + operand_lines * 25 + printable_ratio * 100 - weird_penalty
 
 
 def _iter_zmf_entries(path: Path):
@@ -405,7 +406,9 @@ def _parse_zemax_text_metadata(text: str) -> dict[str, Any]:
         if operand == "NAME":
             metadata["name"] = " ".join(tokens[1:]).strip()
         elif operand == "NOTE":
-            note_tokens = tokens[2:] if len(tokens) > 1 and tokens[1].isdigit() else tokens[1:]
+            note_tokens = (
+                tokens[2:] if len(tokens) > 1 and tokens[1].isdigit() else tokens[1:]
+            )
             note = " ".join(note_tokens).strip()
             if note:
                 metadata["notes"].append(note)
@@ -426,7 +429,10 @@ def _parse_zemax_text_metadata(text: str) -> dict[str, Any]:
             value = _safe_positive_float(tokens[2])
             if value:
                 clear_aperture_radii[current_surface] = value
-    metadata["surface_semi_diameters"] = {**fixed_semi_diameters, **clear_aperture_radii}
+    metadata["surface_semi_diameters"] = {
+        **fixed_semi_diameters,
+        **clear_aperture_radii,
+    }
     return metadata
 
 
@@ -588,7 +594,11 @@ def _material_name(surface) -> str:  # noqa: ANN001
             index = float(material.n(0.55))
         except Exception:  # noqa: BLE001
             index = 1.0
-        return "Air" if math.isclose(index, 1.0, rel_tol=1e-6, abs_tol=1e-6) else f"{index:.4f}"
+        return (
+            "Air"
+            if math.isclose(index, 1.0, rel_tol=1e-6, abs_tol=1e-6)
+            else f"{index:.4f}"
+        )
     return str(getattr(material, "name", "Air"))
 
 
@@ -712,11 +722,15 @@ def _infer_efl_mm(product_name: str, metadata: dict[str, Any]) -> float | None:
 
 def _normalize_coating_text(value: str) -> str:
     cleaned = str(value).strip()
-    cleaned = re.sub(r"\s*-\s*for information only\b.*$", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(
+        r"\s*-\s*for information only\b.*$", "", cleaned, flags=re.IGNORECASE
+    )
     return cleaned.strip(" ,;-")
 
 
-def _build_tags(product_name: str, material_summary: str | None, coating: str | None) -> list[str]:
+def _build_tags(
+    product_name: str, material_summary: str | None, coating: str | None
+) -> list[str]:
     tags = {_infer_category(product_name)}
     if material_summary:
         tags.update(

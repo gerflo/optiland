@@ -12,9 +12,9 @@ Kramer Harrison, 2024
 # import pkg_resources
 from __future__ import annotations
 
+import re
 import warnings
 from importlib import resources
-import re
 from pathlib import Path
 
 import pandas as pd
@@ -26,7 +26,8 @@ from optiland.materials.registry import MaterialRegistry
 
 _WINLENS_N_PREFIX_RE = r"^([A-Z]+)N([0-9][A-Z0-9]*)$"
 _WINLENS_ALIAS_ENTRY_RE = re.compile(
-    rb"([A-Z][A-Z0-9-]{2,20})\s{8,}[\x00-\x20\xff\xfe]{0,4}(\[[A-Za-z]+\]|[A-Za-z][A-Za-z ]{2,20})\s{8,}",
+    rb"([A-Z][A-Z0-9-]{2,20})\s{8,}[\x00-\x20\xff\xfe]{0,4}"
+    rb"(\[[A-Za-z]+\]|[A-Za-z][A-Za-z ]{2,20})\s{8,}",
 )
 _VERIFIED_WINLENS_ALIAS_MANUFACTURERS = {"schott"}
 
@@ -237,7 +238,10 @@ class Material(MaterialFile):
             exact_mask = (
                 dfi["category_name"].fillna("").str.casefold().isin(exact_name_values)
                 | dfi["name"].fillna("").str.casefold().isin(exact_name_values)
-                | dfi["filename_no_ext"].fillna("").str.casefold().isin(exact_name_values)
+                | dfi["filename_no_ext"]
+                .fillna("")
+                .str.casefold()
+                .isin(exact_name_values)
             )
         if exact_mask.any():
             dfi = dfi[exact_mask].copy()
@@ -339,7 +343,10 @@ class Material(MaterialFile):
         for alias_name, alias_reference in entries:
             if cls._normalize_material_alias_key(alias_name) != name_key:
                 continue
-            if reference_key and cls._normalize_reference_key(alias_reference) != reference_key:
+            if (
+                reference_key
+                and cls._normalize_reference_key(alias_reference) != reference_key
+            ):
                 continue
             if alias_name in verified_targets:
                 add(alias_name)
@@ -347,7 +354,7 @@ class Material(MaterialFile):
         if reference_key:
             return candidates
 
-        for alias_name, alias_reference in entries:
+        for alias_name, _alias_reference in entries:
             if cls._normalize_material_alias_key(alias_name) != name_key:
                 continue
             if alias_name in verified_targets:
@@ -388,7 +395,9 @@ class Material(MaterialFile):
         return paths
 
     @classmethod
-    def _extract_winlens_alias_entries(cls, data: bytes) -> list[tuple[str, str | None]]:
+    def _extract_winlens_alias_entries(
+        cls, data: bytes
+    ) -> list[tuple[str, str | None]]:
         entries: list[tuple[str, str | None]] = []
         seen: set[tuple[str, str | None]] = set()
         for match in _WINLENS_ALIAS_ENTRY_RE.finditer(data):
@@ -482,13 +491,14 @@ class Material(MaterialFile):
             return False
 
         refs = (
-            df["reference"].fillna("").str.casefold() == reference_key
-        ) | (
-            df["category_name"].fillna("").str.casefold() == reference_key
-        ) | (
-            df["category_name_full"].fillna("").str.casefold() == reference_key
+            (df["reference"].fillna("").str.casefold() == reference_key)
+            | (df["category_name"].fillna("").str.casefold() == reference_key)
+            | (df["category_name_full"].fillna("").str.casefold() == reference_key)
         )
-        names = df["filename_no_ext"].fillna("").apply(cls._normalize_material_alias_key) == name_key
+        names = (
+            df["filename_no_ext"].fillna("").apply(cls._normalize_material_alias_key)
+            == name_key
+        )
         return bool((refs & names).any())
 
     @classmethod
@@ -500,14 +510,14 @@ class Material(MaterialFile):
             return set()
 
         refs = (
-            df["reference"].fillna("").str.casefold() == reference_key
-        ) | (
-            df["category_name"].fillna("").str.casefold() == reference_key
-        ) | (
-            df["category_name_full"].fillna("").str.casefold() == reference_key
+            (df["reference"].fillna("").str.casefold() == reference_key)
+            | (df["category_name"].fillna("").str.casefold() == reference_key)
+            | (df["category_name_full"].fillna("").str.casefold() == reference_key)
         )
         exact_name = df["name"].fillna("").str.casefold() == raw_name.casefold()
-        exact_filename = df["filename_no_ext"].fillna("").str.casefold() == raw_name.casefold()
+        exact_filename = (
+            df["filename_no_ext"].fillna("").str.casefold() == raw_name.casefold()
+        )
         matches = df[refs & (exact_name | exact_filename)]
         return {
             str(value).strip()
@@ -527,16 +537,24 @@ class Material(MaterialFile):
         if not raw_name or not manufacturer_key:
             return False
 
-        exact_name = (
-            df["name"].fillna("").str.casefold() == raw_name.casefold()
-        ) | (
+        exact_name = (df["name"].fillna("").str.casefold() == raw_name.casefold()) | (
             df["filename_no_ext"].fillna("").str.casefold() == raw_name.casefold()
         )
         manufacturer_mask = (
             df["reference"].fillna("").str.casefold().str.contains(manufacturer_key)
-            | df["category_name"].fillna("").str.casefold().str.contains(manufacturer_key)
-            | df["category_name_full"].fillna("").str.casefold().str.contains(manufacturer_key)
-            | df["filename"].fillna("").str.replace("\\", "/", regex=False).str.casefold().str.contains(f"/{manufacturer_key}/")
+            | df["category_name"]
+            .fillna("")
+            .str.casefold()
+            .str.contains(manufacturer_key)
+            | df["category_name_full"]
+            .fillna("")
+            .str.casefold()
+            .str.contains(manufacturer_key)
+            | df["filename"]
+            .fillna("")
+            .str.replace("\\", "/", regex=False)
+            .str.casefold()
+            .str.contains(f"/{manufacturer_key}/")
         )
         return bool((exact_name & manufacturer_mask).any())
 
@@ -691,9 +709,7 @@ class Material(MaterialFile):
         filename = row["filename"]
         data_dir = Path(self._filename).parent / "data-nk"
         full_path = (
-            filename
-            if Path(filename).is_absolute()
-            else str(data_dir / filename)
+            filename if Path(filename).is_absolute() else str(data_dir / filename)
         )
         return full_path, row
 
