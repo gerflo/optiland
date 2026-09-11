@@ -9,6 +9,7 @@ Kramer Harrison, 2024
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 from io import StringIO
 
@@ -17,6 +18,8 @@ import yaml
 
 import optiland.backend as be
 from optiland.materials.base import BaseMaterial
+
+logger = logging.getLogger(__name__)
 
 
 class MaterialFile(BaseMaterial):
@@ -218,8 +221,10 @@ class MaterialFile(BaseMaterial):
 
     def _calculate_k(self, wavelength, **kwargs):
         """Retrieves the extinction coefficient of the material at a
-        given wavelength. If no exxtinction coefficient data is found, it is
-        assumed to be 0 and prints a warning message, only once.
+        given wavelength. If no extinction coefficient data is found, it is
+        assumed to be 0 and this is logged once at INFO level. Most catalog
+        glasses ship without k data, so this is the expected case rather
+        than a problem, and it is deliberately kept off the console.
 
         Args:
             wavelength (float or be.ndarray): The wavelength(s) in microns.
@@ -233,12 +238,12 @@ class MaterialFile(BaseMaterial):
         if self._k is None or self._k_wavelength is None:
             if not self._k_warning_printed:
                 material_name = os.path.basename(self.filename)
-                print(
-                    f"WARNING: No extinction coefficient data found "
-                    f"for {material_name}. Assuming it is 0.",
+                logger.info(
+                    "No extinction coefficient data found for %s. Assuming it is 0.",
+                    material_name,
                 )
 
-                # we set it to True to avoid printing the warning again
+                # we set it to True to avoid logging the message again
                 self._k_warning_printed = True
 
             if be.is_array_like(wavelength):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import logging
 import shutil
 from pathlib import Path
 import time
@@ -823,6 +824,33 @@ class TestMaterialFile:
         )
         material_dict = {"filename": filename, "type": materials.MaterialFile.__name__}
         assert materials.MaterialFile.from_dict(material_dict).filename == filename
+
+    def test_missing_k_is_logged_once_not_printed(
+        self, set_test_backend, capsys, caplog
+    ):
+        """Regression: a material without k data used to print a WARNING to
+        stdout on first use, which showed up as console noise in the GUI
+        every time a catalog glass was traced. It must return k = 0 silently
+        and log the fact exactly once at INFO level."""
+        filename = str(
+            resources.files("optiland.database").joinpath(
+                "data-nk/glass/ami/AMTIR-3.yml",
+            ),
+        )
+        material = materials.MaterialFile(filename)
+        assert material._k is None
+
+        with caplog.at_level(logging.INFO, logger="optiland.materials.material_file"):
+            assert material.k(4.0) == 0.0
+            assert material.k(6.0) == 0.0
+
+        assert capsys.readouterr().out == ""
+        records = [
+            r for r in caplog.records if "extinction coefficient" in r.getMessage()
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.INFO
+        assert "AMTIR-3.yml" in records[0].getMessage()
 
 
 class TestMaterial:
