@@ -15,8 +15,12 @@ import math
 import warnings
 
 import matplotlib
+import matplotlib.colors as mcolors
+import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
+from matplotlib.patches import Polygon
 from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import (
     QColor,
@@ -56,8 +60,11 @@ except ImportError:
 import contextlib
 from typing import TYPE_CHECKING
 
+import optiland.backend as be
 from optiland.visualization.analysis.surface_sag import SurfaceSagViewer
+from optiland.visualization.system.lens import Lens2D
 from optiland.visualization.system.rays import Rays2D, Rays3D
+from optiland.visualization.system.surface import Surface2D
 from optiland.visualization.system.system import (
     OpticalSystem as OptilandOpticalSystemPlotter,
 )
@@ -446,6 +453,14 @@ class ViewerPanel(QWidget):
             self.viewer2D.plot_optic(preserve_zoom=preserve)
         self._render_3d_from_2d_settings()
 
+    @Slot(list, bool)
+    def set_highlighted_surfaces(
+        self, surface_indices, is_element: bool = False
+    ) -> None:
+        """Highlight Lens Data Editor rows (or their element) in the 2D layout."""
+        if self.viewer2D:
+            self.viewer2D.set_highlighted_surfaces(surface_indices, is_element)
+
     @Slot()
     def reset_original_views(self):
         """Reset all viewer tabs to their original framing after loading a system."""
@@ -662,6 +677,98 @@ class _MeasureOverlay(QWidget):
             painter.drawEllipse(tpx - r, tpy - r, 2 * r, 2 * r)
 
         painter.end()
+
+
+# Lens Data Editor selection mirrored in the 2D layout.
+_LAYOUT_PROJECTION = "YZ"
+HIGHLIGHT_EMPHASIS_AMOUNT = 0.5
+HIGHLIGHT_LINE_WIDTH_PT = 3.2
+HIGHLIGHT_LINE_ZORDER = 5
+HIGHLIGHT_MARKER_ZORDER = 6
+HIGHLIGHT_MARKER_LABEL = "_highlight_marker"
+# Every marker tip sits on one line: 110 % of the height of the tallest
+# drawn element (and at least 10 % of that height above the layout top).
+HIGHLIGHT_MARKER_HEIGHT_FACTOR = 1.10
+# The arrow head is 10 % wider than what it marks, but never narrower on
+# screen than the pixel minimum.
+HIGHLIGHT_MARKER_WIDTH_FACTOR = 1.10
+HIGHLIGHT_MARKER_MIN_WIDTH_PX = 20
+# Arrow proportions on screen: head height as a fraction of the head width
+# (clamped), shaft length and thickness, and the gap kept to the axes top.
+HIGHLIGHT_ARROW_HEAD_ASPECT = 0.45
+HIGHLIGHT_ARROW_HEAD_MIN_PX = 10
+HIGHLIGHT_ARROW_HEAD_MAX_PX = 22
+HIGHLIGHT_ARROW_SHAFT_PX = 20
+HIGHLIGHT_ARROW_SHAFT_WIDTH_PT = 7.0
+HIGHLIGHT_ARROW_TOP_PAD_PX = 4
+
+
+def _luminance(color) -> float:
+    r, g, b, _ = mcolors.to_rgba(color)
+    return 0.299 * r + 0.587 * g + 0.114 * b
+
+
+def emphasize_color(
+    color, background, amount: float = HIGHLIGHT_EMPHASIS_AMOUNT, *, alpha=None
+):
+    """Move *color* clearly away from *background*.
+
+    On a dark background the color is blended toward white, so it reads as
+    "brighter"; on a light background brightening would fade into the
+    page, so the same blend goes toward black instead. ``amount`` is the
+    blend fraction (0 keeps the color, 1 reaches the target). ``alpha``
+    replaces the color's alpha when given.
+    """
+    r, g, b, a = mcolors.to_rgba(color)
+    target = 1.0 if _luminance(background) < 0.5 else 0.0
+    mixed = tuple(channel + (target - channel) * amount for channel in (r, g, b))
+    return (*mixed, a if alpha is None else alpha)
+
+
+def effective_surface_index(
+    surface_index: int, disabled: set[int], surface_count: int
+) -> int | None:
+    """Map a Lens Data Editor row onto the drawn optic, which omits disabled rows.
+
+    ``surface_count`` is the row count of the editor. Returns ``None`` when
+    the row itself is disabled and therefore not drawn.
+    """
+    removed = {index for index in disabled if 0 < index < surface_count - 1}
+    if surface_index in removed:
+        return None
+    return surface_index - sum(1 for index in removed if index < surface_index)
+
+
+class _HighlightableLens2D(Lens2D):
+    """``Lens2D`` that remembers which two surfaces each drawn polygon spans.
+
+    ``Lens2D`` draws one polygon per pair of neighbouring surfaces but only
+    reports the lens as a whole, which is too coarse to restyle the part of
+    a cemented lens that belongs to the selected element.
+    """
+
+    def __init__(self, surfaces) -> None:
+        super().__init__(surfaces)
+        self.polygon_surfaces: dict = {}
+        self._pair_index = 0
+
+    def _plot_lenses(self, ax, sags, theme=None, projection="YZ"):
+        self.polygon_surfaces = {}
+        self._pair_index = 0
+        return super()._plot_lenses(ax, sags, theme=theme, projection=projection)
+
+    def _plot_single_lens(self, ax, x, y, z, theme=None, projection="YZ"):
+        polygons = super()._plot_single_lens(
+            ax, x, y, z, theme=theme, projection=projection
+        )
+        pair = (
+            self.surfaces[self._pair_index].surf,
+            self.surfaces[self._pair_index + 1].surf,
+        )
+        self._pair_index += 1
+        for polygon in polygons or []:
+            self.polygon_surfaces[polygon] = pair
+        return polygons
 
 
 class MatplotlibViewer(QWidget):
@@ -1014,14 +1121,18 @@ class MatplotlibViewer(QWidget):
         self.canvas.mpl_connect("resize_event", self._on_canvas_resize)
         self.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.canvas.installEventFilter(self)
-        self.ax.callbacks.connect("xlim_changed", self.on_ax_limit_changed)
-        self.ax.callbacks.connect("ylim_changed", self.on_ax_limit_changed)
 
         # Initialize panning state variables
         self._active_pan_button = None
         self._is_panning = False
         self._enforce_equal_xy_on_toolbar_release = False
         self._adjusting_equal_xy_limits = False
+
+        # Lens Data Editor rows to highlight and whether they form one element.
+        self._highlight_surfaces: tuple[int, ...] = ()
+        self._highlight_is_element = False
+        self._reset_layout_bookkeeping()
+        self._connect_axes_limit_callbacks()
 
         self.plot_optic()
         self.update_theme()
@@ -1063,7 +1174,16 @@ class MatplotlibViewer(QWidget):
                 logger.warning(message)
 
     def on_ax_limit_changed(self, ax):
-        """Callback for when axis limits change, to detect user interaction."""
+        """Callback for when axis limits change, to detect user interaction.
+
+        Outside a redraw any limit change is the user's doing (scroll zoom,
+        drag pan, toolbar navigation) and is remembered so later redraws
+        keep that view until "Reset original view". During a toolbar
+        right-drag zoom the equal X/Y scaling is re-applied live.
+
+        ``ax.clear()`` discards every axes callback, so this is registered
+        again after each clear by ``_connect_axes_limit_callbacks``.
+        """
         if self._adjusting_equal_xy_limits:
             return
         if not self._is_plotting:
@@ -1094,6 +1214,7 @@ class MatplotlibViewer(QWidget):
         _apply_equal_xy_limits already reflects the new pixel dimensions.
         """
         self._measure_overlay.resize(self.canvas.size())
+        self._refresh_highlight_markers()
         if (
             not self._preserve_xy_ratio
             or self._is_plotting
@@ -1805,6 +1926,350 @@ class MatplotlibViewer(QWidget):
         self._busy_overlay.show_busy()
         QTimer.singleShot(60, self._plot_optic_sync)
 
+    # ------------------------------------------------------------------
+    # Lens Data Editor selection highlight
+    # ------------------------------------------------------------------
+
+    @Slot(list, bool)
+    def set_highlighted_surfaces(
+        self, surface_indices, is_element: bool = False
+    ) -> None:
+        """Highlight Lens Data Editor rows in the 2D layout.
+
+        Args:
+            surface_indices: Surface indices as numbered in the Lens Data
+                Editor. An empty list clears the highlight.
+            is_element: Whether the rows form one element. The element is
+                then drawn in a brighter fill with one arrow above its whole
+                width; otherwise every surface is emphasised on its own.
+        """
+        indices = tuple(sorted({int(index) for index in surface_indices}))
+        is_element = bool(is_element) and bool(indices)
+        if (indices, is_element) == (
+            self._highlight_surfaces,
+            self._highlight_is_element,
+        ):
+            return
+        self._highlight_surfaces = indices
+        self._highlight_is_element = is_element
+        if self._is_plotting:
+            return  # the pending redraw applies the new state
+        self._apply_highlight()
+        self.canvas.draw_idle()
+
+    def _reset_layout_bookkeeping(self) -> None:
+        """Forget the artists of the previous draw; ``ax.clear`` removed them."""
+        self._layout_optic = None
+        self._layout_artists: dict = {}
+        self._layout_marker_y: float | None = None
+        self._highlight_artists: list = []
+        self._highlight_restores: list[tuple] = []
+        # (arrow, z_lo, z_hi): each marker with the data extent it points at,
+        # so its on-screen shape can be re-fitted whenever the zoom changes.
+        self._highlight_markers: list[tuple[Polygon, float, float]] = []
+        self._refreshing_highlight_markers = False
+
+    def _clear_highlight(self) -> None:
+        """Remove added highlight artists and restore restyled layout artists."""
+        for artist in self._highlight_artists:
+            with contextlib.suppress(Exception):
+                artist.remove()
+        self._highlight_artists = []
+        self._highlight_markers = []
+        for setter, value in reversed(self._highlight_restores):
+            with contextlib.suppress(Exception):
+                setter(value)
+        self._highlight_restores = []
+
+    def _restyle(self, getter, setter, value) -> None:
+        """Change an artist property, remembering the original for the next clear."""
+        self._highlight_restores.append((setter, getter()))
+        setter(value)
+
+    def _apply_highlight(self) -> None:
+        """Draw the current highlight state onto the last plotted layout."""
+        self._clear_highlight()
+        if not self._highlight_surfaces or not self._layout_artists:
+            return
+        try:
+            surfaces = self._highlighted_layout_surfaces()
+            if self._highlight_is_element:
+                self._highlight_element(surfaces)
+            else:
+                for surface in surfaces:
+                    self._highlight_surface(surface)
+            self._refresh_highlight_markers()
+        except Exception:
+            # The highlight is decoration; never let it take the layout down.
+            logger.debug("2D layout highlight failed", exc_info=True)
+            self._clear_highlight()
+
+    def _disabled_surface_indices(self) -> set[int]:
+        getter = getattr(self.connector, "get_disabled_surface_indices", None)
+        if not callable(getter):
+            return set()
+        try:
+            return {int(index) for index in getter()}
+        except TypeError:
+            return set()
+
+    def _highlighted_layout_surfaces(self) -> list:
+        """Surfaces of the drawn optic that the highlighted editor rows refer to."""
+        optic = self._layout_optic
+        if optic is None:
+            return []
+        drawn = list(optic.surfaces.surfaces)
+        disabled = self._disabled_surface_indices()
+        surface_count = self.connector.get_surface_count() if disabled else len(drawn)
+        surfaces = []
+        for index in self._highlight_surfaces:
+            effective = effective_surface_index(index, disabled, surface_count)
+            if effective is not None and 0 <= effective < len(drawn):
+                surfaces.append(drawn[effective])
+        return surfaces
+
+    def _layout_components(self) -> list:
+        """Distinct components of the last draw, in drawing order."""
+        seen: set[int] = set()
+        components = []
+        for component in self._layout_artists.values():
+            if id(component) not in seen:
+                seen.add(id(component))
+                components.append(component)
+        return components
+
+    def _emphasis_color(self, color, *, alpha=None):
+        return emphasize_color(color, self.ax.get_facecolor(), alpha=alpha)
+
+    def _emphasize_line(self, line) -> None:
+        """Draw an existing layout line brighter, thicker and on top."""
+        self._restyle(
+            line.get_color, line.set_color, self._emphasis_color(line.get_color())
+        )
+        self._restyle(
+            line.get_linewidth,
+            line.set_linewidth,
+            max(HIGHLIGHT_LINE_WIDTH_PT, 2.0 * line.get_linewidth()),
+        )
+        self._restyle(line.get_zorder, line.set_zorder, HIGHLIGHT_LINE_ZORDER)
+
+    def _highlight_element(self, surfaces: list) -> None:
+        """Fill the element made of *surfaces* brighter and mark its full width."""
+        target_ids = {id(surface) for surface in surfaces}
+        if not target_ids:
+            return
+        zs: list[np.ndarray] = []
+        marker_color = None
+        for artist, component in self._layout_artists.items():
+            if isinstance(component, _HighlightableLens2D):
+                pair = component.polygon_surfaces.get(artist)
+                if pair is None or any(id(s) not in target_ids for s in pair):
+                    continue
+                fill = self._emphasis_color(artist.get_facecolor())
+                self._restyle(artist.get_facecolor, artist.set_facecolor, fill)
+                if marker_color is None:
+                    marker_color = (*fill[:3], 1.0)
+                zs.append(np.asarray(artist.get_xy(), dtype=float)[:, 0])
+            elif isinstance(component, Surface2D) and id(component.surf) in target_ids:
+                self._emphasize_line(artist)
+                zs.append(np.asarray(artist.get_xdata(), dtype=float))
+        if not zs:
+            return
+        if marker_color is None:
+            marker_color = self._emphasis_color(
+                matplotlib.rcParams["axes.edgecolor"], alpha=1.0
+            )
+        self._draw_highlight_marker(np.concatenate(zs), marker_color)
+
+    def _highlight_surface(self, surface) -> None:
+        """Draw one surface brighter and bolder, with an arrow above its width."""
+        zs: list[np.ndarray] = []
+        # Standalone surfaces (object, image, mirrors, paraxial) own a line.
+        for artist, component in self._layout_artists.items():
+            if isinstance(component, Surface2D) and component.surf is surface:
+                self._emphasize_line(artist)
+                zs.append(np.asarray(artist.get_xdata(), dtype=float))
+        # Lens surfaces only exist as polygon edges: trace the edge on top.
+        if not zs:
+            line_color = self._emphasis_color(matplotlib.rcParams["axes.edgecolor"])
+            for component in self._layout_components():
+                if not isinstance(component, Lens2D):
+                    continue
+                for position, member in enumerate(component.surfaces):
+                    if member.surf is not surface:
+                        continue
+                    sags = component._compute_sag(projection=_LAYOUT_PROJECTION)
+                    _, y, z = sags[position]
+                    z = np.asarray(be.to_numpy(z), dtype=float)
+                    y = np.asarray(be.to_numpy(y), dtype=float)
+                    line = Line2D(
+                        z,
+                        y,
+                        color=line_color,
+                        linewidth=HIGHLIGHT_LINE_WIDTH_PT,
+                        solid_capstyle="round",
+                        zorder=HIGHLIGHT_LINE_ZORDER,
+                        transform=self.ax.transData,
+                    )
+                    self.ax.add_artist(line)
+                    self._highlight_artists.append(line)
+                    zs.append(z)
+        # A bare air surface (e.g. the stop) is only drawn as an aperture marker.
+        if not zs:
+            for artist, component in self._layout_artists.items():
+                if component is surface and isinstance(artist, Line2D):
+                    self._emphasize_line(artist)
+                    zs.append(np.asarray(artist.get_xdata(), dtype=float))
+        if not zs:
+            return
+        marker_color = self._emphasis_color(
+            matplotlib.rcParams["axes.edgecolor"], alpha=1.0
+        )
+        self._draw_highlight_marker(np.concatenate(zs), marker_color)
+
+    def _highlight_marker_y(self) -> float | None:
+        """The common height of every marker tip in this draw.
+
+        All arrows point down from one line at 110 % of the height (top to
+        bottom) of the tallest drawn component, a lens polygon or a
+        standalone surface line. Should the layout sit high above the axis,
+        the line is at least 10 % of that height above the layout top. The
+        value is cached per draw.
+        """
+        if self._layout_marker_y is not None:
+            return self._layout_marker_y
+        spans: dict[int, list[np.ndarray]] = {}
+        for artist, component in self._layout_artists.items():
+            if isinstance(component, Lens2D) and hasattr(artist, "get_xy"):
+                y = np.asarray(artist.get_xy(), dtype=float)[:, 1]
+            elif isinstance(component, Surface2D) and isinstance(artist, Line2D):
+                y = np.asarray(artist.get_ydata(), dtype=float)
+            else:
+                continue
+            y = y[np.isfinite(y)]
+            if y.size:
+                spans.setdefault(id(component), []).append(y)
+        if not spans:
+            return None
+        tops: list[float] = []
+        heights: list[float] = []
+        for parts in spans.values():
+            y = np.concatenate(parts)
+            tops.append(float(y.max()))
+            heights.append(float(y.max() - y.min()))
+        top, height = max(tops), max(heights)
+        if height <= 0:
+            height = abs(top) or 1.0
+        extra = (HIGHLIGHT_MARKER_HEIGHT_FACTOR - 1.0) * height
+        self._layout_marker_y = max(
+            HIGHLIGHT_MARKER_HEIGHT_FACTOR * height, top + extra
+        )
+        return self._layout_marker_y
+
+    def _draw_highlight_marker(self, z: np.ndarray, color) -> None:
+        """Add a downward arrow above the highlighted region.
+
+        The arrow head is 10 % wider than the region's z range and centred
+        on it; the on-screen shape is fitted by ``_refresh_highlight_markers``.
+        The polygon is added with ``add_artist`` so it neither moves the
+        data limits nor triggers an autoscale, which would shift the view
+        every time the selection changes.
+        """
+        finite = np.isfinite(z)
+        if self._highlight_marker_y() is None or not finite.any():
+            return
+        z_min, z_max = float(z[finite].min()), float(z[finite].max())
+        center = 0.5 * (z_min + z_max)
+        half = 0.5 * HIGHLIGHT_MARKER_WIDTH_FACTOR * (z_max - z_min)
+        arrow = Polygon(
+            np.zeros((7, 2)),
+            closed=True,
+            facecolor=color,
+            edgecolor="none",
+            zorder=HIGHLIGHT_MARKER_ZORDER,
+            transform=self.ax.transData,
+            label=HIGHLIGHT_MARKER_LABEL,
+        )
+        self.ax.add_artist(arrow)
+        self._highlight_artists.append(arrow)
+        self._highlight_markers.append((arrow, center - half, center + half))
+
+    def _connect_axes_limit_callbacks(self) -> None:
+        """Register the limit callbacks; ``ax.clear`` drops them, so call after each.
+
+        Order matters: the view-change detection runs first so its equal
+        X/Y correction is in place when the markers are re-fitted.
+        """
+        for signal in ("xlim_changed", "ylim_changed"):
+            self.ax.callbacks.connect(signal, self.on_ax_limit_changed)
+            self.ax.callbacks.connect(signal, self._on_limits_changed_for_markers)
+
+    def _on_limits_changed_for_markers(self, _ax) -> None:
+        self._refresh_highlight_markers()
+
+    def _refresh_highlight_markers(self) -> None:
+        """Fit every arrow to the current zoom.
+
+        The head keeps its data width unless that is narrower than the
+        pixel minimum. Head height, shaft and the gap to the axes top are
+        pixel sizes, so the arrows look alike at every zoom level. An arrow
+        that would leave the axes at the top is pulled down to stay visible.
+
+        Vertex order of the polygon: tip, right head corner, right shaft
+        bottom, right shaft top, left shaft top, left shaft bottom, left
+        head corner.
+        """
+        if not self._highlight_markers or self._refreshing_highlight_markers:
+            return
+        self._refreshing_highlight_markers = True
+        try:
+            x0, x1 = self.ax.get_xlim()  # also settles a pending autoscale
+            y0, y1 = self.ax.get_ylim()
+            bbox = self.ax.bbox
+            tip_y = self._highlight_marker_y()
+            if (
+                tip_y is None
+                or x1 == x0
+                or y1 == y0
+                or bbox.width <= 0
+                or bbox.height <= 0
+            ):
+                return
+            ppx = bbox.width / abs(x1 - x0)  # pixels per data unit along z
+            ppy = bbox.height / abs(y1 - y0)  # pixels per data unit along y
+            shaft = HIGHLIGHT_ARROW_SHAFT_PX / ppy
+            shaft_half_px = (
+                0.5 * HIGHLIGHT_ARROW_SHAFT_WIDTH_PT * self.figure.dpi / 72.0
+            )
+            top_limit = max(y0, y1) - HIGHLIGHT_ARROW_TOP_PAD_PX / ppy
+            for arrow, z_lo, z_hi in self._highlight_markers:
+                width_px = max((z_hi - z_lo) * ppx, HIGHLIGHT_MARKER_MIN_WIDTH_PX)
+                head_px = min(
+                    max(
+                        HIGHLIGHT_ARROW_HEAD_ASPECT * width_px,
+                        HIGHLIGHT_ARROW_HEAD_MIN_PX,
+                    ),
+                    HIGHLIGHT_ARROW_HEAD_MAX_PX,
+                )
+                center = 0.5 * (z_lo + z_hi)
+                head_half = 0.5 * width_px / ppx
+                shaft_half = min(shaft_half_px, 0.5 * width_px * 0.5) / ppx
+                head = head_px / ppy
+                tip = min(tip_y, top_limit - head - shaft)
+                arrow.set_xy(
+                    [
+                        (center, tip),
+                        (center + head_half, tip + head),
+                        (center + shaft_half, tip + head),
+                        (center + shaft_half, tip + head + shaft),
+                        (center - shaft_half, tip + head + shaft),
+                        (center - shaft_half, tip + head),
+                        (center - head_half, tip + head),
+                    ]
+                )
+        finally:
+            self._refreshing_highlight_markers = False
+
     def _print_layout(self) -> None:
         """Open a print preview dialog for the 2D layout.
 
@@ -2184,12 +2649,18 @@ class MatplotlibViewer(QWidget):
         """Synchronous matplotlib render — must stay on the main thread."""
         if preserve_zoom is None:
             preserve_zoom = getattr(self, "_pending_preserve_zoom", False)
+        # plot_optic() sets this before deferring here; a direct call (tests,
+        # scripts) must be guarded the same way so the limit changes of the
+        # redraw itself are not mistaken for user zooming.
+        self._is_plotting = True
         try:
             gui_plot_utils.apply_gui_matplotlib_styles(theme=self.current_theme)
             should_preserve_limits = preserve_zoom or self._user_initiated_view_change
             xlim = self.ax.get_xlim() if should_preserve_limits else None
             ylim = self.ax.get_ylim() if should_preserve_limits else None
             self.ax.clear()
+            self._reset_layout_bookkeeping()
+            self._connect_axes_limit_callbacks()
             face_color = matplotlib.rcParams["figure.facecolor"]
             self.figure.set_facecolor(face_color)
             self.ax.set_facecolor(face_color)
@@ -2202,6 +2673,10 @@ class MatplotlibViewer(QWidget):
                     system_plotter = OptilandOpticalSystemPlotter(
                         optic, rays2d_plotter, projection="2d"
                     )
+                    system_plotter.component_registry["lens"]["2d"] = (
+                        _HighlightableLens2D
+                    )
+                    self._layout_optic = optic
                     from optiland.visualization.themes import get_active_theme
 
                     theme = get_active_theme()
@@ -2238,7 +2713,7 @@ class MatplotlibViewer(QWidget):
                     # the GUI instead of the console filling up.
                     with warnings.catch_warnings(record=True) as drawing_warnings:
                         warnings.simplefilter("always")
-                        system_plotter.plot(
+                        self._layout_artists = system_plotter.plot(
                             self.ax,
                             theme=theme,
                             hide_internal_surfaces=hide_internal,
@@ -2291,6 +2766,7 @@ class MatplotlibViewer(QWidget):
                             alpha=0.85,
                             zorder=1,
                         )
+                    self._apply_highlight()
                 except Exception as exc:
                     logger.debug("2D layout plot failed", exc_info=True)
                     _notify_viewer_issue(

@@ -633,3 +633,127 @@ def test_viewer_panel_maps_2d_line_sections_to_full_pupil_3d_distribution(
     panel.viewer2D.dist_combo.setCurrentText("random")
     assert panel.viewer2D.ray_distribution_for_3d() == "random"
     assert panel.viewer2D.ray_sampling_for_3d() == (100, "random")
+
+
+# ---------------------------------------------------------------------------
+# Axes limit callbacks survive ax.clear()
+# ---------------------------------------------------------------------------
+
+
+class _StubSettings:
+    # QSettings stand-in that always answers with the default value.
+    def __init__(self, *_args, **_kwargs) -> None:
+        pass
+
+    def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+        if type is bool:
+            return bool(default)
+        if type is int:
+            return int(default)
+        return default
+
+    def setValue(self, _key: str, _value) -> None:  # noqa: ANN001
+        return None
+
+
+def _make_2d_viewer(monkeypatch, optic):  # noqa: ANN001, ANN202
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _StubSettings)
+    viewer = ViewerPanel(_ConnectorStub(optic)).viewer2D
+    viewer._plot_optic_sync()  # ax.clear() inside used to drop the callbacks
+    return viewer
+
+
+def _box_ratio(viewer) -> float:  # noqa: ANN001
+    bbox = viewer.ax.get_position()
+    return (bbox.width * viewer.figure.get_figwidth()) / (
+        bbox.height * viewer.figure.get_figheight()
+    )
+
+
+def _data_ratio(viewer) -> float:  # noqa: ANN001
+    x0, x1 = viewer.ax.get_xlim()
+    y0, y1 = viewer.ax.get_ylim()
+    return abs((x1 - x0) / (y1 - y0))
+
+
+def test_viewer_user_zoom_after_a_redraw_is_kept_until_reset(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    viewer = _make_2d_viewer(monkeypatch, minimal_optic)
+    assert viewer._user_initiated_view_change is False
+
+    viewer.ax.set_xlim(10.0, 30.0)
+    assert viewer._user_initiated_view_change is True
+
+    viewer._plot_optic_sync(preserve_zoom=False)
+    assert viewer.ax.get_xlim() == (10.0, 30.0)
+
+    viewer.reset_view()
+    assert viewer._user_initiated_view_change is False
+    viewer._plot_optic_sync(preserve_zoom=False)
+    assert viewer.ax.get_xlim() != (10.0, 30.0)
+
+
+def test_viewer_redraw_itself_is_not_a_user_view_change(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    viewer = _make_2d_viewer(monkeypatch, minimal_optic)
+
+    viewer._plot_optic_sync()
+    viewer._plot_optic_sync()
+
+    assert viewer._user_initiated_view_change is False
+
+
+def test_viewer_scroll_zoom_and_drag_pan_count_as_user_view_changes(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    viewer = _make_2d_viewer(monkeypatch, minimal_optic)
+
+    viewer.on_scroll_zoom(
+        SimpleNamespace(inaxes=viewer.ax, step=-1, xdata=10.0, ydata=0.0)
+    )
+    assert viewer._user_initiated_view_change is True
+
+    viewer.reset_view()
+    viewer._plot_optic_sync(preserve_zoom=False)
+    assert viewer._user_initiated_view_change is False
+    viewer.on_mouse_button_press(
+        SimpleNamespace(button=1, inaxes=viewer.ax, x=120, y=80, xdata=10.0, ydata=2.0)
+    )
+    viewer.on_mouse_move_on_plot(
+        SimpleNamespace(inaxes=viewer.ax, x=160, y=90, xdata=14.0, ydata=3.0, key=None)
+    )
+    viewer.on_mouse_button_release(SimpleNamespace(button=1, inaxes=viewer.ax))
+    assert viewer._user_initiated_view_change is True
+
+
+def test_viewer_toolbar_right_drag_keeps_ratio_live_after_a_redraw(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    viewer = _make_2d_viewer(monkeypatch, minimal_optic)
+    viewer.preserve_xy_ratio_checkbox.setChecked(True)
+    viewer._plot_optic_sync()
+    viewer.toolbar.mode = "pan/zoom"
+    viewer._enforce_equal_xy_on_toolbar_release = True
+
+    # What drag_pan does on every mouse move during a right-button zoom: the
+    # callback alone must restore the ratio, without a manual call.
+    viewer.ax.set_xlim(5.0, 45.0)
+    viewer.ax.set_ylim(-1.0, 7.0)
+
+    assert _data_ratio(viewer) == pytest.approx(_box_ratio(viewer), rel=1e-3)
+
+
+def test_viewer_resize_with_equal_ratio_is_not_a_user_view_change(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    viewer = _make_2d_viewer(monkeypatch, minimal_optic)
+    viewer.preserve_xy_ratio_checkbox.setChecked(True)
+    viewer._plot_optic_sync()
+    assert viewer._user_initiated_view_change is False
+
+    viewer._on_canvas_resize(None)
+
+    assert viewer._user_initiated_view_change is False
+    assert _data_ratio(viewer) == pytest.approx(_box_ratio(viewer), rel=1e-3)

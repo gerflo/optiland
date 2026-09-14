@@ -930,6 +930,10 @@ class _MaterialSearchDelegate(_AccentFocusDelegate):
 class LensEditor(QWidget):
     """A widget for editing the properties of an optical system's surfaces."""
 
+    #: Emitted with the selected surface indices and whether they form one
+    #: element, so other panels (the 2D layout) can highlight the selection.
+    surfaceSelectionChanged = Signal(list, bool)
+
     _material_names_cache: list[str] | None = None
     TABLE_SETTINGS_PREFIX = "LensEditor/Table"
     ElementRowBackgroundFactor = 130
@@ -1047,6 +1051,7 @@ class LensEditor(QWidget):
         self.tableWidget.customContextMenuRequested.connect(self.show_context_menu)
         self.tableWidget.itemSelectionChanged.connect(self.update_headers_on_selection)
         self.tableWidget.currentCellChanged.connect(self._sync_current_cell_highlight)
+        self.tableWidget.currentCellChanged.connect(self._handle_current_cell_changed)
         self.tableWidget.verticalHeader().sectionClicked.connect(
             self._handle_vertical_header_clicked
         )
@@ -1917,6 +1922,7 @@ class LensEditor(QWidget):
     @Slot()
     def load_data(self):
         self._close_active_cell_editor()
+        remembered_cell = self._remember_current_surface_cell()
         self.tableWidget.blockSignals(True)
         self._prune_group_expansion_state()
         self._prune_disabled_state()
@@ -1933,6 +1939,7 @@ class LensEditor(QWidget):
         if self.open_prop_source_row != -1 and self.open_prop_source_row < num_surfaces:
             self._insert_properties_widget(self.open_prop_source_row)
 
+        self._restore_current_surface_cell(remembered_cell)
         self.tableWidget.blockSignals(False)
         self._sync_current_cell_highlight(
             self.tableWidget.currentRow(),
@@ -1940,6 +1947,32 @@ class LensEditor(QWidget):
             -1,
             -1,
         )
+        # Rebuilding the rows resets the selection; tell listeners either way.
+        self._emit_surface_selection()
+
+    def _remember_current_surface_cell(self) -> tuple[int, int] | None:
+        """Return the current cell as (surface index, column), if there is one."""
+        row, col = self.tableWidget.currentRow(), self.tableWidget.currentColumn()
+        if row < 0 or col < 0 or self._is_properties_row(row):
+            return None
+        return self.map_ui_row_to_surface_index(row), col
+
+    def _restore_current_surface_cell(self, remembered: tuple[int, int] | None) -> None:
+        """Put the current cell back after a rebuild.
+
+        Rebuilding the rows drops the current cell and with it the row
+        selection, so every edit would otherwise leave the table (and the
+        layout highlight that follows it) with nothing selected.
+        """
+        if remembered is None:
+            return
+        surface_index, col = remembered
+        if not 0 <= surface_index < self.connector.get_surface_count():
+            return
+        ui_row = self.map_surface_index_to_ui_row(surface_index)
+        table = self.tableWidget
+        if ui_row < table.rowCount() and col < table.columnCount():
+            table.setCurrentCell(ui_row, col)
 
     def _close_active_cell_editor(self) -> None:
         """Close an in-progress cell editor before the table is rebuilt.
@@ -2492,6 +2525,49 @@ class LensEditor(QWidget):
         surface_index = self.map_ui_row_to_surface_index(row)
         headers = self.connector.get_column_headers(surface_index)
         self.tableWidget.setHorizontalHeaderLabels(headers)
+        self._emit_surface_selection()
+
+    def _surface_selection(self) -> tuple[list[int], bool]:
+        """Return the selected surfaces and whether they form exactly one element.
+
+        Selected rows are mapped to surface indices; without a selection the
+        current row counts. A collapsed element row stands for all of its
+        member surfaces. The selection is an element when it covers exactly
+        the rows of one element, whether collapsed or expanded.
+        """
+        ui_rows = sorted({index.row() for index in self.tableWidget.selectedIndexes()})
+        if not ui_rows and self.tableWidget.currentRow() >= 0:
+            ui_rows = [self.tableWidget.currentRow()]
+        surface_count = self.connector.get_surface_count()
+        clicked: set[int] = set()
+        for ui_row in ui_rows:
+            if self._is_properties_row(ui_row):
+                surface_index = self.open_prop_source_row
+            else:
+                surface_index = self.map_ui_row_to_surface_index(ui_row)
+            if 0 <= surface_index < surface_count:
+                clicked.add(surface_index)
+        selected: set[int] = set()
+        for surface_index in clicked:
+            if self._is_collapsed_summary_surface_row(surface_index):
+                selected.update(self.connector.get_group_rows(surface_index))
+            else:
+                selected.add(surface_index)
+        if not selected:
+            return [], False
+        ordered = sorted(selected)
+        group_rows = self.connector.get_group_rows(ordered[0])
+        is_element = bool(group_rows) and set(group_rows) == selected
+        return ordered, is_element
+
+    def _handle_current_cell_changed(self, *_args) -> None:  # noqa: ANN002
+        """Publish the selection when only the current cell moved."""
+        self._emit_surface_selection()
+
+    def _emit_surface_selection(self) -> None:
+        """Publish the current selection for the layout highlight."""
+        surfaces, is_element = self._surface_selection()
+        self.surfaceSelectionChanged.emit(surfaces, is_element)
 
     def _flash_cell(
         self, row: int, col: int, valid: bool, duration_ms: int = 300

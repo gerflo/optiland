@@ -239,6 +239,9 @@ class PanelManager:
         self.sidebar_content_widget.menuSelected.connect(self.on_sidebar_menu_selected)
         self.sidebar_content_widget.showWipMessage.connect(self._on_sidebar_wip_message)
         self.python_terminal.commandExecuted.connect(self.connector.opticChanged.emit)
+        self.lens_editor.surfaceSelectionChanged.connect(
+            self.viewer_panel.set_highlighted_surfaces
+        )
 
     def _on_sidebar_wip_message(self, message: str) -> None:
         """Forward a WIP message from the sidebar to the toast manager.
