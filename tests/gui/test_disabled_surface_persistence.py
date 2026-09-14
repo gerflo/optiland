@@ -30,18 +30,19 @@ def _patch_connector_side_services(monkeypatch) -> None:  # noqa: ANN001
 def test_disabled_surfaces_survive_save_and_load(qapp, monkeypatch, tmp_path) -> None:
     _patch_connector_side_services(monkeypatch)
     connector = OptilandConnector()
-    connector.set_surface_disabled(1, True)
+    connector.add_surface()  # row 1 is the stop and cannot be disabled
+    connector.set_surface_disabled(2, True)
 
     filepath = str(tmp_path / "with_disabled.json")
     connector.save_optic_to_file(filepath)
 
     payload = json.loads((tmp_path / "with_disabled.json").read_text(encoding="utf-8"))
-    assert payload["gui"]["disabled_surfaces"] == [1]
+    assert payload["gui"]["disabled_surfaces"] == [2]
 
     fresh = OptilandConnector()
     assert fresh.get_disabled_surface_indices() == set()
     fresh.load_optic_from_file(filepath)
-    assert fresh.get_disabled_surface_indices() == {1}
+    assert fresh.get_disabled_surface_indices() == {2}
 
 
 def test_loading_file_without_gui_state_clears_stale_disabled_state(
@@ -57,7 +58,8 @@ def test_loading_file_without_gui_state_clears_stale_disabled_state(
     data.pop("gui", None)
     (tmp_path / "plain.json").write_text(json.dumps(data), encoding="utf-8")
 
-    connector.set_surface_disabled(1, True)
+    connector.add_surface()
+    connector.set_surface_disabled(2, True)
     connector.load_optic_from_file(filepath)
 
     assert connector.get_disabled_surface_indices() == set()
@@ -66,7 +68,8 @@ def test_loading_file_without_gui_state_clears_stale_disabled_state(
 def test_new_system_clears_disabled_state(qapp, monkeypatch) -> None:
     _patch_connector_side_services(monkeypatch)
     connector = OptilandConnector()
-    connector.set_surface_disabled(1, True)
+    connector.add_surface()
+    connector.set_surface_disabled(2, True)
 
     connector.new_system()
 
@@ -76,11 +79,13 @@ def test_new_system_clears_disabled_state(qapp, monkeypatch) -> None:
 def test_disable_surface_marks_modified_and_is_undoable(qapp, monkeypatch) -> None:
     _patch_connector_side_services(monkeypatch)
     connector = OptilandConnector()
+    connector.add_surface()
+    connector.mark_current_state_clean()
     assert connector.has_unsaved_changes() is False
 
-    connector.set_surface_disabled(1, True)
+    connector.set_surface_disabled(2, True)
     assert connector.has_unsaved_changes() is True
-    assert connector.get_disabled_surface_indices() == {1}
+    assert connector.get_disabled_surface_indices() == {2}
 
     connector.undo()
     assert connector.get_disabled_surface_indices() == set()
@@ -90,10 +95,11 @@ def test_disable_surface_marks_modified_and_is_undoable(qapp, monkeypatch) -> No
 def test_element_disable_toggles_all_rows_in_one_undo_step(qapp, monkeypatch) -> None:
     _patch_connector_side_services(monkeypatch)
     connector = OptilandConnector()
-    connector.add_surface()  # ensure at least rows 1 and 2 exist
+    connector.add_surface()  # rows 2 and 3 exist; row 1 is the stop
+    connector.add_surface()
 
-    connector.set_surfaces_disabled([1, 2], True)
-    assert connector.get_disabled_surface_indices() == {1, 2}
+    connector.set_surfaces_disabled([2, 3], True)
+    assert connector.get_disabled_surface_indices() == {2, 3}
 
     connector.undo()
     assert connector.get_disabled_surface_indices() == set()

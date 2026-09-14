@@ -10,6 +10,8 @@ Author: Manuel Fragata Mendes, 2025
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QObject, Signal
 
 from optiland.optic import Optic
@@ -42,6 +44,9 @@ __all__ = [
     "CatalogImportResult",
     "MaterialCatalogImportResult",
 ]
+
+
+logger = logging.getLogger(__name__)
 
 
 class OptilandConnector(QObject):
@@ -207,24 +212,38 @@ class OptilandConnector(QObject):
         """Return whether *surface_index* is currently disabled."""
         return surface_index in self._disabled_surface_indices
 
-    def set_surface_disabled(self, surface_index: int, disabled: bool) -> None:
+    def set_surface_disabled(self, surface_index: int, disabled: bool) -> bool:
         """Enable or disable a surface and emit ``opticChanged``.
 
         Args:
             surface_index: Index of the surface to toggle.
             disabled: ``True`` to disable, ``False`` to re-enable.
         """
-        self.set_surfaces_disabled([surface_index], disabled)
+        return self.set_surfaces_disabled([surface_index], disabled)
 
-    def set_surfaces_disabled(self, surface_indices, disabled: bool) -> None:  # noqa: ANN001
+    def set_surfaces_disabled(self, surface_indices, disabled: bool) -> bool:  # noqa: ANN001
         """Toggle several surfaces as one undoable, tracked operation.
 
         Disabled state is part of the captured optic state, so it is saved
         to file, restored by undo/redo, and marks the design as modified.
+
+        Disabling the aperture stop is refused with a warning: disabled
+        surfaces are spliced out of the traced optic, and without a stop no
+        ray bundle is defined, so the viewer would show the layout without
+        any rays and no obvious reason why.
+
+        Returns:
+            ``True`` if the disabled set changed, ``False`` otherwise.
         """
+        indices = [int(i) for i in surface_indices]
+        if disabled:
+            stop_index = self.get_stop_surface_index()
+            if stop_index is not None and stop_index in indices:
+                self._refuse_disabling_stop(stop_index, len(indices) > 1)
+                return False
         old_state = self._capture_optic_state()
         changed = False
-        for idx in surface_indices:
+        for idx in indices:
             if disabled and idx not in self._disabled_surface_indices:
                 self._disabled_surface_indices.add(idx)
                 changed = True
@@ -232,10 +251,36 @@ class OptilandConnector(QObject):
                 self._disabled_surface_indices.discard(idx)
                 changed = True
         if not changed:
-            return
+            return False
         self._undo_redo_manager.add_state(old_state)
         self.set_modified(True)
         self.opticChanged.emit()
+        return True
+
+    def get_stop_surface_index(self) -> int | None:
+        """Return the index of the aperture stop surface, or ``None`` if unset."""
+        try:
+            return int(self._optic.surfaces.stop_index)
+        except (ValueError, AttributeError):
+            return None
+
+    def _refuse_disabling_stop(self, stop_index: int, is_element: bool) -> None:
+        """Tell the user (toast and log) why the stop surface stays enabled."""
+        if is_element:
+            message = (
+                f"Element not disabled: surface {stop_index} is the aperture "
+                "stop. Move the stop to another surface first."
+            )
+        else:
+            message = (
+                f"Surface {stop_index} is the aperture stop. Move the stop to "
+                "another surface before disabling it."
+            )
+        toast_manager = getattr(self, "toast_manager", None)
+        if toast_manager is not None:
+            toast_manager.notify(message, "warning")
+        else:
+            logger.warning(message)
 
     def prune_disabled_state(self) -> None:
         """Remove out-of-range indices from the disabled-surface set."""
