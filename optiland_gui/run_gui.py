@@ -10,6 +10,7 @@ Authors:
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import os
 import sys
@@ -37,10 +38,8 @@ def _patch_matplotlib_show_event() -> None:
         _orig = FigureCanvasQT.showEvent
 
         def _safe_show_event(self, event):
-            try:
+            with contextlib.suppress(RuntimeError):
                 _orig(self, event)
-            except RuntimeError:
-                pass
 
         FigureCanvasQT.showEvent = _safe_show_event
     except Exception:

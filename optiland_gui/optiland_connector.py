@@ -152,7 +152,9 @@ class OptilandConnector(QObject):
 
     def has_unsaved_changes(self) -> bool:
         """Return whether closing/replacing the current system would lose work."""
-        return self._requires_save_as or self._current_state_differs_from_clean_snapshot()
+        return (
+            self._requires_save_as or self._current_state_differs_from_clean_snapshot()
+        )
 
     def mark_current_state_clean(self) -> None:
         """Update the clean snapshot to the current state and clear unsaved status."""
@@ -161,7 +163,7 @@ class OptilandConnector(QObject):
         self._set_modified_flag(False)
 
     def mark_current_state_requires_save_as(self) -> None:
-        """Mark the current state as intentionally unsaved despite being internally stable."""
+        """Mark the current state as unsaved although it is internally stable."""
         self._clean_state_snapshot = self._capture_optic_state()
         self._requires_save_as = True
         self._set_modified_flag(True)
@@ -182,7 +184,7 @@ class OptilandConnector(QObject):
             return self._is_modified
 
     def _sync_modified_state(self) -> None:
-        """Recompute the modified flag from the clean snapshot and save-as requirement."""
+        """Recompute the modified flag from the clean snapshot and save-as flag."""
         self._set_modified_flag(self.has_unsaved_changes())
 
     def get_optic(self) -> Optic:
@@ -402,7 +404,11 @@ class OptilandConnector(QObject):
         carries no GUI state never inherits stale session state.
         """
         gui_state = state_data.get("gui")
-        raw = gui_state.get("disabled_surfaces", []) if isinstance(gui_state, dict) else []
+        raw = (
+            gui_state.get("disabled_surfaces", [])
+            if isinstance(gui_state, dict)
+            else []
+        )
         try:
             self._disabled_surface_indices = {int(i) for i in raw}
         except (TypeError, ValueError):
@@ -664,7 +670,10 @@ class OptilandConnector(QObject):
         return self._surface_service.get_group_rows(row)
 
     def create_surface_group(
-        self, rows: list[int], group_name: str | None = None, group_role: str = "assembly"
+        self,
+        rows: list[int],
+        group_name: str | None = None,
+        group_role: str = "assembly",
     ) -> str | None:
         """Create a logical element from contiguous surface rows."""
         return self._surface_service.create_surface_group(rows, group_name, group_role)
@@ -807,9 +816,13 @@ class OptilandConnector(QObject):
         """Return cached candidate links for a catalog entry."""
         return self._catalog_service.get_record_links(catalog_id)
 
-    def get_winlens_review_candidates(self, min_confidence_percent: int = 76) -> list[dict]:
+    def get_winlens_review_candidates(
+        self, min_confidence_percent: int = 76
+    ) -> list[dict]:
         """Return strong WinLens candidate matches for manual review."""
-        return self._catalog_service.get_winlens_review_candidates(min_confidence_percent)
+        return self._catalog_service.get_winlens_review_candidates(
+            min_confidence_percent
+        )
 
     def confirm_winlens_links(self, selections: list[dict[str, str]]) -> int:
         """Persist reviewed WinLens mappings as confirmed links."""
@@ -838,7 +851,7 @@ class OptilandConnector(QObject):
         return self._catalog_service.resolve_product_url(catalog_id)
 
     def download_edmund_catalog(self) -> CatalogDownloadResult:
-        """Download Edmund's official Zemax catalog archive and import supported files."""
+        """Download Edmund's official Zemax catalog archive and import its files."""
         result = self._catalog_service.download_edmund_catalog()
         self.catalogChanged.emit()
         return result
@@ -853,7 +866,7 @@ class OptilandConnector(QObject):
         return result
 
     def download_thorlabs_catalog(self) -> CatalogDownloadResult:
-        """Download Thorlabs' official Zemax catalog package and import supported files."""
+        """Download Thorlabs' official Zemax catalog package and import its files."""
         result = self._catalog_service.download_thorlabs_catalog()
         self.catalogChanged.emit()
         return result
@@ -899,7 +912,9 @@ class OptilandConnector(QObject):
         record = self._catalog_service.get_record(catalog_id)
         if record is None:
             raise ValueError(f"Catalog lens not found: {catalog_id}")
-        insert_record = self._catalog_service.resolve_insertable_record(catalog_id) or record
+        insert_record = (
+            self._catalog_service.resolve_insertable_record(catalog_id) or record
+        )
 
         insert_index = surface_index if mode == "before" else surface_index + 1
         surfaces, stop_offset = record_to_insert_specs(insert_record)
@@ -907,7 +922,8 @@ class OptilandConnector(QObject):
             if record.manufacturer.casefold() == "winlens library 2002":
                 raise ValueError(
                     "This WinLens entry only contains family metadata. "
-                    "No optical surface model was found in the imported WinLens library for this family."
+                    "No optical surface model was found in the imported "
+                    "WinLens library for this family."
                 )
             raise ValueError(
                 "This catalog entry has no optical surface data to insert. "
@@ -926,13 +942,16 @@ class OptilandConnector(QObject):
         record = self._catalog_service.get_record(catalog_id)
         if record is None:
             raise ValueError(f"Catalog lens not found: {catalog_id}")
-        insert_record = self._catalog_service.resolve_insertable_record(catalog_id) or record
+        insert_record = (
+            self._catalog_service.resolve_insertable_record(catalog_id) or record
+        )
         surfaces, stop_offset = record_to_insert_specs(insert_record)
         if not surfaces:
             if record.manufacturer.casefold() == "winlens library 2002":
                 raise ValueError(
                     "This WinLens entry only contains family metadata. "
-                    "No optical surface model was found in the imported WinLens library for this family."
+                    "No optical surface model was found in the imported "
+                    "WinLens library for this family."
                 )
             raise ValueError(
                 "This catalog entry has no optical surface data to insert. "

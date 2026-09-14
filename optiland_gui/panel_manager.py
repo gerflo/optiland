@@ -212,7 +212,11 @@ class PanelManager:
             Qt.Vertical,
         )
         self.main_window.resizeDocks(
-            [self.lens_editor_dock, self.system_properties_dock, self.optimization_dock],
+            [
+                self.lens_editor_dock,
+                self.system_properties_dock,
+                self.optimization_dock,
+            ],
             [260, 230, 230],
             Qt.Vertical,
         )
