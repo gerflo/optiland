@@ -1,475 +1,479 @@
 # Multi-Path Optics - Strahlenteiler / Beam Splitter
 
-Status: korrigiert gegen den aktuellen Code-Stand am 2026-05-21.
-
-Ziel: Optiland um optische Systeme mit mehreren Strahlenwegen erweitern, z.B.
-ein Strahlenteiler, der Beleuchtung von der Seite und Abbildung in Transmission
-kombiniert.
-
-Die wichtigste Korrektur zur ersten Skizze: `Optic.trace()` und
-`SurfaceGroup.trace()` duerfen im ersten Schritt nicht pauschal von
-`RealRays` auf `dict[str, RealRays]` umgestellt werden. Sehr viele Analyse-,
-Visualisierungs- und GUI-Pfade erwarten aktuell ein einzelnes, mutiertes
-`RealRays`-Objekt. Multi-Path sollte deshalb ueber eine explizite neue API
-eingefuehrt werden, z.B. `trace_paths()` / `trace_generic_paths()`, waehrend
-die bestehende Single-Path-API unveraendert bleibt.
-
----
-
-## 0. Korrigierte Architektur-Leitplanken
-
-- [ ] Kein rohes Tuple als dauerhafte Schnittstelle verwenden.
-      Empfehlung: ein explizites Datenobjekt einfuehren, z.B.
-      `RaySplit` / `TraceBranches`, das Path-IDs enthaelt:
-      `branches: dict[str, RealRays]`.
-- [ ] `Optic.trace()` bleibt rueckwaertskompatibel und gibt weiter `RealRays`
-      zurueck. Neue API fuer Multi-Path:
-      `optic.trace_paths(...) -> dict[str, RealRays]`.
-- [ ] `SurfaceGroup.trace()` bleibt fuer bestehende Systeme single-path.
-      Neue API:
-      `surface_group.trace_paths(rays, start_path="main", skip=0)`.
-- [ ] Die lineare `previous_surface`-Verkettung ist fuer verzweigte Pfade nicht
-      ausreichend. Multi-Path braucht einen Pfad-/Medium-Kontext, damit
-      `material_pre` und `material_post` pro Pfad korrekt sind.
-- [ ] Erste Implementierungsstufe eng halten:
-      Real rays, feste Split-Ratio, NumPy + Torch, keine paraxiale
-      Multi-Path-Auswertung, kein GUI-Zwang.
-- [ ] Paraxiale und Analyse-Pfade muessen Multi-Path-Systeme erkennen und mit
-      klarer Fehlermeldung abbrechen, solange sie keinen Pfadparameter
-      unterstuetzen.
-
-Moegliche neue Datenstrukturen:
-
-```python
-@dataclass(frozen=True)
-class OpticalPath:
-    path_id: str
-    surface_indices: tuple[int, ...]
-    image_surface_index: int | None = None
-
-
-@dataclass
-class RaySplit:
-    branches: dict[str, RealRays]
-```
-
-Optional spaeter:
-
-```python
-@dataclass
-class TracePathState:
-    path_id: str
-    rays: RealRays
-    surface_cursor: int
-    material_pre: BaseMaterial
-```
-
----
-
-## 1. Ray-Kopien zuerst
-
-**Dateien:** `optiland/rays/real_rays.py`, `optiland/rays/polarized_rays.py`,
-`tests/test_rays.py` oder neues `tests/test_ray_copy.py`
-
-- [ ] `RealRays.copy()` oder `RealRays.clone()` einfuehren.
-      Derzeit existiert diese Methode nicht.
-- [ ] Alle ray state fields unabhaengig kopieren:
-      `x, y, z, L, M, N, i, w, opd, L0, M0, N0, is_normalized`.
-- [ ] `PolarizedRays` separat behandeln:
-      zusaetzlich `p, _i0, _L0, _M0, _N0` kopieren.
-- [ ] Backend-agnostisch mit `be.copy()` arbeiten.
-- [ ] Tests fuer NumPy und Torch:
-      geaenderte Felder eines Branches duerfen den anderen Branch nicht
-      veraendern.
-
-Grund: Der Strahlenteiler muss denselben Eingangsstrahl in mindestens zwei
-unabhaengige Ausgangs-Raysets verzweigen, bevor `reflect()` und `refract()`
-mutierend aufgerufen werden.
-
----
-
-## 2. Core: BeamSplitterInteractionModel
-
-**Dateien:** `optiland/interactions/beam_splitter_model.py` (neu),
-`optiland/interactions/__init__.py`,
-`optiland/interactions/base.py`,
-`optiland/surfaces/factories/interaction_model_factory.py`,
-`optiland/_types.py`
-
-- [ ] Neue Klasse `BeamSplitterInteractionModel(BaseInteractionModel)`.
-- [ ] Konstruktor-Parameter:
-      - `split_ratio: float` im Bereich `[0, 1]`, Anteil Reflexion.
-      - `reflected_path: str = "reflected"`.
-      - `transmitted_path: str = "transmitted"`.
-      - `coating: BaseCoating | None = None`.
-      - `bsdf: BaseBSDF | None = None`.
-- [ ] `interaction_type = "beam_splitter"` setzen.
-- [ ] `interact_real_rays()` gibt ein explizites Split-Objekt zurueck,
-      nicht ein positionsabhaengiges Tuple:
-
-      ```python
-      reflected = rays.copy()
-      transmitted = rays.copy()
-      reflected.reflect(nx, ny, nz)
-      transmitted.refract(nx, ny, nz, n1, n2)
-      reflected.i = reflected.i * split_ratio
-      transmitted.i = transmitted.i * (1.0 - split_ratio)
-      return RaySplit({
-          reflected_path: reflected,
-          transmitted_path: transmitted,
-      })
-      ```
-
-- [ ] Energieerhaltung validieren:
-      `0 <= split_ratio <= 1` und `R + T == 1` fuer das Fixed-Ratio-Modell.
-- [ ] Coatings nicht blind ueber `_apply_coating_and_bsdf()` anwenden:
-      der Helper nutzt aktuell `self.is_reflective` als globales Flag.
-      Fuer Splitter braucht die Coating-Anwendung pro Branch ein explizites
-      `reflect=True` bzw. `reflect=False`.
-- [ ] Zunaechst eine klare Entscheidung treffen:
-      Fixed-Ratio und Coating/Fresnel sind entweder zwei Modi, oder ein Modus
-      hat dokumentierten Vorrang. Keine doppelte Intensitaetsskalierung.
-- [ ] `interact_paraxial_rays()`:
-      vorerst `NotImplementedError("Paraxial tracing is not supported for beam splitters.")`.
-- [ ] `flip()`:
-      wenn Rueckwaerts-Tracing fuer Splitter nicht implementiert ist, klar
-      dokumentieren und nicht still falsche Pfade erzeugen.
-- [ ] `to_dict()` um `split_ratio`, `reflected_path`,
-      `transmitted_path` erweitern.
-- [ ] `BaseInteractionModel.from_dict()` pruefen:
-      aktuell instanziiert es Subklassen direkt und nutzt deren eigene
-      `from_dict()`-Methode nicht. BeamSplitter-Daten muessen entweder zu
-      diesem generischen Pfad passen oder der Loader muss sauber an
-      Subklassen-Deserialisierung delegieren.
-- [ ] `InteractionModelFactory.create()` um `"beam_splitter"` erweitern.
-- [ ] `SurfaceParameters` in `optiland/_types.py` um relevante kwargs
-      erweitern: `interaction_type`, `split_ratio`, `reflected_path`,
-      `transmitted_path`, ggf. `bsdf`.
-
----
-
-## 3. Surface-Schicht: Branch-Awareness
-
-**Datei:** `optiland/surfaces/standard_surface.py`
-
-Korrektur zur ersten Skizze: Nicht nur `_trace_real()` muss angepasst werden.
-Die entscheidende Stelle ist `Surface.trace()`, weil dort lokalisiert,
-globalisiert und recorded wird.
-
-Aktueller Ablauf:
-
-```python
-self.geometry.localize(rays)
-rays = rays.trace_on_surface(self)
-self.geometry.globalize(rays)
-rays.record_on_surface(self)
-return rays
-```
-
-Bei einem Split liegen nach `interact_real_rays()` mehrere lokale Raysets vor.
-Alle muessen globalisiert und separat recorded werden.
-
-- [ ] Rueckgabetypen typisieren:
-      `RealRays | RaySplit` fuer real rays, `ParaxialRays` fuer paraxial.
-- [ ] `Surface.trace()` branch-aware machen:
-      - Single `RealRays`: bisheriger Pfad unveraendert.
-      - `RaySplit`: jedes Branch-Rayset globalisieren und pro Path-ID
-        aufzeichnen.
-- [ ] Recording erweitern:
-      - Bestehende Felder `x, y, z, L, M, N, intensity, opd` bleiben fuer
-        Single-Path/Legacy erhalten.
-      - Neues Feld, z.B. `ray_paths: dict[str, SurfaceRayRecord]` oder
-        `path_records: dict[str, RealRays]`.
-- [ ] Wenn dieselbe Surface von mehreren Pfaden getroffen wird, duerfen ihre
-      Daten nicht ueberschrieben werden. Pfad-ID muss Teil des Records sein.
-- [ ] `reset()` muss auch neue Pfad-Records leeren.
-
----
-
-## 4. SurfaceGroup: Verzweigtes Tracing ohne Legacy-Bruch
-
-**Datei:** `optiland/surfaces/surface_group.py`
-
-- [ ] `SurfaceGroup` um optionale Pfad-Konfiguration erweitern:
-
-      ```python
-      paths: dict[str, OpticalPath]
-      # oder serialisierbar:
-      paths: dict[str, list[int]]
-      ```
-
-- [ ] Default fuer bestehende Systeme:
-      `{"main": tuple(range(num_surfaces))}`.
-- [ ] Neue Methode:
-
-      ```python
-      def trace_paths(self, rays, start_path: str = "main", skip: int = 0) -> dict[str, RealRays]:
-          ...
-      ```
-
-- [ ] `trace()` fuer Legacy-Systeme unveraendert lassen.
-      Optional kann `trace()` intern `trace_paths()` verwenden, aber nur wenn
-      das Ergebnis eindeutig single-path ist.
-- [ ] Aktive Pfade als States verwalten:
-      `path_id`, aktuelle Surface-Sequenz, Rayset, ggf. aktuelles Medium.
-- [ ] Split-Ausgang nicht ueber `surface.path_id` modellieren.
-      Besser: Splitter-Interaktion erzeugt Branch-IDs, und `SurfaceGroup`
-      routed diese Branches in die passende `OpticalPath.surface_indices`.
-- [ ] Lineare `previous_surface`-Abhaengigkeit pruefen:
-      `Surface.material_pre` nutzt aktuell die vorherige Surface in der
-      globalen Liste. Das ist fuer reflektierte oder seitliche Arme oft falsch.
-      Fuer korrekte Physik braucht ein Branch entweder:
-      - pfad-spezifische Surface-Links,
-      - einen expliziten `material_pre`/`material_post` Kontext,
-      - oder eine erste Scope-Einschraenkung, die nur Systeme mit gleichem
-        Umgebungsmedium nach dem Split erlaubt.
-- [ ] Aggregations-Properties `x`, `y`, `z`, `intensity` nicht einfach ueber
-      alle Pfade stapeln. Pfade haben unterschiedliche Laengen und Surface-IDs.
-      Neue API einfuehren, z.B.:
-      `surface_group.path_records[path_id]` oder
-      `surface_group.get_path_arrays(path_id)`.
-- [ ] `reset()` muss alle Surface-Records und alle Path-Records leeren.
-
----
-
-## 5. Ray-Tracer und Optic-API
-
-**Dateien:** `optiland/raytrace/real_ray_tracer.py`,
-`optiland/optic/optic.py`,
-ggf. `optiland/optic/extended_source_optic.py`
-
-- [ ] Neue `RealRayTracer.trace_paths()` Methode.
-- [ ] Neue `Optic.trace_paths()` Methode.
-- [ ] Neue `Optic.trace_generic_paths()` Methode, wenn generische Strahlen
-      fuer Multi-Path benoetigt werden.
-- [ ] `Optic.trace()` und `Optic.trace_generic()` geben weiter `RealRays`
-      zurueck.
-- [ ] Final propagation pro Pfad ausfuehren:
-      derzeit propagiert `RealRayTracer.trace()` nur ein Rayset mit
-      `last_surface.thickness`.
-      Multi-Path braucht pro Pfad eine Terminal-/Image-Surface.
-- [ ] Intensitaetsupdate nicht mehr nur ueber
-      `self.optic.surfaces.intensity[-1, :]` abwickeln.
-      Multi-Path braucht pfad-spezifische Endrecords.
-- [ ] `optic.surfaces.add(...)` ist die primaere Add-API.
-      `Optic.add_surface()` ist deprecated und sollte nur weiterreichen.
-- [ ] Falls `add_path()` / `add_beam_splitter()` eingefuehrt werden, eher an
-      `SurfaceGroup` oder einen kleinen `PathManager` haengen:
-
-      ```python
-      optic.surfaces.add_path("transmitted", [0, 1, 2, 3])
-      optic.surfaces.add_path("reflected", [0, 1, 4, 5])
-      ```
-
-- [ ] Analyse-Methoden spaeter um `path_id` erweitern oder bei Multi-Path ohne
-      eindeutigen Hauptpfad mit klarer Meldung abbrechen.
-- [ ] Feldpunkte und Apertur pro Pfad sind Phase 2. Fuer Phase 1 denselben
-      Eingangsraysatz splitten.
-
----
-
-## 6. Paraxiale / analytische Unterstuetzung
-
-**Dateien:** `optiland/raytrace/paraxial_ray_tracer.py`,
-`optiland/paraxial.py`, Analyse-Module
-
-Korrektur: `ParaxialRayTracer.trace_generic()` nutzt eigene lineare Logik und
-ruft nicht die normalen Interaction-Modelle auf. Ein
-`BeamSplitterInteractionModel.interact_paraxial_rays()`-Stub allein schuetzt
-also nicht alle paraxialen Pfade.
-
-- [ ] Multi-Path-/BeamSplitter-Erkennung zentral einfuehren, z.B.
-      `surface_group.has_ray_splits`.
-- [ ] `ParaxialRayTracer.trace()` und `trace_generic()` muessen vor der
-      linearen Berechnung abbrechen, solange Splitter nicht unterstuetzt sind.
-- [ ] Fehlermeldung:
-      `"Paraxial analysis is not supported for multi-path optics. Select a single path or use real-ray tracing."`
-- [ ] Spaetere Ausbaustufe: paraxiale Berechnung nur fuer einen expliziten
-      Pfad, z.B. `optic.paraxial.trace_path("transmitted", ...)`.
-
----
-
-## 7. Serialisierung / Datei-I/O
-
-**Dateien:** `optiland/optic/optic_serializer.py`,
-`optiland/surfaces/surface_group.py`,
-`optiland/fileio/optiland_handler.py`
-
-- [ ] Optiland-eigene Persistenz ist aktuell JSON-basiert ueber
-      `OpticSerializer` und `optiland/fileio/optiland_handler.py`.
-      YAML nur erwaehnen, wenn konkret eingefuehrt wird.
-- [ ] Pfad-Konfiguration serialisieren, bevorzugt in `surface_group`:
-
-      ```json
-      {
-        "surface_group": {
-          "surfaces": [...],
-          "paths": {
-            "main": [0, 1, 2, 3],
-            "reflected": [0, 1, 4, 5]
-          }
-        }
-      }
-      ```
-
-- [ ] Rueckwaertskompatibel laden:
-      wenn `paths` fehlt, automatisch `main = all surfaces`.
-- [ ] Splitter-Interaction serialisiert `split_ratio`, `reflected_path`,
-      `transmitted_path`.
-- [ ] Tests fuer Roundtrip:
-      alter JSON-Stand ohne `paths`, neuer Stand mit `paths`, und
-      BeamSplitter-Interaction.
-- [ ] Zemax-/CodeV-Import nicht im ersten Schritt versprechen.
-      Erst pruefen, welche Non-Sequential- oder Fold-/Coating-Konventionen
-      gemappt werden koennen.
-
----
-
-## 8. GUI-Integration
-
-**Dateien:** `optiland_gui/services/surface_service.py`,
-`optiland_gui/lens_editor.py`,
-`optiland_gui/system_properties_panel.py`,
-Undo/Redo- und Connector-Code
-
-Korrektur: Ein Beam Splitter ist in diesem Design keine neue Geometry
-`surface_type`, sondern ein neues Interaction Model. Darum nicht einfach
-`AVAILABLE_SURFACE_TYPES` erweitern. Die GUI nutzt fuer Surface-Typen aktuell
-die `GeometryFactory`-Registry.
-
-- [ ] Zuerst Core-API stabilisieren, dann GUI.
-- [ ] GUI braucht eine eigene Anzeige/Bearbeitung fuer Interaction Models:
-      `refractive_reflective`, `phase`, `diffractive`, `thin_lens`,
-      `beam_splitter`.
-- [ ] Es gibt aktuell keine `_get_interaction_type()`-Methode in
-      `SurfaceService`; diese muesste neu entstehen, falls die LDE den
-      Interaction-Typ anzeigen soll.
-- [ ] Eigenschaften fuer BeamSplitter:
-      - Split-Ratio in Prozent Reflexion.
-      - Reflected Path.
-      - Transmitted Path.
-      - Optional: Coating-Modus.
-- [ ] Pfadverwaltung in System-Properties oder eigenem Dialog:
-      Path-ID, Surface-Liste, Terminal-/Image-Surface.
-- [ ] Undo/Redo:
-      Pfad- und Interaction-Aenderungen muessen ueber vorhandene
-      `_capture_optic_state()` / `_restore_optic_state()`-Mechanik laufen.
-- [ ] Nebenbefund fuer spaetere GUI-Korrektur pruefen:
-      `SurfaceService._set_material_data()` setzt aktuell `surface.is_reflective`,
-      waehrend Core-Code `surface.interaction_model.is_reflective` nutzt.
-      Fuer BeamSplitter-UI darf diese Inkonsistenz nicht weiter ausgebaut
-      werden.
-
----
-
-## 9. Visualisierung
-
-**Dateien:** `optiland/visualization/system/rays.py`,
-`optiland/visualization/system/optic_viewer.py`,
-`optiland/visualization/system/optic_viewer_3d.py`,
-`optiland_gui/viewer_panel.py`
-
-- [ ] Erst nach stabilem `trace_paths()` implementieren.
-- [ ] `Rays2D._process_traced_rays()` kann aktuell nur
-      `optic.surfaces.x/y/z/intensity` lesen. Fuer Multi-Path braucht es
-      pfad-spezifische Records.
-- [ ] Pfade getrennt plotten:
-      - je Path-ID eigene Farbe.
-      - Legende mit Path-ID.
-      - Option zum Ausblenden einzelner Pfade.
-- [ ] Pfad-Laengen koennen unterschiedlich sein; nicht voraussetzen, dass alle
-      Pfade ein rechteckiges Array `[num_surfaces, num_rays]` besitzen.
-- [ ] 3D/VTK analog ueber Pfadrecords bauen.
-- [ ] Strahlenteiler-Flaeche optional halbdurchsichtig darstellen, aber erst
-      nach Core/Trace-Records.
-
----
-
-## 10. Tests
-
-**Verzeichnis:** `tests/`
-
-- [ ] Unit-Tests: `tests/test_beam_splitter_model.py`
-      - Split-Ratio validiert `[0, 1]`.
-      - Energieerhaltung fuer Fixed-Ratio.
-      - Reflektierter Branch erfuellt Reflexionsgesetz.
-      - Transmittierter Branch erfuellt Snell.
-      - Branch-IDs stimmen.
-      - Serialisierung round-trip.
-- [ ] Copy-Tests: `tests/test_ray_copy.py`
-      - `RealRays.copy()`/`clone()` kopiert alle Felder.
-      - Keine Aliasing-Probleme NumPy/Torch.
-      - `PolarizedRays` kopiert Polarisationstate korrekt.
-- [ ] Surface-Tests: `tests/test_standard_surface.py`
-      - Single-Path-Verhalten unveraendert.
-      - Split-Branch wird globalisiert und pro Pfad recorded.
-- [ ] SurfaceGroup-Tests: `tests/test_surface_group_paths.py`
-      - Alte Systeme ohne `paths` laufen unveraendert.
-      - `trace_paths()` liefert `dict[str, RealRays]`.
-      - Pfad-Konfiguration routet reflected/transmitted korrekt.
-      - Unterschiedliche Pfadlaengen funktionieren.
-- [ ] Optic-/Tracer-Tests: `tests/test_multi_path_optic.py`
-      - `optic.trace()` bleibt `RealRays`.
-      - `optic.trace_paths()` liefert erwartete Pfade.
-      - Final propagation pro Pfad korrekt.
-      - NumPy und Torch via `set_test_backend`.
-- [ ] Paraxial-Tests:
-      - BeamSplitter/Multi-Path wirft klare `NotImplementedError`.
-- [ ] GUI-Tests erst nach GUI-Integration:
-      `tests/gui/test_beam_splitter_service.py`.
-
-Keine Toleranzen lockern, nur um Tests gruen zu bekommen.
-
----
-
-## 11. Dokumentation & Beispiele
-
-**Verzeichnisse:** `docs/`, `docs/examples/`, `_changes/`, `agents.md`
-
-- [ ] Docstrings fuer neue Klassen und Methoden im Google-Stil.
-- [ ] `_changes/` Eintrag erstellen, sobald Implementierung existiert.
-- [ ] Beispiel/Notebook erst nach stabilem Core:
-      `Tutorial_11_Beam_Splitter_Systems.ipynb`.
-- [ ] Beispiele:
-      - Einfacher 50:50 Splitter.
-      - Abbildung + Beleuchtung.
-      - Optional spaeter Mach-Zehnder, wenn Phasen/Interferenz sauber
-        abgebildet werden.
-- [ ] `agents.md` nur aktualisieren, wenn Multi-Path zur dauerhaften
-      Architektur-Konvention wird.
-
----
-
-## Empfohlene Phasen
-
-```text
-Phase 0: Ray copy/clone + Tests
-    -> Phase 1: RaySplit-Datenstruktur + BeamSplitterInteractionModel
-        -> Phase 2: Surface.trace() branch-aware machen
-            -> Phase 3: SurfaceGroup paths + trace_paths()
-                -> Phase 4: RealRayTracer/Optic trace_paths()
-                    -> Phase 5: Serialisierung
-                    -> Phase 6: Paraxial fail-fast
-                    -> Phase 7: Visualisierung
-                    -> Phase 8: GUI
-                    -> Phase 9: Docs/Examples
-```
-
-Tests laufen phasenbegleitend, nicht erst am Ende.
-
----
-
-## Kritische Risiken
-
-| Risiko | Beschreibung | Korrigierte Massnahme |
+Status: erneut gegen die Codebasis am 2026-09-11 geprueft, HEAD `7b59f229`.
+Die nachfolgenden offenen Punkte sind ein Implementierungsplan, keine bereits
+umgesetzten Erweiterungen.
+
+Ziel: Beleuchtung von der Seite und Abbildung in Transmission sowie die
+Aufteilung eines gemeinsamen Eingangsbuendels an einem Strahlenteiler.
+Unabhaengige Quellen und das Splitten eines einzelnen Buendels sind
+unterschiedliche Anforderungen und muessen getrennt nachgewiesen werden.
+
+**Wesentliche Korrektur:** Die Codebasis besitzt inzwischen benannte
+sequentielle Routen und einen nichtsequentiellen Tracer mit Strahlteilung.
+Eine neue Pfadverwaltung in `SurfaceGroup` und ein neuer
+`BeamSplitterInteractionModel` sind daher nicht mehr der automatische
+erste Schritt. Zuerst vorhandene APIs nutzen und die verbleibenden Luecken
+gezielt schliessen. `Optic.trace()` bleibt rueckwaertskompatibel.
+
+## 1. Verifizierter Bestand
+
+- [x] `Optic.add_sequence(name, steps)` erzeugt ein `SequencedOptic` und
+      registriert es in `optic.sequences`.
+      Schritte erlauben Surface-Indizes und Overrides wie `(1, "reflect")`
+      oder `(1, "refract")`.
+- [x] `optiland/sequences/surface_view.py` stellt pro Flaechenbesuch eigene
+      Records und einen angepassten Material-/Interaction-Kontext bereit.
+      Geometrie und weitere physische Flaecheneigenschaften werden geteilt.
+      Wiederholte Besuche muessen deshalb nicht mehr durch neue globale
+      Surface-Record-Felder erfunden werden.
+- [x] `OpticSerializer` speichert benannte Routen bereits im optionalen
+      Top-Level-Feld `sequences` und stellt sie beim Laden wieder her.
+- [x] `NSQScene` in `optiland/nonsequential/scene.py` unterstuetzt mehrere
+      Quellen, Komponenten und Detektoren. Die physische Trefferreihenfolge
+      ergibt sich aus der Geometrie.
+- [x] `RefractiveComponent` kann mit
+      `SimpleCoating(transmittance=T, reflectance=R)` als idealisierte
+      teilreflektierende Grenzflaeche dienen. Ohne Coating wird unpolarisiertes
+      Fresnel-R/T verwendet.
+- [x] `SamplingPolicy` unterstuetzt importance-gewichtete Branch-Auswahl
+      sowie begrenztes echtes Splitting im NumPy-Backend.
+      `reflect_prob` steuert die Sampling-Wahrscheinlichkeit, nicht das
+      physische Reflexionsvermoegen.
+- [x] NSQ-Ergebnisse enthalten getrennte Detektorergebnisse und optional
+      `ray_paths["events"]`. `scene.view(result)` und
+      `scene.view3d(result)` sind bereits vorhanden.
+- [x] NSQ besitzt eigene JSON-Serialisierung und den Konverter
+      `sequential_to_nonsequential` mit einem Bericht ueber Einschraenkungen.
+- [x] `optiland/paraxial_path.py` modelliert bereits einen gefalteten
+      paraxialen Einzelpfad mit Richtungs-/Koordinatenkontext und
+      Domaenenpruefungen. Das ist kein Verzweigungsgraph.
+
+Diese Haken bestaetigen vorhandene Bausteine, nicht die vollstaendige
+Erfuellung des Zielsystems.
+
+## 2. Architekturentscheidung
+
+| Anforderung | Vorhandener Ansatz | Verbleibende Grenze |
 | --- | --- | --- |
-| Rueckwaertskompatibilitaet | `trace()` Rueckgabetyp-Aenderung bricht viele Aufrufer | `trace()` unveraendert lassen, neue `trace_paths()` API |
-| Tuple-API | Tuple-Reihenfolge ist unklar und verliert Path-IDs | Explizites `RaySplit` / `branches: dict[str, RealRays]` |
-| Material-Kontext | `previous_surface` ist linear und fuer Branches oft falsch | Pfad-/Medium-Kontext einfuehren oder Scope begrenzen |
-| Lokale Koordinaten | Split-Branches entstehen vor `globalize()` | `Surface.trace()` muss alle Branches globalisieren/recorden |
-| Backend-Kompatibilitaet | Clones koennen NumPy/Torch-Arrays teilen | `be.copy()` und Aliasing-Tests fuer beide Backends |
-| Polarisation | `PolarizedRays` hat zusaetzlichen Zustand | Polarized clone + branch-aware coating tests |
-| Coatings | `_apply_coating_and_bsdf()` nutzt ein globales Reflect-Flag | Branch-spezifische Coating-Anwendung |
-| Paraxial | Paraxial tracer umgeht Interaction-Modelle teilweise | Fruehe Multi-Path-Erkennung und klare Fehlermeldung |
-| Visualisierung | Bestehende Arrays sind rechteckig und single-path | Pfadrecords statt globalem Stack |
-| GUI | BeamSplitter ist Interaction, nicht Geometry | Eigene Interaction-UI statt Surface-Type-Dropdown |
+| Explizite Route durch vorhandene Flaechen | `Optic.add_sequence()` | Ein einzelner Trace verfolgt nur diese Route; keine gemeinsame Verzweigung |
+| Mehrere unabhaengige Quellen/Detektoren | `NSQScene` | Nicht automatisch sequentielle Abbildungsanalyse oder eigenes Ray-Aiming pro Arm |
+| Inkohaerente Leistungsteilung | NSQ + `RefractiveComponent` + Coating | Numerikbefund in Abschnitt 3; keine Polarisation |
+| Beide Kinder jedes Eingangsstrahls verfolgen | NSQ mit `split_depth > 0` | Nur NumPy, begrenzt durch Tiefe und Budget |
+| Deterministisches Splitting mit Torch | Noch nicht vorhanden | Torch warnt bei `split_depth > 0` und verwendet stochastische Auswahl |
+| OPD/Jones-Zustand je deterministischem Arm | Sequentielle Rays als Ausgangspunkt | Branch-Ausfuehrung, Zustandskopien und Coating-Semantik fehlen |
+| Kohaerente Rekombination/Interferenz | Kein hier nachgewiesener Ansatz | Nicht Bestandteil der ersten Stufe |
+
+Empfohlener Ausgangspunkt ist ein NSQ-Referenzaufbau fuer den inkohaerenten
+Beleuchtungsfall. Benannte Sequenzen dienen separat zur Beschreibung
+ausgewaehlter sequentieller Routen.
+
+Nur wenn deterministische Torch-Branches, OPD/Polarisation oder die
+Anbindung an sequentielle Analysen zwingend sind, eine zusaetzliche
+Branch-Ausfuehrungs-API planen. Vor einem solchen Core-Umbau die
+Architekturentscheidung abstimmen. Dabei:
+
+- `Optic.trace()` und `SurfaceGroup.trace()` behalten ihr
+  Single-Path-Verhalten und ihre bisherigen Rueckgabevertraege.
+- `trace_paths()` / `trace_generic_paths()` sind moegliche neue APIs,
+  aber noch keine beschlossene oder vorhandene Schnittstelle.
+- Keine parallele `OpticalPath.surface_indices`-Verwaltung neben
+  `SequenceStep`, Resolver und `optic.sequences` ohne nachgewiesenen Bedarf.
+- Physische Interaktion liefert Ausgaenge wie Reflexion/Transmission.
+  Die Zuordnung dieser Ausgaenge zu benannten Routen gehoert in die
+  Pfadausfuehrung, nicht in das Coating oder die Materialdefinition.
+- Ein reines `dict[str, RealRays]` genuegt eventuell fuer Endbuendel,
+  ersetzt aber weder Zwischenrecords noch Herkunft und Verzweigungsstruktur.
+
+## 3. Verbleibende Grenzen und Befunde
+
+### Numerik: reproduzierbare Mehrfachtreffer unter Torch float32
+
+Ein kleiner Referenzaufbau funktioniert bereits mit vorhandenen APIs:
+1 W kollimiertes Licht entlang +z, eine um 45 Grad um y gedrehte
+50:50-Grenzflaeche bei z=10, Vakuum auf beiden Seiten, je ein Detektor
+im transmittierten und reflektierten Arm.
+
+Bei 2.048 Eingangsstrahlen und Seed 7 wurden folgende Werte gemessen:
+
+| Backend / Praezision | Sampling | Transmission [W] | Reflexion [W] | Strahlen mit mehrfachem Splitter-Treffer |
+| --- | --- | --- | --- | --- |
+| NumPy / float64 | `split_depth=1` | 0.500000 | 0.500000 | Nicht ausgewertet |
+| NumPy / float64 | `split_depth=0` | 0.500977 | 0.499023 | 0 |
+| Torch / float64 | `split_depth=0` | 0.500977 | 0.499023 | 0 |
+| Torch / float32 | `split_depth=0` | 0.404297 | 0.595703 | 1.011 |
+
+Im letzten Fall wurden insgesamt 3.976 Splitter-Treffer erfasst, maximal
+12 fuer denselben Strahl. Dieser einfache Aufbau erlaubt physisch nur
+einen Besuch der Splitter-Ebene pro Strahl. Die Abweichung ist daher nicht
+nur durch Monte-Carlo-Streuung erklaert. Die Summe der Detektorleistungen
+bleibt trotzdem etwa 1 W: Ein reiner Energieerhaltungstest entdeckt den
+Fehler nicht.
+
+- [ ] Ursache der Mehrfachtreffer untersuchen, insbesondere
+      Trefferabstand/Origin-Offset und Praezisionsabhaengigkeit.
+      Dies ist eine Arbeitshypothese, noch kein nachgewiesener Root Cause.
+- [ ] Regression mit identischer Szene fuer NumPy/Torch und expliziten
+      float32-/float64-Einstellungen aufnehmen.
+- [ ] Pro Strahl maximal einen Splitter-Treffer und korrekte
+      Detektorverteilung pruefen, nicht nur die Gesamtleistung.
+- [ ] Keine Toleranzen aufweiten, um diese Abweichung zu akzeptieren.
+
+### Medien und Flaechenbesuche
+
+`SurfaceView` und `resolve_view_materials()` loesen bereits einen Teil des
+frueher beschriebenen `previous_surface`-Problems. Sie stellen je Besuch
+einen eigenen Materialkontext her. Der Resolver wechselt die
+Rueckwaertsrichtung nach Reflexionen; diese Reflexionsparitaet ersetzt
+keine allgemeine geometrische Vorder-/Rueckseitenbestimmung fuer beliebige
+seitliche 3D-Arme.
+
+- [ ] Materialzuordnung fuer beide Anstrahlrichtungen und wiederholte
+      Flaechenbesuche testen; vorhandenen View-/Resolver-Ansatz nutzen.
+- [ ] Bei reflektierten Views physische Medien des Coatings von dem Medium
+      unterscheiden, in dem der reflektierte Strahl weiterlaeuft.
+      `SurfaceView._rebind_coating()` bindet Fresnel-/ThinFilm-Coatings neu;
+      insbesondere bei `material_post == material_pre` durch Reflexion
+      muss die korrekte Grenzflaechenphysik gezielt geprueft werden.
+- [ ] Bei NSQ `material_front`/`material_back`, geometrische Normale und
+      den aktuellen Strahl-Mediumzustand verwenden. Der diagnostische
+      `medium_stack` ist nicht die Quelle fuer die Brechungsindizes.
+- [ ] Festlegen, wie Sequenzen nach Hinzufuegen/Entfernen von Flaechen
+      aktualisiert oder ungueltig werden. Die Views werden aktuell bei
+      Erstellung aufgeloest; rohe Indizes werden nicht automatisch remapped.
+
+### Leistung, Polarisation und Differenzierbarkeit
+
+- [ ] Fuer ein passives konstantes R/T-Modell endliche Koeffizienten mit
+      `R >= 0`, `T >= 0`, `R + T <= 1` verlangen.
+      `R + T == 1` gilt nur im explizit verlustfreien Fall.
+- [ ] Exakte deterministische Teilung und statistische Schaetzung getrennt
+      testen. Unter Roulette muessen Gewichte und Erwartungswerte stimmen;
+      nicht jeder endliche Lauf liefert exakt die Sollverteilung.
+- [ ] NumPy-Splitting ist begrenzt: `split_depth` zaehlt Interaktionstiefe,
+      `split_budget` begrenzt die lebenden Strahlen relativ zu `batch_size`
+      (Default 4.0). Beim Budgetlimit faellt die Ausfuehrung auf Roulette
+      zurueck. Daher nicht uneingeschraenkt als deterministisch bezeichnen.
+- [ ] Absorption bis zur Flaeche, Apertur-Clipping, Coating-Verlust und
+      Branch-Gewichtung jeweils genau einmal beruecksichtigen.
+- [ ] Totalreflexion explizit behandeln, bevor ein ungueltiger
+      Transmissionsstrahl erzeugt wird. Einfach beide mutierenden Methoden
+      `reflect()`/`refract()` aufzurufen ist kein vollstaendiges Modell.
+- [ ] NSQ hat derzeit keinen Jones-/OPD-Zustand und weist polarisierte
+      Coatings zurueck. Keine Polarisation oder Interferenz versprechen.
+- [ ] `RefractiveComponent` wandelt die verwendeten einfachen
+      Coating-Koeffizienten in Python-`float` um. Torch-Ausfuehrung bedeutet
+      hier nicht automatisch Gradienten bezueglich R/T.
+- [ ] Fuer eine spaetere sequentielle polarisierte Erweiterung
+      `p`, `_i0` und die Polarisationsbasis beachten.
+      Nur `rays.i *= R` ist unzureichend, weil `update_intensity()`
+      Intensitaet aus dem Polarisationszustand neu berechnet.
+      Coatings pro Ausgang explizit reflektierend/transmittierend anwenden;
+      keine doppelte Skalierung durch Split-Ratio und Coating.
+
+### Records und Pfadidentitaet
+
+NSQ-Ereignisse enthalten `ray_id`, `event_type`, Position, Richtung,
+`flux`, `wavelength`, `bounce` und `component_name`. Beim Splitting
+erhalten Kinder eigene Ray-IDs, aber das Ereignisschema enthaelt derzeit
+keine explizite Eltern-ID oder semantische Path-ID.
+
+- [ ] Fuer einen vollstaendigen Branch-Baum Herkunft/Split-Ereignis
+      definieren; unterschiedliche Ray-IDs allein verknuepfen die Kinder
+      nicht mit dem gemeinsamen Eingangsweg.
+- [ ] Benannte Sollrouten, tatsaechlich aufgetretene Trefferfolgen und
+      Detektorergebnisse nicht als dieselbe Pfadidentitaet behandeln.
+- [ ] Begrenztes `record_paths`-Sampling dient der Diagnose/Visualisierung,
+      nicht der vollstaendigen Leistungsbilanz.
+- [ ] Diagnose-/Plot-Records nicht versehentlich als differenzierbare
+      Ergebnisdaten behandeln.
+
+## 4. Falls sequentielle Branch-Ausfuehrung erforderlich bleibt
+
+Die folgenden Integrationsstellen ersetzen die inzwischen veralteten
+direkten Eingriffe des vorherigen Plans. Erst nach der Entscheidung in
+Abschnitt 2 implementieren.
+
+### Ray-Zustand und Interaktion
+
+- [ ] `RealRays.copy()`/`clone()` fehlt weiterhin. Nur fuer die
+      sequentielle Erweiterung als Voraussetzung einfuehren, nicht fuer
+      den bereits vorhandenen NSQ-Prototyp.
+- [ ] Alle vorhandenen Zustandsarrays unabhaengig kopieren:
+      `x, y, z, L, M, N, i, w, opd`, optionale
+      `L0, M0, N0` und `is_normalized`.
+      Bei `PolarizedRays` zusaetzlich `p, _i0, _L0, _M0, _N0`.
+- [ ] `be.copy()` nutzen. Der aktuelle Torch-Helper liegt in
+      `optiland/backend/torch_backend/indexing.py` und verwendet
+      `clone()`, nicht `detach()`. Aliasingfreiheit und Gradientenfluss
+      getrennt pruefen.
+- [ ] NSQ-`NSQRayBundle.select()`/`concat()` sind kein Ersatz fuer
+      einen vollstaendigen backend-agnostischen `RealRays`-Clone.
+- [ ] Neue Interaktionen ueber
+      `InteractionModelFactory.register(name, builder)` registrieren.
+      Die Factory ist inzwischen registry-basiert.
+- [ ] `SurfaceFactory` und `SurfaceParameters` mitpruefen:
+      Neue Interaction-Parameter werden nicht automatisch durchgereicht;
+      aktuell existieren spezielle Weiterleitungen fuer
+      `focal_length` und `phase_profile`.
+- [ ] Fuer spezialisierte Deserialisierung den vorhandenen Hook
+      `BaseInteractionModel._deserialize_init_data()` verwenden.
+      Der generische `from_dict()` ruft diesen bereits fuer Subklassen auf;
+      keinen zweiten allgemeinen Deserialisierungsmechanismus einfuehren.
+
+### Koordinaten, Ausfuehrung und Endzustand
+
+- [ ] `Surface.trace(rays, record=True)` delegiert inzwischen an
+      `_TracingCoordinator` in `standard_surface.py`.
+      Dort liegen Reset, Lokalisierung, Dispatch, Globalisierung und
+      optionales Recording. Alle Branches muessen denselben korrekten
+      lokalen/globalen Uebergang durchlaufen.
+- [ ] `SurfaceGroup.trace()` und `SequencedSurfaceGroup.trace()`
+      verlassen sich auf Mutation und ignorieren Surface-Rueckgaben.
+      Ein `RaySplit`-Rueckgabewert allein erzeugt keine Verzweigung.
+- [ ] Vorhandene `SurfaceView`-Records pro Besuch wiederverwenden.
+      Wiederholte Aufrufe resetten Records; gemeinsame Prefixe und
+      Branches benoetigen einen Trace-eigenen Record-Lebenszyklus,
+      damit kein Arm den anderen ueberschreibt.
+- [ ] `record=False` des Standard-Tracers erhalten. Sequenzen reichen
+      derzeit keinen entsprechenden Record-Schalter durch.
+- [ ] Einen gemeinsamen Eingang bis zur Verzweigung nur einmal propagieren.
+      Mehrfaches unabhaengiges `sequence.trace()` ist kein Nachweis fuer
+      die Verzweigung desselben Ray-Zustands.
+- [ ] Spezialverhalten von `ObjectSurface` und `ImageSurface` erhalten;
+      Views dispatchen bereits nach dem Typ ihrer Basisflaeche.
+- [ ] Terminierung pro Arm explizit definieren.
+      `RealRayTracer` propagiert nach dem Surface-Trace noch um die letzte
+      Thickness; `SequencedOptic.trace()` tut dies nicht zusaetzlich.
+      Ein identisches Verhalten darf nicht still vorausgesetzt werden.
+- [ ] Polarisationsupdate und Endrecords konsistent halten.
+      Die alte Zuweisung
+      `self.optic.surfaces.intensity[-1, :] = rays.i`
+      ist im aktuellen `RealRayTracer` nicht mehr vorhanden.
+- [ ] Vorhandene `be.no_grad_unless_enabled()`-Semantik respektieren;
+      Torch-Tests muessen den benoetigten Gradientenmodus explizit setzen.
+
+## 5. Paraxiale Analyse und Ray-Aiming
+
+`ParaxialRayTracer.trace_generic()` und die Transfermatrixberechnung
+verwenden eigene skalare Berechnungen mit
+`ParaxialRayTracer.prepare_scalar_sequence()` und `ParaxialPath`. Ein
+`interact_paraxial_rays()`-Stub schuetzt diese Wege nicht.
+
+- [ ] Vorhandene `ParaxialPath`-Validierung und
+      `UnsupportedParaxialGeometryError`/`ParaxialDomainWarning` nutzen.
+      Einzelpfad, gefalteter Nominalpfad und Verzweigungsgraph unterscheiden.
+- [ ] Nicht pauschal jede Optik mit benannten Sequenzen fuer paraxiale
+      Berechnungen sperren. Bereits unterstuetzte Nominalpfade erhalten.
+- [ ] `SequencedOptic` delegiert Apertur, Felder, Wellenlaengen,
+      Paraxialmodell und Ray-Generierung an die Basisoptik.
+      Ein eigener Eingang/Paraxialkontext pro Arm ist noch nicht vorhanden.
+- [ ] Die High-Level-Ray-Generierung verwendet standardmaessig paraxiales
+      Ray-Aiming. Ein globales Paraxial-Verbot kann deshalb auch
+      `trace()` fuer reale Strahlen verhindern.
+      Einen gueltigen nominalen Aiming-Kontext oder eine explizite
+      Eingangsrays-API vorsehen; `trace_generic()` ist nicht pauschal
+      eine freie Rohstrahl-Schnittstelle.
+- [ ] Analyse je Arm nur fuer tatsaechlich unterstuetzte Kontexte anbieten.
+      NSQ-Detektorleistung ist kein Ersatz fuer sequentielle
+      First-Order-, OPD- oder Abbildungsanalyse.
+
+## 6. Persistenz, GUI und Visualisierung
+
+- [ ] Bestehendes optionales `sequences`-JSON-Feld des `OpticSerializer`
+      erhalten. Keine zweite unversionierte Routenliste unter
+      `surface_group.paths` einfuehren.
+- [ ] NSQ-JSON bleibt ein eigenes Szenenformat
+      (`nsq_schema_version=1`), kein automatischer Teil von Optic-JSON.
+      Aktuell werden Simulationsergebnisse und Autograd-Zustand nicht als
+      vollstaendiger Sitzungszustand persistiert.
+- [ ] Roundtrips gezielt fuer Coatings, Sampling-Policy, Quellen, Medien,
+      Detektoren und gegebenenfalls neue Branch-Verknuepfungen pruefen.
+      Vorhandene Serialisierung nicht ungeprueft als lueckenlos annehmen.
+- [ ] `sequential_to_nonsequential` und seinen Konvertierungsbericht
+      nutzen. Insbesondere Polarisation, unbeschichtete
+      Fresnel-Verluste und Geometriegrenzen verhindern einen allgemein
+      verlustlosen Austausch.
+- [ ] GUI erst nach stabiler Core-Nutzung erweitern. Der aktuelle
+      Connector und seine Snapshots arbeiten mit `Optic`;
+      NSQ benoetigt eine ausdrueckliche Dokument-/Service-Anbindung,
+      nicht nur ein weiteres Dropdown.
+- [ ] Geometrie und Interaktion getrennt behandeln:
+      `beam_splitter` nicht einfach als Geometry-Typ aufnehmen.
+      Eine `SurfaceService._get_interaction_type()`-Methode existiert
+      weiterhin nicht. GeometryRegistry und die Validierung beim
+      Typwechsel gemeinsam pruefen.
+- [ ] Vorhandene `_capture_optic_state()`/`_restore_optic_state()` fuer
+      sequentielle Aenderungen nutzen; fuer NSQ Undo/Redo und Persistenz
+      separat anbinden. Lange Traces nicht auf dem GUI-Thread ausfuehren.
+- [ ] Angrenzender GUI-Befund: `_set_material_data()` setzt weiterhin
+      `surface.is_reflective` statt
+      `surface.interaction_model.is_reflective`.
+      Vor einer neuen Interaction-UI gezielt korrigieren und testen,
+      nicht in dieser Planpruefung nebenbei Source-Code aendern.
+- [ ] NSQ-Viewer in `optiland/nonsequential/visualization/`
+      wiederverwenden. Die sequentiellen Viewer lesen weiter
+      rechteckige Surface-Arrays; gemeinsame Darstellung mehrerer
+      Sequenzen/Branches ist eine gesonderte Erweiterung.
+- [ ] Fuer Pfaddarstellung variable Laengen, Herkunft und unvollstaendige
+      Ereignisaufzeichnung beruecksichtigen; keinen rechteckigen
+      `[num_surfaces, num_rays]`-Stack erzwingen.
+
+## 7. Korrigierte Implementierungsfolge
+
+1. [ ] NSQ-Referenzfall mit einer Quelle, 45-Grad-Splitter und zwei
+       Detektoren als gezielten Test/Beispiel festhalten.
+       Den float32-Mehrfachtreffer aus Abschnitt 3 untersuchen und beheben.
+2. [ ] Den eigentlichen Beleuchtungs-/Abbildungsaufbau mit getrennten
+       Eintrittsarmen aufbauen; benoetigte Ergebnisarten festlegen.
+       Mehrere Quellen nicht mit deterministischen Kindern verwechseln.
+3. [ ] Anhand dieses Aufbaus entscheiden, welche Anforderungen NSQ und
+       benannte Sequenzen nicht abdecken. Insbesondere Torch-Splitting,
+       Polarisation/OPD und arm-spezifische Analyse getrennt priorisieren.
+4. [ ] Nur die erforderlichen Luecken implementieren:
+       bevorzugt vorhandene NSQ-/Sequence-Bausteine erweitern;
+       einen neuen sequentiellen Branch-Tracer nur nach Architekturfreigabe.
+5. [ ] Persistenz, Record-Herkunft, Mediumkontext und Analysegrenzen
+       waehrend der Implementierung absichern.
+6. [ ] Bestehende Viewer erweitern und erst danach die passende
+       GUI-Dokument-/Service-Anbindung hinzufuegen.
+7. [ ] Vorhandene Entwicklerdokumentation
+       `docs/developers_guide/sequences_framework.rst`,
+       `docs/developers_guide/nonsequential_raytracing.rst`,
+       `docs/gallery/nonsequential/` und
+       `docs/examples/Tutorial_10a_Non_Sequential_and_Illumination.ipynb`
+       aktualisieren. Ein neues Tutorial oder `agents.md`-Update ist
+       keine technische Voraussetzung.
+       Changelog/Google-Docstrings fuer tatsaechlich implementierte APIs
+       ergaenzen; kein Interferenzbeispiel ohne kohaerentes Modell.
+
+Tests laufen phasenbegleitend, nicht erst nach GUI und Dokumentation.
+
+## 8. Abnahmetests
+
+- [ ] Bestehende `tests/sequences/` und `tests/nonsequential/`
+      gezielt erweitern, bevor parallele neue Teststrukturen entstehen.
+- [ ] Physische Richtungen und Medien: 45-Grad-Splitter, beide Seiten,
+      Brechung, Reflexion, Totalreflexion und wiederholte Besuche.
+- [ ] R/T-Randwerte 0 und 1, verlustbehaftete Coatings, ungueltige
+      Koeffizienten sowie Absorption/Aperturverluste.
+- [ ] Deterministische NumPy-Teilung innerhalb des Budgets, Roulette
+      am Budgetlimit und explizite Torch-Warnung bei `split_depth > 0`.
+- [ ] Statistische Tests mit begruendeten Konfidenzgrenzen und Seeds;
+      keine exakten 50:50-Counts von Roulette verlangen.
+- [ ] NumPy/Torch mit `set_test_backend` und zusaetzlich explizit
+      float32/float64 testen. Das vorhandene Fixture verwendet fuer Torch
+      float64 und deckt den dokumentierten float32-Befund nicht ab.
+- [ ] Records/Herkunft, keine unphysikalischen Selbsttreffer,
+      unterschiedliche Armlaengen und wiederholte Traces.
+- [ ] Bei neuen Ray-Kopien Aliasingfreiheit und Gradientenfluss,
+      bei Polarisationsunterstuetzung Jones-/Intensitaetskonsistenz.
+- [ ] Legacy-Trace, `record=False`, Endpropagation, Ray-Aiming und
+      unterstuetzte paraxiale Nominalpfade bleiben unveraendert.
+- [ ] Alte Optic-Dateien ohne `sequences`, Sequence-Roundtrips und
+      NSQ-Roundtrips getrennt pruefen.
+- [ ] GUI-/Undo-Tests erst fuer die tatsaechlich gewaehlte Integration.
+      Keine globale Testsuite blind starten und keine Toleranzen lockern.
+
+## 9. Pruefnachweis dieser Revision
+
+Ausgefuehrt:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q tests/sequences/test_sequenced_optic.py tests/sequences/test_surface_view.py tests/nonsequential/test_nsq_coatings.py tests/nonsequential/test_nsq_sampling_policy.py
+```
+
+Ergebnis: **57 passed, 2 warnings**. Warnungen: Torch-Tensor mit
+`requires_grad` wird in einem Sequence-Test zu einem Skalar konvertiert;
+Pytest konnte seinen Cache wegen fehlender Schreibberechtigung nicht
+aktualisieren. Kein Testfehler.
+
+Zusaetzlich wurde der Referenzaufbau aus Abschnitt 3 mit NumPy und Torch
+ausgefuehrt. Folgender eigenstaendig ausfuehrbarer Aufbau reproduziert
+die drei Roulette-Zeilen der Tabelle und zaehlt Mehrfachtreffer:
+
+```python
+import math
+
+import numpy as np
+
+import optiland.backend as be
+from optiland.coatings import SimpleCoating
+from optiland.coordinate_system import CoordinateSystem
+from optiland.nonsequential import (
+    VACUUM,
+    CollimatedSourceConfig,
+    IrradianceDetectorConfig,
+    NSQScene,
+    RefractiveComponent,
+    Spectrum,
+)
+from optiland.nonsequential.components.geometry.analytic.plane import (
+    FinitePlaneGeometry,
+)
+
+for backend, precision in [
+    ("numpy", "float64"),
+    ("torch", "float64"),
+    ("torch", "float32"),
+]:
+    be.set_backend(backend)
+    be.set_precision(precision)
+    scene = NSQScene()
+    scene.add_source(
+        "source",
+        CoordinateSystem(),
+        CollimatedSourceConfig(
+            spectrum=Spectrum.monochromatic(0.55),
+            total_flux=1.0,
+            aperture_radius=1.0,
+        ),
+    )
+    scene.add_component(
+        "splitter",
+        RefractiveComponent(
+            cs=CoordinateSystem(z=10, ry=math.pi / 4),
+            geometry=FinitePlaneGeometry(aperture_radius=5),
+            material_front=VACUUM,
+            material_back=VACUUM,
+            coating=SimpleCoating(transmittance=0.5, reflectance=0.5),
+            name="splitter",
+        ),
+    )
+    for name, cs in [
+        ("transmitted", CoordinateSystem(z=20)),
+        ("reflected", CoordinateSystem(x=-10, z=10, ry=math.pi / 2)),
+    ]:
+        scene.add_detector(
+            name,
+            cs,
+            IrradianceDetectorConfig(
+                width=10, height=10, num_pixels_x=8, num_pixels_y=8
+            ),
+        )
+    result = scene.trace(num_rays=2048, seed=7, record_paths=True)
+    events = result.ray_paths["events"]
+    hits = events[
+        (events["component_name"] == "splitter")
+        & (events["event_type"] == "hit")
+    ]
+    _, counts = np.unique(hits["ray_id"], return_counts=True)
+    print(
+        backend,
+        precision,
+        result.detectors["transmitted"].total_flux,
+        result.detectors["reflected"].total_flux,
+        len(hits),
+        np.count_nonzero(counts > 1),
+        counts.max(),
+    )
+```
+
+Fuer den deterministischen NumPy-Vergleich vor `scene.trace()` zusaetzlich
+`scene.sampling_policy = SamplingPolicy(split_depth=1)` setzen;
+`SamplingPolicy` liegt in `optiland.nonsequential.ir.scene_ir`.
+Das Beispiel in einem separaten Prozess ausfuehren; kuenftige Tests muessen
+Backend und Praezision ueber ihre Fixtures wiederherstellen.
+
+Diese Revision aendert nur den Plan. Der dokumentierte Numerikbefund und
+die offenen Implementierungspunkte sind noch nicht behoben.
