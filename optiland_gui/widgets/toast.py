@@ -16,6 +16,8 @@ Author: Manuel Fragata Mendes, 2025
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import (
     QEasingCurve,
     QParallelAnimationGroup,
@@ -33,6 +35,28 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+logger = logging.getLogger(__name__)
+
+_SEVERITY_LOG_LEVEL: dict[str, int] = {
+    "success": logging.INFO,
+    "info": logging.INFO,
+    "warning": logging.WARNING,
+    "error": logging.ERROR,
+}
+
+
+def log_toast(message: str, severity: str, sub_message: str | None = None) -> None:
+    """Write a toast to the Python log so every notification is also on record.
+
+    The record carries ``toast_origin=True`` so that
+    :class:`~optiland_gui.utils.logging_handler.GuiLoggingHandler`, which turns
+    WARNING+ records into toasts, does not echo it back as a second toast.
+    """
+    level = _SEVERITY_LOG_LEVEL.get(severity, logging.INFO)
+    text = f"{message} ({sub_message})" if sub_message else message
+    logger.log(level, "%s", text, extra={"toast_origin": True})
+
 
 _SEVERITY_ACCENT: dict[str, str] = {
     "success": "#4CAF50",
@@ -195,6 +219,7 @@ class ToastManager:
         message: str,
         severity: str = "info",
         sub_message: str | None = None,
+        log: bool = True,
     ) -> None:
         """Show a toast notification.
 
@@ -202,7 +227,13 @@ class ToastManager:
             message: Primary notification text.
             severity: ``"success"``, ``"info"``, ``"warning"``, or ``"error"``.
             sub_message: Optional secondary line.
+            log: Also write the notification to the Python log (default).
+                Pass ``False`` when the toast itself originates from a log
+                record, so the record is not duplicated.
         """
+        if log:
+            log_toast(message, severity, sub_message)
+
         # Evict oldest if at capacity
         if len(self._stack) >= _MAX_VISIBLE:
             self._dismiss(self._stack[0], animated=False)

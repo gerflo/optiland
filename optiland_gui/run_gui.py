@@ -22,6 +22,7 @@ from PySide6.QtWidgets import QApplication, QSplashScreen
 from .config import APPLICATION_NAME, OPTILAND_ICON_PATH, ORGANIZATION_NAME
 from .main_window import MainWindow
 from .resources import resources_rc  # noqa: F401
+from .utils import logging_handler as _log_handler
 
 
 def _patch_matplotlib_show_event() -> None:
@@ -61,6 +62,9 @@ def main() -> None:
         os.environ["QT_QPA_PLATFORM"] = "xcb"
 
     app = QApplication(sys.argv)
+    # Log to stderr and to a rotating file in the app data folder. Toasts
+    # write to the log as well, so what the user saw on screen is on record.
+    _log_handler.configure_logging()
     app.setWindowIcon(QIcon(OPTILAND_ICON_PATH))
     QLocale.setDefault(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
 
