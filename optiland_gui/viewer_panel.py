@@ -511,6 +511,7 @@ class ViewerPanel(QWidget):
                 distribution=distribution,
                 show_stop_apertures=show_stop,
                 show_non_stop_apertures=show_non_stop,
+                hide_vignetted=self.viewer2D.hide_vignetted_rays(),
             )
             self._pending_3d_render = False
         finally:
@@ -942,7 +943,8 @@ class MatplotlibViewer(QWidget):
         self.rays_reach_image_checkbox.toggled.connect(
             lambda checked: (
                 self.settings.setValue("Viewer2D/RaysReachImage", bool(checked)),
-                self.plot_optic(),
+                # The 3D layout shares this setting, so notify it as well.
+                self.apply_settings(),
             )
         )
         self.settings_form_layout.addRow(
@@ -1842,6 +1844,10 @@ class MatplotlibViewer(QWidget):
     def ray_distribution(self) -> str:
         """Return the currently selected 2D layout ray distribution."""
         return self.dist_combo.currentText()
+
+    def hide_vignetted_rays(self) -> bool:
+        """Return whether only rays that reach the image surface are drawn."""
+        return bool(self.rays_reach_image_checkbox.isChecked())
 
     def ray_distribution_for_3d(self) -> str:
         """Return a full-pupil distribution for the 3D layout."""
@@ -2821,6 +2827,7 @@ class VTKViewer(QWidget):
         self.connector = connector
         self._last_num_rays = 24
         self._last_distribution = "ring"
+        self._last_hide_vignetted = False
         self._show_stop_apertures = True
         self._show_non_stop_apertures = True
         if not VTK_AVAILABLE:
@@ -2895,8 +2902,13 @@ class VTKViewer(QWidget):
         distribution: str | None = None,
         show_stop_apertures: bool | None = None,
         show_non_stop_apertures: bool | None = None,
+        hide_vignetted: bool | None = None,
     ):
         """Re-renders the 3D optical system on the main thread.
+
+        ``hide_vignetted`` mirrors the 2D layout's "Rays Reach Image" setting:
+        rays blocked by an aperture are then not drawn at all, instead of being
+        drawn up to the surface that blocks them.
 
         VTK compiles OpenGL shaders eagerly when actors are added to a renderer,
         so it cannot run off the main thread.  We show the BusyOverlay, then
@@ -2911,6 +2923,8 @@ class VTKViewer(QWidget):
             self._show_stop_apertures = show_stop_apertures
         if show_non_stop_apertures is not None:
             self._show_non_stop_apertures = show_non_stop_apertures
+        if hide_vignetted is not None:
+            self._last_hide_vignetted = bool(hide_vignetted)
         self._last_num_rays = int(num_rays)
         self._last_distribution = distribution
         if not VTK_AVAILABLE:
@@ -2948,6 +2962,7 @@ class VTKViewer(QWidget):
                             num_rays=self._last_num_rays,
                             distribution=self._last_distribution,
                             theme=theme,
+                            hide_vignetted=self._last_hide_vignetted,
                         )
                         self.connector._missing_stop_surface_warned = False
                         _notify_viewer_issue(self.connector, "rays", None)

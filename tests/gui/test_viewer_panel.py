@@ -553,6 +553,7 @@ def test_viewer_panel_passes_2d_ray_count_and_full_pupil_distribution_to_3d_rend
         "distribution": "hexapolar",
         "show_stop_apertures": True,
         "show_non_stop_apertures": True,
+        "hide_vignetted": False,
     }
 
 
@@ -596,6 +597,7 @@ def test_viewer_panel_apply_2d_settings_refreshes_coupled_3d_renderer(
         "distribution": "random",
         "show_stop_apertures": True,
         "show_non_stop_apertures": True,
+        "hide_vignetted": False,
     }
 
 
@@ -757,3 +759,85 @@ def test_viewer_resize_with_equal_ratio_is_not_a_user_view_change(
 
     assert viewer._user_initiated_view_change is False
     assert _data_ratio(viewer) == pytest.approx(_box_ratio(viewer), rel=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# The 3D layout follows the 2D "Rays Reach Image" setting
+# ---------------------------------------------------------------------------
+
+
+def test_viewer_panel_rays_reach_image_hides_vignetted_rays_in_3d_too(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    # Regression: the 3D layout ignored "Rays Reach Image", so rays blocked by an
+    # aperture were drawn up to the blocking surface in 3D while hidden in 2D.
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _StubSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    if panel._viewer3d_tab_index < 0:
+        pytest.skip("VTK is not available")
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "optiland_gui.viewer_panel.VTKViewer.render_optic",
+        lambda self, **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr(panel.viewer2D, "plot_optic", lambda *args, **kwargs: None)
+    panel.tabWidget.setCurrentIndex(panel._viewer3d_tab_index)
+    panel._activate_3d_view()
+
+    assert calls[-1]["hide_vignetted"] is False
+
+    # Toggling the checkbox alone must refresh the coupled 3D view.
+    calls.clear()
+    panel.viewer2D.rays_reach_image_checkbox.setChecked(True)
+    assert calls
+    assert calls[-1]["hide_vignetted"] is True
+
+    calls.clear()
+    panel.viewer2D.rays_reach_image_checkbox.setChecked(False)
+    assert calls
+    assert calls[-1]["hide_vignetted"] is False
+
+
+def test_vtk_viewer_forwards_hide_vignetted_to_rays3d(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _StubSettings)
+    panel = ViewerPanel(_ConnectorStub(minimal_optic))
+    if panel._viewer3d_tab_index < 0 or not panel._ensure_3d_viewer():
+        pytest.skip("VTK is not available")
+    viewer = panel.viewer3D
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "optiland_gui.viewer_panel.Rays3D.plot",
+        lambda self, *args, **kwargs: captured.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "optiland_gui.viewer_panel.OptilandOpticalSystemPlotter.plot",
+        lambda self, *args, **kwargs: None,
+    )
+    # Render synchronously: no deferred timer, no OpenGL draw.
+    monkeypatch.setattr(
+        "optiland_gui.viewer_panel.QTimer",
+        SimpleNamespace(singleShot=lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(
+        viewer.vtkWidget,
+        "GetRenderWindow",
+        lambda: SimpleNamespace(Render=lambda: None),
+    )
+
+    viewer.render_optic(num_rays=2, distribution="hexapolar", hide_vignetted=True)
+    viewer._render_optic_sync()
+    assert captured[-1]["hide_vignetted"] is True
+    assert captured[-1]["num_rays"] == 2
+    assert captured[-1]["distribution"] == "hexapolar"
+
+    # Omitting the flag keeps the last value; passing it overrides.
+    viewer.render_optic()
+    viewer._render_optic_sync()
+    assert captured[-1]["hide_vignetted"] is True
+
+    viewer.render_optic(hide_vignetted=False)
+    viewer._render_optic_sync()
+    assert captured[-1]["hide_vignetted"] is False
+    assert captured[-1]["num_rays"] == 2
