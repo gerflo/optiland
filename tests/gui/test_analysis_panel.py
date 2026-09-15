@@ -342,3 +342,152 @@ class TestAnalysisToolbarThemeing:
         tint = toolbar._toolbar_foreground_color()
 
         assert tint.name().lower() == "#c0caf5"
+
+
+class _LinePlotAnalysis:
+    """Minimal embeddable analysis drawing a single subplot."""
+
+    def view(self, fig_to_plot_on=None):  # noqa: ANN001
+        ax = fig_to_plot_on.add_subplot(111)
+        ax.plot([0.0, 1.0], [0.0, 1.0])
+        return ax
+
+
+def _plot_page(name="Line Plot", **extra):
+    return {
+        "name": name,
+        "analysis_instance": _LinePlotAnalysis(),
+        "plot_type": "embedded_mpl",
+        "view_args": {},
+        "constructor_args_used": {},
+        **extra,
+    }
+
+
+def _send_wheel(widget, x, y, delta_y=-120):
+    """Deliver a mouse-wheel step at widget-local (x, y), with Qt propagation."""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QApplication
+
+    local = QPointF(x, y)
+    event = QWheelEvent(
+        local,
+        widget.mapToGlobal(local),
+        QPoint(0, 0),
+        QPoint(0, delta_y),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    QApplication.sendEvent(widget, event)
+
+
+@pytest.fixture()
+def shown_panel(panel, qapp):
+    """The panel on screen, so the plot scroll area has a real viewport size."""
+    panel.resize(900, 700)
+    panel.show()
+    qapp.processEvents()
+    yield panel
+    panel.resize_timer.stop()
+    panel.close()
+
+
+class TestPlotZoom:
+    def test_zoom_slider_appears_with_a_plot(self, panel):
+        """The toolbar zoom slider spans 100-400 % and shows only for a plot."""
+        assert panel.plotZoomSlider.minimum() == 100
+        assert panel.plotZoomSlider.maximum() == 400
+        assert panel.plot_zoom_container.isHidden()
+
+        panel.analysis_results_pages.append(_plot_page())
+        panel.switch_plot_page(0)
+
+        assert not panel.plot_zoom_container.isHidden()
+        assert panel.plotZoomSlider.value() == 100
+        assert panel.plotZoomLabel.text() == "100%"
+
+    def test_zoom_enlarges_the_canvas_beyond_the_viewport(self, shown_panel, qapp):
+        """Zooming gives the figure more pixels and makes the plot scrollable."""
+        panel = shown_panel
+        panel.analysis_results_pages.append(_plot_page())
+        panel.switch_plot_page(0)
+        qapp.processEvents()
+        area = panel.plot_zoom_area
+        canvas = panel.active_mpl_canvas_widget
+        viewport = area.maximumViewportSize()
+        assert canvas.size() == viewport
+
+        panel.plotZoomSlider.setValue(250)
+        # The enlarged figure is laid out again once the resize settles.
+        assert panel.resize_timer.isActive()
+        qapp.processEvents()
+
+        assert canvas.width() == round(viewport.width() * 2.5)
+        assert canvas.height() == round(viewport.height() * 2.5)
+        assert canvas.figure.bbox.width == pytest.approx(
+            canvas.width() * canvas.device_pixel_ratio
+        )
+        assert area.verticalScrollBar().maximum() > 0
+        assert panel.plotZoomLabel.text() == "250%"
+        assert panel.analysis_results_pages[0]["zoom_percent"] == 250
+
+    def test_zoom_is_remembered_per_page(self, shown_panel):
+        """Each result page keeps its own zoom when switching between pages."""
+        panel = shown_panel
+        panel.analysis_results_pages.extend([_plot_page("A"), _plot_page("B")])
+        panel.switch_plot_page(0)
+        panel.plotZoomSlider.setValue(300)
+
+        panel.switch_plot_page(1)
+        viewport = panel.plot_zoom_area.maximumViewportSize()
+        assert panel.plotZoomSlider.value() == 100
+        assert panel.active_mpl_canvas_widget.size() == viewport
+
+        panel.switch_plot_page(0)
+        assert panel.plotZoomSlider.value() == 300
+        assert panel.plotZoomLabel.text() == "300%"
+        assert panel.active_mpl_canvas_widget.width() == round(viewport.width() * 3)
+
+    def test_clone_and_rerun_keep_the_page_zoom(self, panel, monkeypatch):
+        """Cloning a page and re-running its analysis must not reset the zoom."""
+        panel.analysis_results_pages.append(_plot_page(zoom_percent=250))
+        panel.switch_plot_page(0)
+
+        panel._clone_analysis_page(0)
+        assert panel.analysis_results_pages[1]["zoom_percent"] == 250
+
+        monkeypatch.setattr(
+            panel,
+            "_execute_analysis_threaded",
+            lambda *_args, on_complete, **_kwargs: on_complete(_plot_page()),
+        )
+        panel._apply_settings_and_rerun_analysis_slot()
+
+        assert panel.analysis_results_pages[1]["zoom_percent"] == 250
+        assert panel.plotZoomSlider.value() == 250
+
+    def test_wheel_outside_axes_scrolls_the_enlarged_plot(self, shown_panel, qapp):
+        """Off the axes the wheel scrolls the plot; over them it zooms the axes."""
+        panel = shown_panel
+        panel.analysis_results_pages.append(_plot_page(zoom_percent=300))
+        panel.switch_plot_page(0)
+        qapp.processEvents()
+        canvas = panel.active_mpl_canvas_widget
+        ax = canvas.figure.axes[0]
+        bar = panel.plot_zoom_area.verticalScrollBar()
+        assert bar.maximum() > 0
+        limits = (ax.get_xlim(), ax.get_ylim())
+
+        _send_wheel(canvas, 2, 2)
+
+        assert bar.value() > 0
+        assert (ax.get_xlim(), ax.get_ylim()) == limits
+
+        bar.setValue(0)
+        _send_wheel(canvas, canvas.width() / 2, canvas.height() / 2)
+
+        assert bar.value() == 0
+        assert (ax.get_xlim(), ax.get_ylim()) != limits

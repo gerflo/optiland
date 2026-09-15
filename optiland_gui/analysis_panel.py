@@ -34,7 +34,15 @@ from PySide6.QtCore import (
     QTimer,
     Slot,
 )
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPixmap, QRegularExpressionValidator, QShortcut
+from PySide6.QtGui import (
+    QColor,
+    QIcon,
+    QKeySequence,
+    QPainter,
+    QPixmap,
+    QRegularExpressionValidator,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -52,6 +60,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QSpacerItem,
     QSpinBox,
     QTextEdit,
@@ -84,6 +93,8 @@ from .theme_manager import get_theme
 from .worker import BusyOverlay, _Worker
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .optiland_connector import OptilandConnector
 
 
@@ -163,6 +174,66 @@ class CustomMatplotlibToolbar(NavigationToolbar):
             self.on_view_limits_changed()
 
 
+class PlotZoomArea(QScrollArea):
+    """Scroll area that sizes its plot widget to a percentage of the viewport.
+
+    At 100 % the widget fills the visible area exactly, as a plain layout would.
+    Higher values make the widget larger than the viewport, so dense figures
+    such as multi-field spot diagrams get more pixels per subplot while their
+    text keeps its size; the scroll bars then pan across the enlarged plot.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._zoom_percent = 100
+        self.setWidgetResizable(False)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+
+    def zoom_percent(self) -> int:
+        """Return the widget size relative to the viewport, in percent."""
+        return self._zoom_percent
+
+    def set_zoom_percent(self, percent: int) -> None:
+        """Resize the widget to ``percent`` of the viewport around the view centre."""
+        self._zoom_percent = max(100, int(percent))
+        self._fit_widget(keep_center=True)
+
+    def setWidget(self, widget: QWidget) -> None:  # noqa: N802
+        """Show ``widget`` at the current zoom, scrolled to its top-left corner."""
+        super().setWidget(widget)
+        self._fit_widget(keep_center=False)
+
+    def resizeEvent(self, event):  # noqa: N802
+        """Keep the widget at the zoomed size whenever the viewport changes."""
+        super().resizeEvent(event)
+        self._fit_widget(keep_center=True)
+
+    def _fit_widget(self, keep_center: bool) -> None:
+        widget = self.widget()
+        if widget is None:
+            return
+        scale = self._zoom_percent / 100
+        # The maximum viewport size ignores the scroll bars, so showing them
+        # does not shrink the target and re-trigger a resize.
+        available = self.maximumViewportSize()
+        target = QSize(
+            max(1, round(available.width() * scale)),
+            max(1, round(available.height() * scale)),
+        )
+        bars = (self.horizontalScrollBar(), self.verticalScrollBar())
+        spans = (self.viewport().width(), self.viewport().height())
+        old_sizes = (widget.width(), widget.height())
+        new_sizes = (target.width(), target.height())
+        centers = [
+            (bar.value() + span / 2) / max(1, old)
+            for bar, span, old in zip(bars, spans, old_sizes, strict=True)
+        ]
+        if widget.size() != target:
+            widget.resize(target)
+        for bar, span, new, center in zip(bars, spans, new_sizes, centers, strict=True):
+            bar.setValue(round(center * new - span / 2) if keep_center else 0)
+
+
 class AnalysisPanel(QWidget):
     """A comprehensive panel for running and displaying various optical analyses.
 
@@ -186,6 +257,10 @@ class AnalysisPanel(QWidget):
     FFT_MTF = "FFT MTF"
     ANALYSIS_ERROR_TITLE = "Analysis Error"
     JSON_FILE_FILTER = "JSON Files (*.json);;All Files (*)"
+    PLOT_ZOOM_MIN_PERCENT = 100
+    PLOT_ZOOM_MAX_PERCENT = 400
+    # tight_layout area; the bottom strip is left free for figure legends.
+    PLOT_LAYOUT_RECT = (0, 0.05, 1, 1)
 
     ANALYSIS_MAP = {
         "Spot Diagram": SpotDiagram,
@@ -393,6 +468,7 @@ class AnalysisPanel(QWidget):
             self.mpl_toolbar_in_titlebar_container
         )
         self.mpl_toolbar_in_titlebar_container.setVisible(False)
+        self._setup_plot_zoom_controls()
         self.plot_area_title_bar_layout.addStretch()
 
         self.btnRefreshPlot = QToolButton()
@@ -413,6 +489,43 @@ class AnalysisPanel(QWidget):
 
         parent_layout.addLayout(self.plot_area_title_bar_layout)
 
+    def _setup_plot_zoom_controls(self):
+        """Creates the zoom slider that enlarges the plot inside its scroll area."""
+        self.plot_zoom_container = QWidget()
+        self.plot_zoom_container.setObjectName("PlotZoomContainer")
+        zoom_layout = QHBoxLayout(self.plot_zoom_container)
+        zoom_layout.setContentsMargins(8, 0, 0, 0)
+        zoom_layout.setSpacing(4)
+        zoom_layout.addWidget(QLabel("Zoom"))
+
+        self.plotZoomSlider = QSlider(Qt.Orientation.Horizontal)
+        self.plotZoomSlider.setObjectName("PlotZoomSlider")
+        self.plotZoomSlider.setRange(
+            self.PLOT_ZOOM_MIN_PERCENT, self.PLOT_ZOOM_MAX_PERCENT
+        )
+        self.plotZoomSlider.setSingleStep(10)
+        self.plotZoomSlider.setPageStep(50)
+        self.plotZoomSlider.setFixedWidth(110)
+        # Redrawing a large figure is slow, so apply the zoom when a drag ends.
+        self.plotZoomSlider.setTracking(False)
+        self.plotZoomSlider.setToolTip(
+            "Enlarge the plot; scroll or use the scroll bars to move around it"
+        )
+        zoom_layout.addWidget(self.plotZoomSlider)
+
+        self.plotZoomLabel = QLabel()
+        self.plotZoomLabel.setObjectName("PlotZoomLabel")
+        self.plotZoomLabel.setMinimumWidth(
+            self.plotZoomLabel.fontMetrics().horizontalAdvance(
+                f"{self.PLOT_ZOOM_MAX_PERCENT}%"
+            )
+        )
+        zoom_layout.addWidget(self.plotZoomLabel)
+        self._show_plot_zoom_percent(self.PLOT_ZOOM_MIN_PERCENT)
+
+        self.plot_area_title_bar_layout.addWidget(self.plot_zoom_container)
+        self.plot_zoom_container.setVisible(False)
+
     def _setup_plot_content_area(self, parent_layout):
         """Creates the main plot content area, info labels, and page buttons."""
         plot_content_and_pages_layout = QHBoxLayout()
@@ -428,6 +541,12 @@ class AnalysisPanel(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         plot_and_info_layout.addWidget(self.plot_container_widget, 1)
+
+        plot_container_layout = QVBoxLayout(self.plot_container_widget)
+        plot_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.plot_zoom_area = PlotZoomArea(self.plot_container_widget)
+        self.plot_zoom_area.setObjectName("PlotZoomArea")
+        plot_container_layout.addWidget(self.plot_zoom_area)
 
         self.cursor_coord_label = QLabel("", self.plot_container_widget)
         self.cursor_coord_label.setObjectName("CursorCoordLabel")
@@ -519,6 +638,8 @@ class AnalysisPanel(QWidget):
         self.toggleSettingsButton.clicked.connect(self.toggle_settings_panel_slot)
         self.btnRefreshPlot.clicked.connect(self._refresh_current_plot_page_slot)
         self.btnPrint.clicked.connect(self._print_analysis)
+        self.plotZoomSlider.sliderMoved.connect(self._show_plot_zoom_percent)
+        self.plotZoomSlider.valueChanged.connect(self._on_plot_zoom_changed)
         self.btnApplySettings.clicked.connect(
             self._apply_settings_and_rerun_analysis_slot
         )
@@ -1026,6 +1147,9 @@ class AnalysisPanel(QWidget):
                 original_page_data["constructor_args_used"]
             ),
             "figsize": original_page_data.get("figsize"),
+            "zoom_percent": original_page_data.get(
+                "zoom_percent", self.PLOT_ZOOM_MIN_PERCENT
+            ),
         }
 
         self.analysis_results_pages.append(cloned_page_data)
@@ -1060,12 +1184,14 @@ class AnalysisPanel(QWidget):
 
     def handle_resize_finished(self):
         """
-        Called after the user has finished resizing the window.
+        Called after the window or the plot canvas has finished resizing.
         Applies tight_layout to the current plot.
         """
         if self.active_mpl_canvas_widget:
             try:
-                self.active_mpl_canvas_widget.figure.tight_layout()
+                self.active_mpl_canvas_widget.figure.tight_layout(
+                    rect=self.PLOT_LAYOUT_RECT
+                )
                 self.active_mpl_canvas_widget.draw_idle()
             except Exception as e:
                 print(f"Error applying tight_layout on resize: {e}")
@@ -1099,17 +1225,7 @@ class AnalysisPanel(QWidget):
             self.cursor_coord_label.setVisible(False)
 
     def _cleanup_plot_area(self):
-        """Disconnects events, removes old widgets, and clears the plot layout."""
-        # Disconnect any previously connected event handlers
-        if self.active_mpl_canvas_widget and hasattr(
-            self.active_mpl_canvas_widget, "_event_cids"
-        ):
-            for cid in self.active_mpl_canvas_widget._event_cids:
-                with contextlib.suppress(TypeError, RuntimeError):
-                    self.active_mpl_canvas_widget.mpl_disconnect(cid)
-            self.active_mpl_canvas_widget._event_cids = []
-
-        # Clean up old UI widgets
+        """Disconnects events and removes the toolbar and the shown plot widget."""
         if self.active_mpl_toolbar_widget:
             self.active_mpl_toolbar_widget.deleteLater()
             self.active_mpl_toolbar_widget = None
@@ -1117,18 +1233,40 @@ class AnalysisPanel(QWidget):
         self.active_mpl_toolbar_buttons = []
 
         self.mpl_toolbar_in_titlebar_container.setVisible(False)
+        self.plot_zoom_container.setVisible(False)
         self.cursor_coord_label.setVisible(False)
 
-        # Clear the main plot container layout
-        plot_content_area_layout = self.plot_container_widget.layout()
-        if plot_content_area_layout:
-            self._clear_layout(plot_content_area_layout)
-        else:
-            plot_content_area_layout = QVBoxLayout(self.plot_container_widget)
-            self.plot_container_widget.setLayout(plot_content_area_layout)
+        if (old_widget := self.plot_zoom_area.takeWidget()) is not None:
+            if isinstance(old_widget, FigureCanvas):
+                self._cleanup_figure_canvas(old_widget)
+            old_widget.setParent(None)
+            old_widget.deleteLater()
 
         self.active_mpl_canvas_widget = None
-        return plot_content_area_layout
+
+    def _set_plot_area_widget(self, widget, zoom_percent=PLOT_ZOOM_MIN_PERCENT):
+        """Shows ``widget`` in the plot area, enlarged to ``zoom_percent``."""
+        self.plot_zoom_area.set_zoom_percent(zoom_percent)
+        self.plot_zoom_area.setWidget(widget)
+
+    @Slot(int)
+    def _show_plot_zoom_percent(self, zoom_percent: int) -> None:
+        """Updates the zoom label, also while the slider is still being dragged."""
+        self.plotZoomLabel.setText(f"{zoom_percent}%")
+
+    @Slot(int)
+    def _on_plot_zoom_changed(self, zoom_percent: int) -> None:
+        """Enlarges the shown plot and remembers the zoom for its page."""
+        self._show_plot_zoom_percent(zoom_percent)
+        if 0 <= self.current_plot_page_index < len(self.analysis_results_pages):
+            page_data = self.analysis_results_pages[self.current_plot_page_index]
+            page_data["zoom_percent"] = zoom_percent
+        if self.active_mpl_canvas_widget is not None:
+            self.plot_zoom_area.set_zoom_percent(zoom_percent)
+
+    def _on_plot_canvas_resized(self, _event) -> None:
+        """Re-runs tight_layout once the canvas has settled at its new size."""
+        self.resize_timer.start()
 
     def _populate_settings_from_page_data(self, page_data):
         """Updates the settings UI widgets with values from a saved analysis page."""
@@ -1196,6 +1334,7 @@ class AnalysisPanel(QWidget):
             canvas.mpl_connect("scroll_event", self.on_scroll_zoom),
             canvas.mpl_connect("motion_notify_event", self.on_mouse_move_on_plot),
             canvas.mpl_connect("button_press_event", self.on_plot_double_click),
+            canvas.mpl_connect("resize_event", self._on_plot_canvas_resized),
         ]
         canvas._event_cids = cids
         return canvas
@@ -1241,14 +1380,12 @@ class AnalysisPanel(QWidget):
                     color="white",
                 )
 
-        canvas.figure.tight_layout(rect=[0, 0.05, 1, 1])
+        canvas.figure.tight_layout(rect=self.PLOT_LAYOUT_RECT)
         gui_plot_utils.apply_theme_to_existing_figure(canvas.figure)
 
     def _setup_plot_toolbar(self, canvas):
         """Create a custom left-aligned button strip backed by Matplotlib actions."""
-        self.active_mpl_toolbar_widget = CustomMatplotlibToolbar(
-            canvas, self
-        )
+        self.active_mpl_toolbar_widget = CustomMatplotlibToolbar(canvas, self)
         self.active_mpl_toolbar_widget.setObjectName("AnalysisPlotToolbarTitle")
         self.active_mpl_toolbar_widget.setVisible(False)
         self.active_mpl_toolbar_widget.update_theme()
@@ -1265,7 +1402,8 @@ class AnalysisPanel(QWidget):
             "Save the figure",
         )
         actions_by_tooltip = {
-            action.toolTip(): action for action in self.active_mpl_toolbar_widget.actions()
+            action.toolTip(): action
+            for action in self.active_mpl_toolbar_widget.actions()
         }
         for tooltip in action_order:
             action = actions_by_tooltip.get(tooltip)
@@ -1278,16 +1416,18 @@ class AnalysisPanel(QWidget):
             button.setIconSize(QSize(18, 18))
             button.setDefaultAction(action)
             button.setText("")
-            button.setObjectName(action.iconText() or action.text() or "AnalysisToolbarButton")
+            button.setObjectName(
+                action.iconText() or action.text() or "AnalysisToolbarButton"
+            )
             self.mpl_toolbar_in_titlebar_layout.addWidget(button)
             self.active_mpl_toolbar_buttons.append(button)
         self.mpl_toolbar_in_titlebar_container.setVisible(True)
 
-    def _display_placeholder(self, layout):
+    def _display_placeholder(self):
         """Displays a placeholder message when no analysis is selected."""
         self.plotTitleLabel.setText("No Analysis Selected")
         self.dataInfoLabel.setText("Run an analysis to see results.")
-        layout.addWidget(QLabel("Select or Run an Analysis"))
+        self._set_plot_area_widget(QLabel("Select or Run an Analysis"))
         self._update_settings_ui(self.analysisTypeCombo.currentText())
 
     def display_plot_page(self, page_index):
@@ -1295,10 +1435,10 @@ class AnalysisPanel(QWidget):
         Displays a specific analysis result page, orchestrating
         UI cleanup and redrawing.
         """
-        plot_layout = self._cleanup_plot_area()
+        self._cleanup_plot_area()
 
         if not (0 <= page_index < len(self.analysis_results_pages)):
-            self._display_placeholder(plot_layout)
+            self._display_placeholder()
             return
 
         page_data = self.analysis_results_pages[page_index]
@@ -1316,17 +1456,27 @@ class AnalysisPanel(QWidget):
         self._populate_settings_from_page_data(page_data)
 
         if page_data.get("plot_type") == "embedded_mpl" and analysis_instance:
+            zoom_percent = page_data.get("zoom_percent", self.PLOT_ZOOM_MIN_PERCENT)
+            was_blocked = self.plotZoomSlider.blockSignals(True)
+            self.plotZoomSlider.setValue(zoom_percent)
+            self.plotZoomSlider.blockSignals(was_blocked)
+            self._show_plot_zoom_percent(zoom_percent)
+            self.plot_zoom_container.setVisible(True)
+
             self.active_mpl_canvas_widget = self._create_new_plot_canvas(page_data)
+            # Size the canvas before drawing so the figure is laid out once, at
+            # the size it is shown at; the draw makes the pending re-layout moot.
+            self._set_plot_area_widget(self.active_mpl_canvas_widget, zoom_percent)
             self._draw_plot_on_canvas(
                 analysis_instance,
                 self.active_mpl_canvas_widget,
                 page_data.get("view_args", {}),
             )
+            self.resize_timer.stop()
             self._setup_plot_toolbar(self.active_mpl_canvas_widget)
-            plot_layout.addWidget(self.active_mpl_canvas_widget)
             self._fade_in_canvas(self.active_mpl_canvas_widget)
         else:
-            plot_layout.addWidget(QLabel(f"Cannot embed plot for {analysis_name}"))
+            self._set_plot_area_widget(QLabel(f"Cannot embed plot for {analysis_name}"))
 
     def _fade_in_canvas(self, canvas, duration_ms: int = 250) -> None:
         """Fade a newly-rendered canvas from transparent to fully opaque.
@@ -1496,8 +1646,10 @@ class AnalysisPanel(QWidget):
             return False
         return True
 
-    def _prepare_filtered_args(self, optic, analysis_class, analysis_name, constructor_args):
-        """Build the filtered kwargs dict for analysis_class(**kwargs) — fast, main thread."""
+    def _prepare_filtered_args(
+        self, optic, analysis_class, analysis_name, constructor_args
+    ):
+        """Build the filtered kwargs for analysis_class(**kwargs); fast, main thread."""
         final_args = {"optic": optic, **constructor_args}
         init_sig = inspect.signature(analysis_class.__init__)
         init_params = init_sig.parameters
@@ -1521,7 +1673,9 @@ class AnalysisPanel(QWidget):
             filtered_args["max_freq"] = final_args["max_freq"]
         return filtered_args, final_args
 
-    def _finish_analysis(self, instance, analysis_name, constructor_args, view_args, optic, final_args):
+    def _finish_analysis(
+        self, instance, analysis_name, constructor_args, view_args, optic, final_args
+    ):
         """Package a completed analysis instance into page_data — main thread."""
         can_embed = (
             hasattr(instance, "view")
@@ -1616,12 +1770,16 @@ class AnalysisPanel(QWidget):
             else:
                 QMessageBox.critical(self, self.ANALYSIS_ERROR_TITLE, msg)
             import traceback
+
             print(f"Analysis Panel Error: {e}\n{traceback.format_exc()}")
             return None
 
     def _execute_analysis_threaded(
-        self, analysis_class, analysis_name,
-        constructor_args=None, view_args=None,
+        self,
+        analysis_class,
+        analysis_name,
+        constructor_args=None,
+        view_args=None,
         on_complete=None,
     ):
         """Validate inputs, show busy overlay, run heavy ray-tracing on a
@@ -1650,6 +1808,7 @@ class AnalysisPanel(QWidget):
             )
         except Exception as exc:
             import traceback
+
             msg = f"An error occurred preparing {analysis_name}:\n{exc}"
             tm = getattr(self.connector, "toast_manager", None)
             if tm:
@@ -1743,6 +1902,7 @@ class AnalysisPanel(QWidget):
                 ctx["on_complete"](page_data)
         except Exception as exc:
             import traceback
+
             msg = f"An error occurred during {ctx['name']}:\n{exc}"
             tm = getattr(self.connector, "toast_manager", None)
             if tm:
@@ -1782,12 +1942,16 @@ class AnalysisPanel(QWidget):
         page_index = self.current_plot_page_index
 
         def on_complete(new_page_data):
+            new_page_data["zoom_percent"] = page_data.get(
+                "zoom_percent", self.PLOT_ZOOM_MIN_PERCENT
+            )
             self.analysis_results_pages[page_index] = new_page_data
             self.display_plot_page(page_index)
             self.logArea.append(f"{analysis_name} reran successfully.")
 
         self._execute_analysis_threaded(
-            self._analysis_class_map.get(analysis_name), analysis_name,
+            self._analysis_class_map.get(analysis_name),
+            analysis_name,
             on_complete=on_complete,
         )
 
@@ -1813,7 +1977,9 @@ class AnalysisPanel(QWidget):
             self.switch_plot_page(len(self.analysis_results_pages) - 1)
             self.logArea.append(f"{analysis_name} run complete.")
 
-        self._execute_analysis_threaded(analysis_class, analysis_name, on_complete=on_complete)
+        self._execute_analysis_threaded(
+            analysis_class, analysis_name, on_complete=on_complete
+        )
 
     @Slot()
     def run_all_analysis_slot(self):
@@ -1883,6 +2049,13 @@ class AnalysisPanel(QWidget):
                     QMessageBox.critical(self, "Save Error", msg)
 
     def on_scroll_zoom(self, event):
+        if not event.inaxes:
+            # Outside the axes the wheel scrolls an enlarged plot instead. The
+            # canvas swallows wheel events, so hand this one to the scroll area.
+            if event.guiEvent is not None:
+                QApplication.sendEvent(self.plot_zoom_area.viewport(), event.guiEvent)
+                event.guiEvent.accept()
+            return
         gui_plot_utils.handle_matplotlib_scroll_zoom(event)
 
     @Slot()
@@ -1895,7 +2068,9 @@ class AnalysisPanel(QWidget):
         try:
             from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
         except ImportError:
-            QMessageBox.warning(self, "Print", "Print support is not available on this system.")
+            QMessageBox.warning(
+                self, "Print", "Print support is not available on this system."
+            )
             return
 
         from PySide6.QtWidgets import QStyleFactory
@@ -1911,9 +2086,11 @@ class AnalysisPanel(QWidget):
         preview.setStyleSheet("""
             QWidget          { background-color: #f0f0f0; color: #202020; }
             QToolBar         { background-color: #ececec; border: none; spacing: 2px; }
-            QToolBar::separator { width: 1px; background-color: #c8c8c8; margin: 4px 2px; }
+            QToolBar::separator { width: 1px; background-color: #c8c8c8;
+                                  margin: 4px 2px; }
             QToolButton      { color: #202020; background-color: transparent;
-                               border: 1px solid transparent; padding: 2px; border-radius: 2px; }
+                               border: 1px solid transparent; padding: 2px;
+                               border-radius: 2px; }
             QToolButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
             QToolButton:pressed,
             QToolButton:checked  { background-color: #b8d0ea; border-color: #4e8cc0; }
@@ -1924,7 +2101,8 @@ class AnalysisPanel(QWidget):
             QPushButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
             QPushButton:pressed  { background-color: #b8d0ea; border-color: #4e8cc0; }
             QPushButton:default  { border-color: #0078d7; }
-            QPushButton:disabled { background-color: #d4d4d4; color: #888888; border-color: #d4d4d4; }
+            QPushButton:disabled { background-color: #d4d4d4; color: #888888;
+                                   border-color: #d4d4d4; }
             QLabel           { color: #202020; background-color: transparent; }
             QCheckBox, QRadioButton, QGroupBox { color: #202020; }
             QGroupBox        { border: 1px solid #b0b0b0; border-radius: 4px;
@@ -1933,13 +2111,16 @@ class AnalysisPanel(QWidget):
             QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
                 background-color: #ffffff; color: #202020;
                 border: 1px solid #aaaaaa; border-radius: 2px; padding: 1px 4px; }
-            QComboBox::drop-down { background-color: #e1e1e1; border-left: 1px solid #aaaaaa; }
+            QComboBox::drop-down { background-color: #e1e1e1;
+                                   border-left: 1px solid #aaaaaa; }
             QAbstractItemView{ background-color: #ffffff; color: #202020;
                                border: 1px solid #aaaaaa; }
             QScrollBar:vertical, QScrollBar:horizontal {
                 background-color: #e8e8e8; border: none; }
-            QScrollBar::handle:vertical   { background-color: #b0b0b0; border-radius: 3px; min-height: 20px; }
-            QScrollBar::handle:horizontal { background-color: #b0b0b0; border-radius: 3px; min-width:  20px; }
+            QScrollBar::handle:vertical {
+                background-color: #b0b0b0; border-radius: 3px; min-height: 20px; }
+            QScrollBar::handle:horizontal {
+                background-color: #b0b0b0; border-radius: 3px; min-width: 20px; }
             QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
                 background-color: #909090; }
             QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
@@ -1959,19 +2140,15 @@ class AnalysisPanel(QWidget):
                 preview.paintRequested.emit(printer)
 
         for _act in preview.findChildren(_QAction, "qt_print_action"):
-            try:
+            with contextlib.suppress(RuntimeError):
                 _act.triggered.disconnect()
-            except RuntimeError:
-                pass
             _act.triggered.connect(_handle_print)
             break
 
         preview.exec()
 
-        try:
+        with contextlib.suppress(RuntimeError):
             preview.paintRequested.disconnect(self._render_analysis_for_print)
-        except RuntimeError:
-            pass
         self._print_overlay = None
         preview.setParent(None)
 
@@ -1987,7 +2164,9 @@ class AnalysisPanel(QWidget):
         def _flush(value: float) -> None:
             if overlay is not None:
                 overlay.set_progress(value)
-                QApplication.processEvents(QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents)
+                QApplication.processEvents(
+                    QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+                )
 
         if overlay is not None:
             overlay.show_busy()
@@ -2024,7 +2203,7 @@ class AnalysisPanel(QWidget):
                 overlay.hide_busy()
 
     def _save_analysis_figure_print_friendly(self, buf, on_progress=None) -> None:
-        """Save the analysis figure to *buf* as PNG with white background and black text."""
+        """Save the figure to *buf* as PNG, with white background and black text."""
         import matplotlib.colors as mcolors
 
         fig = self.active_mpl_canvas_widget.figure
@@ -2081,15 +2260,15 @@ class AnalysisPanel(QWidget):
         try:
             if on_progress is not None:
                 on_progress(0.35)
-            fig.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor="white")
+            fig.savefig(
+                buf, format="png", dpi=300, bbox_inches="tight", facecolor="white"
+            )
             if on_progress is not None:
                 on_progress(0.85)
         finally:
             for setter, original in reversed(restores):
-                try:
+                with contextlib.suppress(Exception):
                     setter(original)
-                except Exception:
-                    pass
 
     @Slot()
     def _load_analysis_settings_slot(self):
