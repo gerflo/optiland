@@ -190,7 +190,6 @@ class FootprintDiagram(BaseAnalysis):
 
         for w_idx, wp in enumerate(self.wavelengths):
             ax = axs[w_idx]
-            any_plotted = False
             for f_idx, f_block in enumerate(self.data):
                 x, y, _ = f_block[w_idx]
                 if x.size == 0:
@@ -205,17 +204,35 @@ class FootprintDiagram(BaseAnalysis):
                     label=f"Field {f_idx} ({Hx:.2f}, {Hy:.2f})",
                     rasterized=True,
                 )
-                any_plotted = True
 
             ax.set_xlabel("X (mm)")
             ax.set_ylabel("Y (mm)")
             ax.set_title(f"$\\lambda$ = {wp.value:.3f} µm")
-            ax.set_aspect("equal", adjustable="datalim")
+            # "box" keeps the aspect by resizing the axes, so a zoom that fixes
+            # both limits needs no data-limit override (and logs no warning).
+            ax.set_aspect("equal", adjustable="box")
             ax.grid(True, linewidth=0.4)
-            if any_plotted:
-                ax.legend(markerscale=6, fontsize="small")
+
+        # A field has the same colour in every subplot, so one legend beside
+        # the last subplot serves all of them without covering any rays.
+        legend_entries = {}
+        for ax in axs:
+            for handle, label in zip(*ax.get_legend_handles_labels(), strict=True):
+                legend_entries.setdefault(label, handle)
+        if legend_entries:
+            axs[-1].legend(
+                list(legend_entries.values()),
+                list(legend_entries.keys()),
+                markerscale=6,
+                fontsize="small",
+                loc="upper left",
+                bbox_to_anchor=(1.02, 1.0),
+                borderaxespad=0.0,
+            )
 
         fig.suptitle(f"Footprint Diagram — {self.surface_label}")
+        if fig_to_plot_on is None:
+            fig.tight_layout()
         if hasattr(fig, "canvas"):
             fig.canvas.draw_idle()
         return fig, axs

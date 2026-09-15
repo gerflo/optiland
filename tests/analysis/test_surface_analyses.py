@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -54,6 +56,26 @@ def test_footprint_shows_where_the_rays_cross_the_chosen_surface(
     stop_radius = np.hypot(stop_x, stop_y).max()
     assert stop_radius > 1.0
     assert stop_radius > 20 * np.hypot(image_x, image_y).max()
+
+
+def test_footprint_plot_zooms_without_aspect_warnings(caplog) -> None:
+    footprint = analysis.FootprintDiagram(CookeTriplet(), num_rays=50)
+    figure = plt.figure(figsize=(10, 4))
+    try:
+        footprint.view(fig_to_plot_on=figure)
+        figure.tight_layout()
+        figure.canvas.draw()
+        ax = figure.axes[0]
+
+        with caplog.at_level(logging.WARNING, logger="matplotlib"):
+            # What a toolbar zoom rectangle does: fix both limits.
+            ax.set_xlim(-2.0, 2.0)
+            ax.set_ylim(-1.0, 1.0)
+            figure.canvas.draw()
+
+        assert not [r for r in caplog.records if "fixed" in r.getMessage()]
+    finally:
+        plt.close(figure)
 
 
 def test_spot_diagram_on_a_surface_takes_the_spots_there(set_test_backend) -> None:
