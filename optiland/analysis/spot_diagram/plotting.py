@@ -41,12 +41,51 @@ def handle_no_fields(fig: Figure | None) -> tuple[None, None]:
     return None, None
 
 
+# Room the decorations take as (width, height) in inches, measured with the GUI
+# fonts: once per figure for its title, legend and outer labels, and once per
+# subplot for its title, tick labels and axis labels.
+_FIGURE_DECORATION = (0.75, 1.0)
+_SUBPLOT_DECORATION = (0.35, 0.6)
+
+
+def grid_shape(num_fields: int, width: float, height: float) -> tuple[int, int]:
+    """Chooses the rows and columns that give the largest square spot boxes.
+
+    Args:
+        num_fields: Number of field points to plot.
+        width: Width of the figure in inches.
+        height: Height of the figure in inches.
+
+    Returns:
+        ``(num_rows, num_cols)``. Of the grids with nearly the largest boxes,
+        the one with the fewest empty cells.
+    """
+    grids = []
+    for num_cols in range(1, num_fields + 1):
+        num_rows = -(-num_fields // num_cols)
+        side = min(
+            (width - _FIGURE_DECORATION[0]) / num_cols - _SUBPLOT_DECORATION[0],
+            (height - _FIGURE_DECORATION[1]) / num_rows - _SUBPLOT_DECORATION[1],
+        )
+        grids.append((side, num_rows, num_cols))
+    largest = max(side for side, _, _ in grids)
+    tolerance = 0.05 * abs(largest)
+    nearly_largest = [grid for grid in grids if grid[0] >= largest - tolerance]
+    _, num_rows, num_cols = min(
+        nearly_largest, key=lambda grid: (grid[1] * grid[2] - num_fields, -grid[0])
+    )
+    return num_rows, num_cols
+
+
 def setup_plot_layout(
     num_fields: int,
     fig_to_plot_on: Figure | None,
     figsize: tuple[float, float],
 ) -> tuple[Figure, NDArray[np.object_]]:
     """Sets up the Matplotlib figure and axes grid.
+
+    An existing figure gets the grid that suits its size best; a new figure
+    has three columns and grows by ``figsize[1]`` per row.
 
     Args:
         num_fields: Number of field points to plot.
@@ -56,17 +95,19 @@ def setup_plot_layout(
     Returns:
         A tuple of the figure and a flattened array of its axes.
     """
-    num_cols = 3
-    num_rows = (num_fields + num_cols - 1) // num_cols
-
     if fig_to_plot_on:
         fig = fig_to_plot_on
         fig.clear()
+        num_rows, num_cols = grid_shape(
+            num_fields, fig.get_figwidth(), fig.get_figheight()
+        )
     else:
+        num_cols = 3
+        num_rows = (num_fields + num_cols - 1) // num_cols
         fig = plt.figure(figsize=(figsize[0], num_rows * figsize[1]))
 
-    axs = fig.subplots(num_rows, num_cols, sharex=True, sharey=True).flatten()
-    return fig, axs
+    axs = fig.subplots(num_rows, num_cols, sharex=True, sharey=True, squeeze=False)
+    return fig, axs.flatten()
 
 
 def calculate_axis_limits(
@@ -106,7 +147,11 @@ def calculate_axis_limits(
     max_extent = 0
     for i in range(len(fields)):
         centroid_arr = np.asarray(centroids[i], dtype=float)
-        offset = float(np.nanmax(np.abs(centroid_arr))) if np.any(np.isfinite(centroid_arr)) else 0.0
+        offset = (
+            float(np.nanmax(np.abs(centroid_arr)))
+            if np.any(np.isfinite(centroid_arr))
+            else 0.0
+        )
         rx = float(rad_x[i]) if np.isfinite(rad_x[i]) else 0.0
         ry = float(rad_y[i]) if np.isfinite(rad_y[i]) else 0.0
         radius = max(rx, ry, max_geom_radius)
@@ -203,8 +248,12 @@ def finalize_plot(
         num_fields: The number of fields that were plotted.
         wavelengths: The list of wavelengths used in the analysis.
     """
+    num_cols = axs[0].get_gridspec().ncols
     for i in range(num_fields, len(axs)):
         fig.delaxes(axs[i])
+        if i >= num_cols:
+            # Shared x axes label only the bottom row, which lost this subplot.
+            axs[i - num_cols].xaxis.set_tick_params(which="both", labelbottom=True)
 
     if num_fields == 0:
         if hasattr(fig, "canvas") and fig.canvas:
@@ -220,8 +269,6 @@ def finalize_plot(
 
     fig.canvas.draw()
     pos_left = axs[0].get_position()
-    num_cols = 3
-
     rightmost_ax_idx = min(num_fields - 1, num_cols - 1)
     pos_right = axs[rightmost_ax_idx].get_position()
 
