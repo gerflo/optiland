@@ -409,13 +409,17 @@ class Lens3D(Lens2D):
             theme (Theme, optional): The theme to use for plotting.
                 Defaults to None.
 
+        Returns:
+            dict: Every added actor mapped to this component, like the 2D
+                artists of ``Lens2D.plot``.
+
         """
         if self.is_symmetric:
             sags = self._compute_sag()  # sags are in global coordinates
-            self._plot_lenses(renderer, sags, theme=theme)
-        else:
-            self._plot_surfaces(renderer, theme=theme)
-            self._plot_surface_edges(renderer, theme=theme)
+            return self._plot_lenses(renderer, sags, theme=theme)
+        actors = self._plot_surfaces(renderer, theme=theme)
+        actors.update(self._plot_surface_edges(renderer, theme=theme))
+        return actors
 
     def _plot_single_lens(self, renderer, x, y, z, theme=None, *args, **kwargs):
         """Plots a single lens by revolving a contour and configuring its
@@ -435,6 +439,7 @@ class Lens3D(Lens2D):
         actor = revolve_contour(be.to_numpy(x), be.to_numpy(y), be.to_numpy(z))
         actor = self._configure_material(actor, theme=theme)
         renderer.AddActor(actor)
+        return actor
 
     def _configure_material(self, actor, theme=None):
         """Configures the material properties of a given VTK actor.
@@ -479,7 +484,11 @@ class Lens3D(Lens2D):
             theme (Theme, optional): The theme to use for plotting.
                 Defaults to None.
 
+        Returns:
+            dict: Every added actor mapped to this component.
+
         """
+        actors = {}
         max_extent = self._get_max_extent()
         for (
             surface_3d_obj
@@ -489,12 +498,16 @@ class Lens3D(Lens2D):
             )  # retrieves actor from Surface3D (already transformed)
             actor = self._configure_material(actor, theme=theme)
             renderer.AddActor(actor)
+            actors[actor] = self
 
             # Add annulus if surface extent does not extend to lens edge
             if surface_3d_obj.extent < max_extent:
-                self._plot_annulus(
+                annulus_actor = self._plot_annulus(
                     surface_3d_obj, renderer, theme=theme
                 )  # Pass renderer
+                if annulus_actor is not None:
+                    actors[annulus_actor] = self
+        return actors
 
     def _plot_annulus(self, surface_3d_obj, renderer, theme=None):
         """Plots a VTK annulus for a given surface.
@@ -509,6 +522,10 @@ class Lens3D(Lens2D):
                             (Surface object with geometry and cs) and `extent`
                             attributes.
             renderer (vtkRenderer): The VTK renderer to add the annulus actor to.
+
+        Returns:
+            vtkActor | None: The added annulus actor, or ``None`` when the
+                surface already reaches the lens edge.
         """
         surf_props = surface_3d_obj.surf  # Actual Surface object with .geometry
         surf_geom = surf_props.geometry
@@ -518,7 +535,7 @@ class Lens3D(Lens2D):
 
         if outer_radius <= inner_radius:
             # No annulus needed if the surface already extends to or beyond max_extent
-            return
+            return None
 
         num_theta_points = 64
         # Do not take endpoint that overlaps with first point
@@ -589,6 +606,7 @@ class Lens3D(Lens2D):
         annulus_actor = self._configure_material(annulus_actor, theme=theme)
         annulus_actor = transform_3d(annulus_actor, surf_props)
         renderer.AddActor(annulus_actor)
+        return annulus_actor
 
     def _get_edge_surface(self, circle1, circle2, theme=None):
         """Generates a VTK actor representing the surface between two circles.
@@ -655,6 +673,9 @@ class Lens3D(Lens2D):
             renderer: The 3D renderer object where the surface edges will be
                 added.
 
+        Returns:
+            dict: Every added actor mapped to this component.
+
         """
         circles = []
         for surface in self.surfaces:
@@ -665,11 +686,14 @@ class Lens3D(Lens2D):
             z = be.to_numpy(z)
             circles.append(np.stack((x, y, z), axis=-1))
 
+        actors = {}
         for k in range(len(circles) - 1):
             circle1 = circles[k]
             circle2 = circles[k + 1]
             actor = self._get_edge_surface(circle1, circle2, theme=theme)
             renderer.AddActor(actor)
+            actors[actor] = self
+        return actors
 
     def _get_edge_points(self, surface_obj):
         """Computes the (x, y, z) local coordinates of the edges of the lens.

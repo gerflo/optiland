@@ -10,10 +10,15 @@ from matplotlib.patches import Polygon
 from PySide6.QtCore import QObject, Signal
 
 from optiland_gui.viewer_panel import (
+    HIGHLIGHT_ARROW_HEAD_HEIGHT_RATIO,
+    HIGHLIGHT_ARROW_MAX_WIDTH_PX,
+    HIGHLIGHT_ARROW_MIN_WIDTH_PX,
+    HIGHLIGHT_ARROW_SHAFT_LENGTH_RATIO,
+    HIGHLIGHT_ARROW_SHAFT_WIDTH_RATIO,
     HIGHLIGHT_ARROW_TOP_PAD_PX,
+    HIGHLIGHT_ARROW_WIDTH_FACTOR,
     HIGHLIGHT_LINE_WIDTH_PT,
     HIGHLIGHT_MARKER_LABEL,
-    HIGHLIGHT_MARKER_MIN_WIDTH_PX,
     MatplotlibViewer,
     _luminance,
     effective_surface_index,
@@ -127,6 +132,31 @@ def _px_per_unit_y(viewer: MatplotlibViewer) -> float:
 
 def _marker_width_px(viewer: MatplotlibViewer, marker: Polygon) -> float:
     return _marker_head_width(marker) * _px_per_unit_x(viewer)
+
+
+def _marker_height_px(viewer: MatplotlibViewer, marker: Polygon) -> float:
+    xy = np.asarray(marker.get_xy(), dtype=float)
+    return float(xy[:, 1].max() - xy[:, 1].min()) * _px_per_unit_y(viewer)
+
+
+def _tallest_component(viewer: MatplotlibViewer) -> float:
+    return max(top - bottom for top, bottom in _component_extents(viewer))
+
+
+def _expected_marker_width_px(viewer: MatplotlibViewer) -> float:
+    """Arrow head width on screen, computed independently of the viewer."""
+    scaled = HIGHLIGHT_ARROW_WIDTH_FACTOR * _tallest_component(viewer)
+    scaled_px = scaled * _px_per_unit_y(viewer)
+    return min(
+        max(scaled_px, HIGHLIGHT_ARROW_MIN_WIDTH_PX), HIGHLIGHT_ARROW_MAX_WIDTH_PX
+    )
+
+
+def _zoom_to_scaled_marker_width(viewer: MatplotlibViewer, width_px: float) -> None:
+    """Zoom so the arrow, before the pixel clamp, is *width_px* wide on screen."""
+    scaled = HIGHLIGHT_ARROW_WIDTH_FACTOR * _tallest_component(viewer)
+    span = scaled * viewer.ax.bbox.height / width_px
+    viewer.ax.set_ylim(-0.5 * span, 0.5 * span)
 
 
 def _component_extents(viewer: MatplotlibViewer) -> list[tuple[float, float]]:
@@ -260,8 +290,10 @@ def test_element_highlight_brightens_lens_and_marks_its_width(viewer) -> None:
     tip_x, tip_y = _marker_tip(marker)
     assert tip_x == pytest.approx(0.5 * (z_min + z_max))
     assert tip_y == pytest.approx(_expected_marker_y(viewer))
-    assert _marker_width_px(viewer, marker) > HIGHLIGHT_MARKER_MIN_WIDTH_PX
-    assert _marker_head_width(marker) == pytest.approx(1.10 * (z_max - z_min))
+    # The arrow is sized by the zoom, not by the element it marks.
+    assert _marker_width_px(viewer, marker) == pytest.approx(
+        _expected_marker_width_px(viewer)
+    )
 
 
 def test_surface_highlight_traces_lens_surface_bold_with_marker(viewer) -> None:
@@ -284,8 +316,9 @@ def test_surface_highlight_traces_lens_surface_bold_with_marker(viewer) -> None:
     tip_x, tip_y = _marker_tip(marker)
     assert tip_x == pytest.approx(0.5 * (np.nanmin(z) + np.nanmax(z)))
     assert tip_y == pytest.approx(_expected_marker_y(viewer))
-    # The surface is far narrower than 20 px, so the head is widened to it.
-    assert _marker_width_px(viewer, marker) == pytest.approx(HIGHLIGHT_MARKER_MIN_WIDTH_PX)
+    assert _marker_width_px(viewer, marker) == pytest.approx(
+        _expected_marker_width_px(viewer)
+    )
 
 
 def test_marker_is_an_arrow_pointing_down(viewer) -> None:
@@ -340,27 +373,70 @@ def test_every_marker_sits_on_the_same_height(viewer) -> None:
         assert _marker_tip(marker)[1] == pytest.approx(expected), selection
 
 
-def test_marker_minimum_width_follows_the_zoom(viewer) -> None:
-    viewer.set_highlighted_surfaces([1], False)
+def _marker_size_px(viewer: MatplotlibViewer, marker: Polygon) -> tuple[float, float]:
+    return _marker_width_px(viewer, marker), _marker_height_px(viewer, marker)
+
+
+def test_markers_have_the_same_size_whatever_they_mark(viewer) -> None:
+    # A thin lens surface, the whole lens and the image line differ widely
+    # in width, yet their arrows must be identical on screen.
+    _zoom_to_scaled_marker_width(viewer, 32.0)
+    sizes = []
+    for selection in ([1], False), ([1, 2], True), ([3], False):
+        viewer.set_highlighted_surfaces(*selection)
+        (marker,) = _markers(viewer)
+        sizes.append(_marker_size_px(viewer, marker))
+
+    assert sizes[0][0] == pytest.approx(32.0)
+    for size in sizes[1:]:
+        assert size == pytest.approx(sizes[0])
+
+
+def test_marker_scales_with_the_zoom_but_keeps_its_aspect_ratio(viewer) -> None:
+    viewer.set_highlighted_surfaces([1, 2], True)
     (marker,) = _markers(viewer)
-    assert _marker_width_px(viewer, marker) == pytest.approx(HIGHLIGHT_MARKER_MIN_WIDTH_PX)
-    _, z_lo, z_hi = viewer._highlight_markers[0]  # the surface width + 10 %
+    aspect = HIGHLIGHT_ARROW_HEAD_HEIGHT_RATIO + HIGHLIGHT_ARROW_SHAFT_LENGTH_RATIO
 
-    # Zooming far in: the surface itself is wider than 20 px on screen, so
-    # the head is exactly its width plus 10 %.
-    viewer.ax.set_xlim(-0.5, 1.0)
-    assert _marker_head_width(marker) == pytest.approx(z_hi - z_lo)
-    assert _marker_width_px(viewer, marker) > HIGHLIGHT_MARKER_MIN_WIDTH_PX
+    for scaled_px in (24.0, 40.0):  # both inside the pixel clamp
+        _zoom_to_scaled_marker_width(viewer, scaled_px)
+        width_px, height_px = _marker_size_px(viewer, marker)
+        assert width_px == pytest.approx(scaled_px), scaled_px
+        assert height_px == pytest.approx(aspect * width_px), scaled_px
 
-    # Zooming out again: back to the pixel minimum at the new scale.
-    viewer.ax.set_xlim(-100, 200)
-    assert _marker_width_px(viewer, marker) == pytest.approx(HIGHLIGHT_MARKER_MIN_WIDTH_PX)
+    # Beyond the clamp the arrow stops scaling, still with the same shape.
+    for scaled_px, clamped_px in (
+        (5.0, HIGHLIGHT_ARROW_MIN_WIDTH_PX),
+        (200.0, HIGHLIGHT_ARROW_MAX_WIDTH_PX),
+    ):
+        _zoom_to_scaled_marker_width(viewer, scaled_px)
+        width_px, height_px = _marker_size_px(viewer, marker)
+        assert width_px == pytest.approx(clamped_px), scaled_px
+        assert height_px == pytest.approx(aspect * width_px), scaled_px
 
     # A full redraw reconnects the axes callbacks that ax.clear() dropped.
     viewer._plot_optic_sync()
     (marker,) = _markers(viewer)
-    viewer.ax.set_xlim(-100, 200)
-    assert _marker_width_px(viewer, marker) == pytest.approx(HIGHLIGHT_MARKER_MIN_WIDTH_PX)
+    _zoom_to_scaled_marker_width(viewer, 30.0)
+    assert _marker_width_px(viewer, marker) == pytest.approx(30.0)
+
+
+def test_marker_keeps_its_on_screen_shape_when_the_axes_are_unequal(viewer) -> None:
+    viewer.set_highlighted_surfaces([1], False)
+    (marker,) = _markers(viewer)
+    _zoom_to_scaled_marker_width(viewer, 30.0)
+
+    # Stretch only the horizontal scale: the arrow must not follow it.
+    x0, x1 = viewer.ax.get_xlim()
+    viewer.ax.set_xlim(x0, x0 + 0.25 * (x1 - x0))
+
+    width_px, height_px = _marker_size_px(viewer, marker)
+    aspect = HIGHLIGHT_ARROW_HEAD_HEIGHT_RATIO + HIGHLIGHT_ARROW_SHAFT_LENGTH_RATIO
+    assert width_px == pytest.approx(30.0)
+    assert height_px == pytest.approx(aspect * width_px)
+    xy = _marker_vertices(marker)
+    shaft_top = xy[np.isclose(xy[:, 1], xy[:, 1].max())]
+    shaft_px = (shaft_top[:, 0].max() - shaft_top[:, 0].min()) * _px_per_unit_x(viewer)
+    assert shaft_px == pytest.approx(HIGHLIGHT_ARROW_SHAFT_WIDTH_RATIO * width_px)
 
 
 def test_marker_is_pulled_down_when_the_view_has_no_headroom(viewer) -> None:

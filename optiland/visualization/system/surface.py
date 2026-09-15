@@ -177,10 +177,15 @@ class Surface3D(Surface2D):
             theme (Theme, optional): The theme to use for plotting.
                 Defaults to None.
 
+        Returns:
+            dict: The added actor mapped to this component, like the 2D
+                artists of ``Surface2D.plot``.
+
         """
         actor = self.get_surface(theme=theme)
         self._configure_material(actor, theme=theme)
         renderer.AddActor(actor)
+        return {actor: self}
 
     def get_surface(self, theme=None):
         """Retrieves the surface actor based on the symmetry of the surface

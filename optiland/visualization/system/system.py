@@ -132,6 +132,11 @@ class OpticalSystem:
     ):
         """Plots the components of the optical system on the given
         axis (or renderer for 3D plotting).
+
+        Returns:
+            dict: Every drawn artist (2D) or actor (3D) mapped to what it
+                shows: the component for lenses and standalone surfaces, the
+                surface for aperture markers.
         """
         self._identify_components(hide_internal_surfaces=hide_internal_surfaces)
         artists = {}
@@ -144,14 +149,14 @@ class OpticalSystem:
                 aperture_artists = self._plot_apertures(
                     ax, theme=theme, projection=projection
                 )
-                artists.update(aperture_artists)
             else:
-                self._plot_apertures_3d(
+                aperture_artists = self._plot_apertures_3d(
                     ax,
                     theme=theme,
                     show_stop=show_stop_apertures,
                     show_non_stop=show_non_stop_apertures,
                 )
+            artists.update(aperture_artists)
         return artists
 
     def _identify_components(self, hide_internal_surfaces=False):
@@ -194,7 +199,8 @@ class OpticalSystem:
         # add final lens, if any
         if lens_surfaces:
             self._add_component(
-                "lens", self._visible_lens_surfaces(lens_surfaces, hide_internal_surfaces)
+                "lens",
+                self._visible_lens_surfaces(lens_surfaces, hide_internal_surfaces),
             )
 
     @staticmethod
@@ -356,7 +362,7 @@ class OpticalSystem:
         if projection not in ("XZ", "YZ"):
             raise ValueError("Invalid projection type. Must be 'XY', 'XZ', or 'YZ'.")
 
-        stop_color = "#9B30FF"      # purple: visible on both dark and light
+        stop_color = "#9B30FF"  # purple: visible on both dark and light
         aperture_color = "#7700CC"  # darker purple for non-stop apertures
 
         artists = {}
@@ -399,9 +405,15 @@ class OpticalSystem:
     def _plot_apertures_3d(
         self, renderer, theme=None, show_stop=True, show_non_stop=True
     ):
-        """Add translucent aperture disk actors to the 3D renderer."""
+        """Add translucent aperture disk actors to the 3D renderer.
+
+        Returns:
+            dict: Every added actor mapped to the surface whose aperture it
+                shows.
+        """
         import vtk
 
+        actors = {}
         stop_color = (0.61, 0.19, 1.0)
         if theme:
             from matplotlib.colors import to_rgb
@@ -429,7 +441,7 @@ class OpticalSystem:
 
             color = stop_color if surface.is_stop else aperture_color
 
-            def _add_disk(r_in, r_out):
+            def _add_disk(r_in, r_out, surface=surface, color=color):
                 disk = vtk.vtkDiskSource()
                 disk.SetInnerRadius(r_in)
                 disk.SetOuterRadius(r_out)
@@ -449,11 +461,16 @@ class OpticalSystem:
                 prop.SetSpecular(0.2)
                 prop.SetSpecularPower(20.0)
                 renderer.AddActor(actor)
+                return actor
 
             # Outer blocking ring (beyond clear aperture)
-            _add_disk(r_outer_edge, r_outer_edge * 1.5)
+            actors[_add_disk(r_outer_edge, r_outer_edge * 1.5)] = surface
 
             # For ring apertures (r_min > 0): add inner central obstruction disk
-            if isinstance(surface.aperture, RadialAperture) and surface.aperture.r_min > 0:
+            if (
+                isinstance(surface.aperture, RadialAperture)
+                and surface.aperture.r_min > 0
+            ):
                 r_inner_edge = float(surface.aperture.r_min)
-                _add_disk(0.0, r_inner_edge)
+                actors[_add_disk(0.0, r_inner_edge)] = surface
+        return actors

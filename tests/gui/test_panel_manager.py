@@ -26,3 +26,17 @@ def test_panel_manager_update_theme_propagates_to_all_theme_aware_panels() -> No
     manager.python_terminal.set_theme.assert_called_once_with("light")
     manager.optimization_panel.update_theme.assert_called_once_with("light")
     manager.system_properties.update_theme.assert_called_once_with("light")
+
+
+def test_panel_manager_selects_layout_clicks_in_the_lens_editor() -> None:
+    manager = PanelManager(MagicMock(), MagicMock())
+    manager.sidebar_content_widget = MagicMock()
+    manager.python_terminal = MagicMock()
+    manager.lens_editor = MagicMock()
+    manager.viewer_panel = MagicMock()
+
+    manager.connect_signals()
+
+    manager.viewer_panel.surfacesPicked.connect.assert_called_once_with(
+        manager.lens_editor.select_surfaces
+    )

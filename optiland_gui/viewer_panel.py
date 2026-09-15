@@ -21,7 +21,16 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Polygon
-from PySide6.QtCore import QEvent, QPoint, QSettings, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QEvent,
+    QPoint,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -323,7 +332,12 @@ class ViewerPanel(QWidget):
         viewer2D (MatplotlibViewer): The 2D viewer widget.
         viewer3D (VTKViewer or QLabel): The 3D viewer widget, or a label if VTK
                                         is unavailable.
+        settings_area (QWidget): The settings panel the 2D and 3D layouts
+                                 share, shown beside the tabs.
     """
+
+    # Lens Data Editor rows of what was clicked in the 2D or 3D layout.
+    surfacesPicked = Signal(list)
 
     def __init__(self, connector: OptilandConnector, parent=None):
         """
@@ -338,15 +352,19 @@ class ViewerPanel(QWidget):
         self.settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
         self.current_theme = "dark"
 
-        main_layout = QVBoxLayout(self)
+        main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(5)
         self.tabWidget = QTabWidget()
 
         # Create 2D Viewer Tab
         self.viewer2D = MatplotlibViewer(self.connector)
         self.viewer2D.settingsApplied.connect(self._render_3d_from_2d_settings)
+        self.viewer2D.surfacesPicked.connect(self.surfacesPicked)
         viewer2d_container = self._create_2d_viewer_tab()
-        self.tabWidget.addTab(viewer2d_container, "2D Layout")
+        self._viewer2d_tab_index = self.tabWidget.addTab(
+            viewer2d_container, "2D Layout"
+        )
 
         # Create 3D Viewer Tab
         self.viewer3D = None
@@ -363,7 +381,17 @@ class ViewerPanel(QWidget):
         self.sagViewer = SagViewer(self.connector, self)
         self.tabWidget.addTab(self.sagViewer, "Sag")
 
-        main_layout.addWidget(self.tabWidget)
+        main_layout.addWidget(self.tabWidget, 1)
+        # The 2D and 3D layouts share one settings panel. It sits beside the
+        # tabs so the gear button of either tab can show it; the Sag tab has
+        # settings of its own and hides it.
+        self.settings_area = self.viewer2D.detach_settings_area()
+        main_layout.addWidget(self.settings_area)
+        self.viewer2D.settings_toggle_btn.toggled.connect(
+            self._update_settings_area_visibility
+        )
+        self.tabWidget.currentChanged.connect(self._update_settings_area_visibility)
+        self._update_settings_area_visibility()
         self.tabWidget.currentChanged.connect(self._render_pending_3d_if_visible)
 
         self.connector.opticLoaded.connect(self.reset_original_views)
@@ -376,8 +404,11 @@ class ViewerPanel(QWidget):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.setSpacing(2)
 
-        # Toolbar row — same layout style as the 2D tab
-        toolbar_layout = QHBoxLayout()
+        # Toolbar row — same layout style as the 2D tab. The object name gives
+        # the gear button the 2D toolbar's button styling.
+        toolbar_row = QWidget()
+        toolbar_row.setObjectName("ViewerToolbarContainer")
+        toolbar_layout = QHBoxLayout(toolbar_row)
         toolbar_layout.setContentsMargins(0, 0, 0, 0)
 
         self._btn_3d_refresh = QPushButton("⟳  Refresh")
@@ -400,7 +431,20 @@ class ViewerPanel(QWidget):
         toolbar_layout.addWidget(self._chk_3d_stop)
         toolbar_layout.addWidget(self._chk_3d_non_stop)
         toolbar_layout.addStretch()
-        layout.addLayout(toolbar_layout)
+
+        # Settings toggle — right-aligned like the 2D tab's gear button and
+        # kept in step with it, so either tab shows the shared settings panel.
+        self._btn_3d_settings = QToolButton()
+        self._btn_3d_settings.setToolTip("Toggle Viewer Settings")
+        self._btn_3d_settings.setCheckable(True)
+        self._btn_3d_settings.setIconSize(QSize(18, 18))
+        gear_2d = self.viewer2D.settings_toggle_btn
+        self._btn_3d_settings.setChecked(gear_2d.isChecked())
+        self._btn_3d_settings.toggled.connect(gear_2d.setChecked)
+        gear_2d.toggled.connect(self._btn_3d_settings.setChecked)
+        self._style_3d_settings_button(self.current_theme)
+        toolbar_layout.addWidget(self._btn_3d_settings)
+        layout.addWidget(toolbar_row)
 
         # Content area — starts with placeholder; VTK widget is injected here
         self._3d_content_widget = QWidget()
@@ -426,6 +470,7 @@ class ViewerPanel(QWidget):
         try:
             viewer3d = VTKViewer(self.connector)
             viewer3d.update_theme(self.current_theme, render=False)
+            viewer3d.surfacesPicked.connect(self.surfacesPicked)
             # Swap out the placeholder label for the real VTK widget
             while self._3d_content_layout.count():
                 item = self._3d_content_layout.takeAt(0)
@@ -444,6 +489,29 @@ class ViewerPanel(QWidget):
         layout.setContentsMargins(5, 5, 5, 5)
         layout.addWidget(self.viewer2D)
         return container
+
+    def _update_settings_area_visibility(self, *_args) -> None:
+        """Show the shared settings panel beside the 2D and 3D layout tabs only."""
+        current = self.tabWidget.currentIndex()
+        on_layout_tab = current == self._viewer2d_tab_index or (
+            self._viewer3d_tab_index >= 0 and current == self._viewer3d_tab_index
+        )
+        self.settings_area.setVisible(
+            on_layout_tab and self.viewer2D.settings_toggle_btn.isChecked()
+        )
+
+    def _style_3d_settings_button(self, theme: str) -> None:
+        """Tint the 3D tab's gear icon like the 2D toolbar's."""
+        button = getattr(self, "_btn_3d_settings", None)
+        if button is None:
+            return
+        toolbar = self.viewer2D.toolbar
+        button.setIcon(
+            toolbar._tinted_icon(
+                QIcon(f":/icons/{theme}/settings.svg"),
+                toolbar._toolbar_foreground_color(),
+            )
+        )
 
     @Slot()
     def update_viewers(self):
@@ -542,6 +610,7 @@ class ViewerPanel(QWidget):
         self.current_theme = theme_name
         if self.viewer2D:
             self.viewer2D.update_theme(theme_name)
+            self._style_3d_settings_button(theme_name)
         if self.viewer3D:
             self.viewer3D.update_theme(theme_name, render=self._is_3d_tab_active())
             if not self._is_3d_tab_active():
@@ -690,18 +759,26 @@ HIGHLIGHT_MARKER_LABEL = "_highlight_marker"
 # Every marker tip sits on one line: 110 % of the height of the tallest
 # drawn element (and at least 10 % of that height above the layout top).
 HIGHLIGHT_MARKER_HEIGHT_FACTOR = 1.10
-# The arrow head is 10 % wider than what it marks, but never narrower on
-# screen than the pixel minimum.
-HIGHLIGHT_MARKER_WIDTH_FACTOR = 1.10
-HIGHLIGHT_MARKER_MIN_WIDTH_PX = 20
-# Arrow proportions on screen: head height as a fraction of the head width
-# (clamped), shaft length and thickness, and the gap kept to the axes top.
-HIGHLIGHT_ARROW_HEAD_ASPECT = 0.45
-HIGHLIGHT_ARROW_HEAD_MIN_PX = 10
-HIGHLIGHT_ARROW_HEAD_MAX_PX = 22
-HIGHLIGHT_ARROW_SHAFT_PX = 20
-HIGHLIGHT_ARROW_SHAFT_WIDTH_PT = 7.0
+# Every arrow has the same size, whatever it marks. Its head width is a
+# fraction of the tallest drawn element, so it scales with the zoom, but on
+# screen it stays within a pixel range: visible when zoomed out, unobtrusive
+# when zoomed in.
+HIGHLIGHT_ARROW_WIDTH_FACTOR = 0.2
+HIGHLIGHT_ARROW_MIN_WIDTH_PX = 20
+HIGHLIGHT_ARROW_MAX_WIDTH_PX = 48
+# Arrow proportions on screen as fractions of the head width, so the aspect
+# ratio never changes; and the gap kept to the axes top.
+HIGHLIGHT_ARROW_HEAD_HEIGHT_RATIO = 0.5
+HIGHLIGHT_ARROW_SHAFT_WIDTH_RATIO = 0.5
+HIGHLIGHT_ARROW_SHAFT_LENGTH_RATIO = 1.0
 HIGHLIGHT_ARROW_TOP_PAD_PX = 4
+# Click selection: how close a click must be to a surface line to pick it, and
+# how far a left press and release may drift apart and still be a click rather
+# than a pan (2D) or a camera drag (3D).
+PICK_RADIUS_PX = 6.0
+CLICK_MOVE_TOLERANCE_PX = 3.0
+# vtkCellPicker tolerance as a fraction of the render window diagonal.
+PICK_TOLERANCE_3D = 0.005
 
 
 def _luminance(color) -> float:
@@ -738,6 +815,97 @@ def effective_surface_index(
     if surface_index in removed:
         return None
     return surface_index - sum(1 for index in removed if index < surface_index)
+
+
+def editor_surface_index(
+    drawn_index: int, disabled: set[int], surface_count: int
+) -> int | None:
+    """Map a surface of the drawn optic back onto its Lens Data Editor row.
+
+    The inverse of :func:`effective_surface_index`: the drawn optic omits the
+    disabled rows, so the *drawn_index*-th drawn surface is the
+    *drawn_index*-th row that is not disabled. Returns ``None`` when the drawn
+    optic has no such surface.
+    """
+    removed = {index for index in disabled if 0 < index < surface_count - 1}
+    kept = [index for index in range(surface_count) if index not in removed]
+    if 0 <= drawn_index < len(kept):
+        return kept[drawn_index]
+    return None
+
+
+def _disabled_surface_indices(connector) -> set[int]:
+    """Disabled editor rows, or none when the connector keeps no such state."""
+    getter = getattr(connector, "get_disabled_surface_indices", None)
+    if not callable(getter):
+        return set()
+    try:
+        return {int(index) for index in getter()}
+    except TypeError:
+        return set()
+
+
+def editor_rows_for_drawn_surfaces(
+    connector, optic, surfaces, *, as_element: bool = False
+) -> list[int]:
+    """Lens Data Editor rows of *surfaces* of the drawn *optic*.
+
+    With ``as_element`` the result spans every row from the first to the last
+    of those surfaces, so the internal surfaces of a lens count even when the
+    layout hides them.
+    """
+    drawn = list(optic.surfaces.surfaces)
+    positions = sorted(
+        index
+        for index, surface in enumerate(drawn)
+        if any(surface is target for target in surfaces)
+    )
+    if not positions:
+        return []
+    disabled = _disabled_surface_indices(connector)
+    surface_count = connector.get_surface_count() if disabled else len(drawn)
+    rows = [
+        row
+        for row in (
+            editor_surface_index(position, disabled, surface_count)
+            for position in positions
+        )
+        if row is not None
+    ]
+    if not rows:
+        return []
+    if as_element:
+        return list(range(rows[0], rows[-1] + 1))
+    return rows
+
+
+def _polyline_distance_px(points, x: float, y: float) -> float:
+    """Distance from ``(x, y)`` to the polyline through *points*, all in pixels.
+
+    Non-finite vertices break the polyline, as they do when it is drawn.
+    """
+    points = np.asarray(points, dtype=float)
+    if points.ndim != 2 or points.shape[0] == 0:
+        return math.inf
+    finite = np.flatnonzero(np.isfinite(points).all(axis=1))
+    if finite.size == 0:
+        return math.inf
+    target = np.array([x, y], dtype=float)
+    best = math.inf
+    for run in np.split(finite, np.flatnonzero(np.diff(finite) > 1) + 1):
+        vertices = points[run]
+        if vertices.shape[0] == 1:
+            best = min(best, float(np.hypot(*(vertices[0] - target))))
+            continue
+        start, end = vertices[:-1], vertices[1:]
+        direction = end - start
+        length_sq = np.einsum("ij,ij->i", direction, direction)
+        safe = np.where(length_sq > 0, length_sq, 1.0)
+        t = np.einsum("ij,ij->i", target - start, direction) / safe
+        t = np.clip(np.where(length_sq > 0, t, 0.0), 0.0, 1.0)
+        closest = start + t[:, None] * direction
+        best = min(best, float(np.sqrt(((closest - target) ** 2).sum(axis=1)).min()))
+    return best
 
 
 class _HighlightableLens2D(Lens2D):
@@ -788,6 +956,8 @@ class MatplotlibViewer(QWidget):
     """
 
     settingsApplied = Signal()
+    # Lens Data Editor rows of the element or surface clicked in the layout.
+    surfacesPicked = Signal(list)
 
     def __init__(self, connector: OptilandConnector, parent=None):
         """
@@ -806,6 +976,10 @@ class MatplotlibViewer(QWidget):
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(5)
+        self._main_layout = main_layout
+        # A host may take the settings panel out of this layout to show it
+        # beside several views; visibility is then the host's business.
+        self._settings_area_detached = False
 
         viewer_widget = QWidget()
         self.layout = QVBoxLayout(viewer_widget)
@@ -1055,7 +1229,7 @@ class MatplotlibViewer(QWidget):
         self.settings_toggle_btn = QToolButton()
         self.settings_toggle_btn.setToolTip("Toggle Viewer Settings")
         self.settings_toggle_btn.setCheckable(True)
-        self.settings_toggle_btn.toggled.connect(self.settings_area.setVisible)
+        self.settings_toggle_btn.toggled.connect(self._on_settings_toggled)
         self.toolbar.addWidget(self.settings_toggle_btn)
 
         QShortcut(QKeySequence.StandardKey.Print, self, activated=self._print_layout)
@@ -1127,6 +1301,10 @@ class MatplotlibViewer(QWidget):
         # Initialize panning state variables
         self._active_pan_button = None
         self._is_panning = False
+        # Where the left button went down and whether the drag has left
+        # that spot, to tell a click from a pan.
+        self._press_pixel: tuple[float, float] | None = None
+        self._pan_moved = False
         self._enforce_equal_xy_on_toolbar_release = False
         self._adjusting_equal_xy_limits = False
 
@@ -1594,10 +1772,12 @@ class MatplotlibViewer(QWidget):
                     self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
                     return
 
-            # Normal pan
+            # Normal pan; a release that never moved is a click instead
             event.inaxes.start_pan(event.x, event.y, event.button)
             self._active_pan_button = event.button
             self._is_panning = True
+            self._press_pixel = (float(event.x), float(event.y))
+            self._pan_moved = False
             self.canvas.setCursor(Qt.CursorShape.ClosedHandCursor)
 
     def on_mouse_button_release(self, event):
@@ -1621,14 +1801,20 @@ class MatplotlibViewer(QWidget):
                 self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
                 return
 
+            press = self._press_pixel if self._is_panning else None
             if self._is_panning and event.inaxes:
                 event.inaxes.end_pan()
                 if self._preserve_xy_ratio:
                     self._apply_equal_xy_limits(self.ax.get_xlim(), self.ax.get_ylim())
                     self.canvas.draw_idle()
+            clicked = press is not None and not self._pan_moved
             self._is_panning = False
             self._active_pan_button = None
+            self._press_pixel = None
+            self._pan_moved = False
             self.canvas.setCursor(Qt.CursorShape.ArrowCursor)
+            if clicked:
+                self._emit_picked_surfaces(*press)
 
     def on_mouse_move_on_plot(self, event):
         """
@@ -1675,6 +1861,7 @@ class MatplotlibViewer(QWidget):
             return
 
         if self._is_panning and event.inaxes and self._active_pan_button is not None:
+            self._note_pan_movement(event.x, event.y)
             event.inaxes.drag_pan(self._active_pan_button, event.key, event.x, event.y)
             self.canvas.draw_idle()
             if self._measure_anchor is not None and self._measure_target is None:
@@ -1881,6 +2068,21 @@ class MatplotlibViewer(QWidget):
         self.plot_optic()
         self.settingsApplied.emit()
 
+    def detach_settings_area(self) -> QWidget:
+        """Hand the settings panel to a host that shows it beside other views.
+
+        The controls stay this viewer's, since they hold the layout state, but
+        the panel leaves this viewer's layout and ``settings_toggle_btn`` no
+        longer shows or hides it: the host decides that from the button state.
+        """
+        self._settings_area_detached = True
+        self._main_layout.removeWidget(self.settings_area)
+        return self.settings_area
+
+    def _on_settings_toggled(self, checked: bool) -> None:
+        if not self._settings_area_detached:
+            self.settings_area.setVisible(checked)
+
     def _apply_equal_xy_limits(
         self, xlim: tuple[float, float], ylim: tuple[float, float]
     ) -> None:
@@ -1967,12 +2169,12 @@ class MatplotlibViewer(QWidget):
         """Forget the artists of the previous draw; ``ax.clear`` removed them."""
         self._layout_optic = None
         self._layout_artists: dict = {}
-        self._layout_marker_y: float | None = None
+        self._layout_marker_anchor: tuple[float, float] | None = None
         self._highlight_artists: list = []
         self._highlight_restores: list[tuple] = []
-        # (arrow, z_lo, z_hi): each marker with the data extent it points at,
+        # (arrow, z_center): each marker with the data position it points at,
         # so its on-screen shape can be re-fitted whenever the zoom changes.
-        self._highlight_markers: list[tuple[Polygon, float, float]] = []
+        self._highlight_markers: list[tuple[Polygon, float]] = []
         self._refreshing_highlight_markers = False
 
     def _clear_highlight(self) -> None:
@@ -2011,13 +2213,7 @@ class MatplotlibViewer(QWidget):
             self._clear_highlight()
 
     def _disabled_surface_indices(self) -> set[int]:
-        getter = getattr(self.connector, "get_disabled_surface_indices", None)
-        if not callable(getter):
-            return set()
-        try:
-            return {int(index) for index in getter()}
-        except TypeError:
-            return set()
+        return _disabled_surface_indices(self.connector)
 
     def _highlighted_layout_surfaces(self) -> list:
         """Surfaces of the drawn optic that the highlighted editor rows refer to."""
@@ -2133,17 +2329,20 @@ class MatplotlibViewer(QWidget):
         )
         self._draw_highlight_marker(np.concatenate(zs), marker_color)
 
-    def _highlight_marker_y(self) -> float | None:
-        """The common height of every marker tip in this draw.
+    def _highlight_marker_anchor(self) -> tuple[float, float] | None:
+        """The common tip height of every marker and the height it derives from.
 
         All arrows point down from one line at 110 % of the height (top to
         bottom) of the tallest drawn component, a lens polygon or a
         standalone surface line. Should the layout sit high above the axis,
         the line is at least 10 % of that height above the layout top. The
-        value is cached per draw.
+        tallest height also sizes the arrows. Both values are cached per draw.
+
+        Returns:
+            ``(tip_y, tallest_height)``, or None when nothing is drawn.
         """
-        if self._layout_marker_y is not None:
-            return self._layout_marker_y
+        if self._layout_marker_anchor is not None:
+            return self._layout_marker_anchor
         spans: dict[int, list[np.ndarray]] = {}
         for artist, component in self._layout_artists.items():
             if isinstance(component, Lens2D) and hasattr(artist, "get_xy"):
@@ -2167,26 +2366,23 @@ class MatplotlibViewer(QWidget):
         if height <= 0:
             height = abs(top) or 1.0
         extra = (HIGHLIGHT_MARKER_HEIGHT_FACTOR - 1.0) * height
-        self._layout_marker_y = max(
-            HIGHLIGHT_MARKER_HEIGHT_FACTOR * height, top + extra
-        )
-        return self._layout_marker_y
+        tip_y = max(HIGHLIGHT_MARKER_HEIGHT_FACTOR * height, top + extra)
+        self._layout_marker_anchor = (tip_y, height)
+        return self._layout_marker_anchor
 
     def _draw_highlight_marker(self, z: np.ndarray, color) -> None:
-        """Add a downward arrow above the highlighted region.
+        """Add a downward arrow above the centre of the highlighted region.
 
-        The arrow head is 10 % wider than the region's z range and centred
-        on it; the on-screen shape is fitted by ``_refresh_highlight_markers``.
-        The polygon is added with ``add_artist`` so it neither moves the
-        data limits nor triggers an autoscale, which would shift the view
-        every time the selection changes.
+        The arrow does not depend on the region's width; its on-screen shape
+        is fitted by ``_refresh_highlight_markers``. The polygon is added
+        with ``add_artist`` so it neither moves the data limits nor triggers
+        an autoscale, which would shift the view every time the selection
+        changes.
         """
         finite = np.isfinite(z)
-        if self._highlight_marker_y() is None or not finite.any():
+        if self._highlight_marker_anchor() is None or not finite.any():
             return
-        z_min, z_max = float(z[finite].min()), float(z[finite].max())
-        center = 0.5 * (z_min + z_max)
-        half = 0.5 * HIGHLIGHT_MARKER_WIDTH_FACTOR * (z_max - z_min)
+        center = 0.5 * (float(z[finite].min()) + float(z[finite].max()))
         arrow = Polygon(
             np.zeros((7, 2)),
             closed=True,
@@ -2198,7 +2394,7 @@ class MatplotlibViewer(QWidget):
         )
         self.ax.add_artist(arrow)
         self._highlight_artists.append(arrow)
-        self._highlight_markers.append((arrow, center - half, center + half))
+        self._highlight_markers.append((arrow, center))
 
     def _connect_axes_limit_callbacks(self) -> None:
         """Register the limit callbacks; ``ax.clear`` drops them, so call after each.
@@ -2216,10 +2412,13 @@ class MatplotlibViewer(QWidget):
     def _refresh_highlight_markers(self) -> None:
         """Fit every arrow to the current zoom.
 
-        The head keeps its data width unless that is narrower than the
-        pixel minimum. Head height, shaft and the gap to the axes top are
-        pixel sizes, so the arrows look alike at every zoom level. An arrow
-        that would leave the axes at the top is pulled down to stay visible.
+        All arrows share one size: the head width is a fraction of the
+        tallest drawn element, so it grows and shrinks with the zoom, but
+        stays within the pixel range. Head height, shaft width and shaft
+        length are fixed fractions of that width on screen, so the aspect
+        ratio is the same at every zoom level, even with unequal X/Y scales.
+        An arrow that would leave the axes at the top is pulled down to stay
+        visible.
 
         Vertex order of the polygon: tip, right head corner, right shaft
         bottom, right shaft top, left shaft top, left shaft bottom, left
@@ -2232,36 +2431,32 @@ class MatplotlibViewer(QWidget):
             x0, x1 = self.ax.get_xlim()  # also settles a pending autoscale
             y0, y1 = self.ax.get_ylim()
             bbox = self.ax.bbox
-            tip_y = self._highlight_marker_y()
+            anchor = self._highlight_marker_anchor()
             if (
-                tip_y is None
+                anchor is None
                 or x1 == x0
                 or y1 == y0
                 or bbox.width <= 0
                 or bbox.height <= 0
             ):
                 return
+            tip_y, tallest = anchor
             ppx = bbox.width / abs(x1 - x0)  # pixels per data unit along z
             ppy = bbox.height / abs(y1 - y0)  # pixels per data unit along y
-            shaft = HIGHLIGHT_ARROW_SHAFT_PX / ppy
-            shaft_half_px = (
-                0.5 * HIGHLIGHT_ARROW_SHAFT_WIDTH_PT * self.figure.dpi / 72.0
+            width_px = min(
+                max(
+                    HIGHLIGHT_ARROW_WIDTH_FACTOR * tallest * ppy,
+                    HIGHLIGHT_ARROW_MIN_WIDTH_PX,
+                ),
+                HIGHLIGHT_ARROW_MAX_WIDTH_PX,
             )
+            head_half = 0.5 * width_px / ppx
+            shaft_half = 0.5 * HIGHLIGHT_ARROW_SHAFT_WIDTH_RATIO * width_px / ppx
+            head = HIGHLIGHT_ARROW_HEAD_HEIGHT_RATIO * width_px / ppy
+            shaft = HIGHLIGHT_ARROW_SHAFT_LENGTH_RATIO * width_px / ppy
             top_limit = max(y0, y1) - HIGHLIGHT_ARROW_TOP_PAD_PX / ppy
-            for arrow, z_lo, z_hi in self._highlight_markers:
-                width_px = max((z_hi - z_lo) * ppx, HIGHLIGHT_MARKER_MIN_WIDTH_PX)
-                head_px = min(
-                    max(
-                        HIGHLIGHT_ARROW_HEAD_ASPECT * width_px,
-                        HIGHLIGHT_ARROW_HEAD_MIN_PX,
-                    ),
-                    HIGHLIGHT_ARROW_HEAD_MAX_PX,
-                )
-                center = 0.5 * (z_lo + z_hi)
-                head_half = 0.5 * width_px / ppx
-                shaft_half = min(shaft_half_px, 0.5 * width_px * 0.5) / ppx
-                head = head_px / ppy
-                tip = min(tip_y, top_limit - head - shaft)
+            tip = min(tip_y, top_limit - head - shaft)
+            for arrow, center in self._highlight_markers:
                 arrow.set_xy(
                     [
                         (center, tip),
@@ -2275,6 +2470,105 @@ class MatplotlibViewer(QWidget):
                 )
         finally:
             self._refreshing_highlight_markers = False
+
+    # ------------------------------------------------------------------
+    # Click selection
+    # ------------------------------------------------------------------
+
+    def _note_pan_movement(self, x_px: float, y_px: float) -> None:
+        """Record that the pan has left the pixel the button went down on.
+
+        A press and release at one spot is a click; anything the user drags,
+        however little, pans and selects nothing.
+        """
+        press = self._press_pixel
+        if press is None or self._pan_moved:
+            return
+        if math.hypot(x_px - press[0], y_px - press[1]) > CLICK_MOVE_TOLERANCE_PX:
+            self._pan_moved = True
+
+    def _emit_picked_surfaces(self, x_px: float, y_px: float) -> None:
+        try:
+            rows = self.pick_surfaces_at(x_px, y_px)
+        except Exception:
+            # Picking is a convenience; never let it take the layout down.
+            logger.debug("2D layout pick failed", exc_info=True)
+            return
+        if rows:
+            self.surfacesPicked.emit(rows)
+
+    @staticmethod
+    def _drawn_surface_of(component, drawn_ids: set[int]):
+        """The optic surface a layout line stands for, or ``None``."""
+        if isinstance(component, Surface2D):
+            return component.surf
+        if id(component) in drawn_ids:
+            return component  # aperture markers map straight to their surface
+        return None
+
+    def pick_surfaces_at(self, x_px: float, y_px: float) -> list[int]:
+        """Lens Data Editor rows of what is drawn at a canvas pixel.
+
+        Within ``PICK_RADIUS_PX`` of a surface line -- a standalone surface, an
+        aperture marker or the profile of a lens surface -- the nearest such
+        surface is picked on its own. Otherwise a point inside a lens body
+        picks the whole element, as the range of rows from its first to its
+        last surface. Anything else picks nothing.
+        """
+        optic = self._layout_optic
+        if optic is None or not self._layout_artists:
+            return []
+        drawn_ids = {id(surface) for surface in optic.surfaces.surfaces}
+        nearest: tuple[float, object] | None = None
+
+        def consider(points, surface) -> None:
+            nonlocal nearest
+            distance = _polyline_distance_px(points, x_px, y_px)
+            closer = nearest is None or distance < nearest[0]
+            if distance <= PICK_RADIUS_PX and closer:
+                nearest = (distance, surface)
+
+        to_pixels = self.ax.transData.transform
+        for artist, component in self._layout_artists.items():
+            if not isinstance(artist, Line2D):
+                continue
+            surface = self._drawn_surface_of(component, drawn_ids)
+            if surface is None:
+                continue
+            xy = np.column_stack(
+                [
+                    np.asarray(artist.get_xdata(), dtype=float),
+                    np.asarray(artist.get_ydata(), dtype=float),
+                ]
+            )
+            consider(to_pixels(xy), surface)
+        for component in self._layout_components():
+            if not isinstance(component, Lens2D):
+                continue
+            sags = component._compute_sag(projection=_LAYOUT_PROJECTION)
+            for member, (_, y, z) in zip(component.surfaces, sags, strict=False):
+                zy = np.column_stack(
+                    [
+                        np.asarray(be.to_numpy(z), dtype=float),
+                        np.asarray(be.to_numpy(y), dtype=float),
+                    ]
+                )
+                consider(to_pixels(zy), member.surf)
+        if nearest is not None:
+            return editor_rows_for_drawn_surfaces(self.connector, optic, [nearest[1]])
+        for artist, component in self._layout_artists.items():
+            if (
+                isinstance(component, Lens2D)
+                and isinstance(artist, Polygon)
+                and artist.contains_point((x_px, y_px))
+            ):
+                return editor_rows_for_drawn_surfaces(
+                    self.connector,
+                    optic,
+                    [member.surf for member in component.surfaces],
+                    as_element=True,
+                )
+        return []
 
     def _print_layout(self) -> None:
         """Open a print preview dialog for the 2D layout.
@@ -2814,6 +3108,9 @@ class VTKViewer(QWidget):
         iren (vtkRenderWindowInteractor): The interactor for camera manipulation.
     """
 
+    # Lens Data Editor rows of the element or surface clicked in the 3D view.
+    surfacesPicked = Signal(list)
+
     def __init__(self, connector: OptilandConnector, parent=None):
         """
         Initializes the VTKViewer.
@@ -2830,6 +3127,13 @@ class VTKViewer(QWidget):
         self._last_hide_vignetted = False
         self._show_stop_apertures = True
         self._show_non_stop_apertures = True
+        # Actors of the last render mapped to what they show: the lens or
+        # surface component, or the surface of an aperture disk (see
+        # OpticalSystem.plot), plus the optic they were drawn from.
+        self._layout_actors: dict = {}
+        self._layout_optic = None
+        # Where the left button went down, to tell a click from a camera drag.
+        self._press_position: tuple[int, int] | None = None
         if not VTK_AVAILABLE:
             self.layout = QVBoxLayout(self)
             self.layout.addWidget(QLabel("VTK is not available."))
@@ -2846,6 +3150,7 @@ class VTKViewer(QWidget):
         self.iren.SetInteractorStyle(vtk.vtkInteractorStyleTrackballCamera())
         self.setup_default_camera()
         self.iren.Initialize()
+        self._observe_clicks()
         self._busy_overlay = BusyOverlay(self)
 
     def setup_default_camera(self):
@@ -2938,6 +3243,8 @@ class VTKViewer(QWidget):
         """Synchronous VTK render — must stay on the main thread (OpenGL context)."""
         try:
             self.renderer.RemoveAllViewProps()
+            self._layout_actors = {}
+            self._layout_optic = None
             optic = self.connector.get_effective_optic()
             if (
                 optic
@@ -2975,12 +3282,17 @@ class VTKViewer(QWidget):
                             _notify_viewer_issue(
                                 self.connector, "rays", _describe_ray_trace_error(exc)
                             )
-                    system_plotter.plot(
-                        self.renderer,
-                        theme=theme,
-                        show_stop_apertures=self._show_stop_apertures,
-                        show_non_stop_apertures=self._show_non_stop_apertures,
+                    self._layout_actors = (
+                        system_plotter.plot(
+                            self.renderer,
+                            theme=theme,
+                            show_stop_apertures=self._show_stop_apertures,
+                            show_non_stop_apertures=self._show_non_stop_apertures,
+                        )
+                        or {}
                     )
+                    self._layout_optic = optic
+                    self._restrict_picking_to_layout()
                     if ray_error is not None:
                         textActor = vtk.vtkTextActor()
                         textActor.SetInput(f"Rays hidden: {ray_error}")
@@ -3027,3 +3339,79 @@ class VTKViewer(QWidget):
             self.vtkWidget.GetRenderWindow().Render()
         finally:
             self._busy_overlay.hide_busy()
+
+    # ------------------------------------------------------------------
+    # Click selection
+    # ------------------------------------------------------------------
+
+    def _observe_clicks(self) -> None:
+        """Watch left presses and releases to tell a click from a camera drag.
+
+        The trackball style grabs the interactor's focus on the press, after
+        which only passive observers still hear the release; being passive also
+        keeps these observers from disturbing the style.
+        """
+        for event, handler in (
+            ("LeftButtonPressEvent", self._on_left_button_press),
+            ("LeftButtonReleaseEvent", self._on_left_button_release),
+        ):
+            tag = self.iren.AddObserver(event, handler)
+            self.iren.GetCommand(tag).SetPassiveObserver(True)
+
+    def _on_left_button_press(self, *_args) -> None:
+        self._press_position = tuple(self.iren.GetEventPosition())
+
+    def _on_left_button_release(self, *_args) -> None:
+        press, self._press_position = self._press_position, None
+        if press is None:
+            return
+        x, y = self.iren.GetEventPosition()
+        if math.hypot(x - press[0], y - press[1]) > CLICK_MOVE_TOLERANCE_PX:
+            return  # a camera drag, however short
+        try:
+            rows = self.pick_surfaces_at(*press)
+        except Exception:
+            # Picking is a convenience; never let it take the view down.
+            logger.debug("3D layout pick failed", exc_info=True)
+            return
+        if rows:
+            self.surfacesPicked.emit(rows)
+
+    def _create_picker(self):
+        """A picker that hits geometry, translucent lenses included."""
+        picker = vtk.vtkCellPicker()
+        picker.SetTolerance(PICK_TOLERANCE_3D)
+        return picker
+
+    def _restrict_picking_to_layout(self) -> None:
+        """Let only layout actors answer picks, so rays never get in the way."""
+        actors = self.renderer.GetActors()
+        actors.InitTraversal()
+        while (actor := actors.GetNextActor()) is not None:
+            actor.SetPickable(actor in self._layout_actors)
+
+    def pick_surfaces_at(self, x: int, y: int) -> list[int]:
+        """Lens Data Editor rows of what is drawn at a display pixel.
+
+        A lens body picks the whole element, as the range of rows from its
+        first to its last surface; a standalone surface or an aperture disk
+        picks that one surface. Anything else picks nothing.
+        """
+        optic = self._layout_optic
+        if optic is None or not self._layout_actors:
+            return []
+        picker = self._create_picker()
+        if not picker.Pick(x, y, 0, self.renderer):
+            return []
+        target = self._layout_actors.get(picker.GetActor())
+        if target is None:
+            return []
+        if isinstance(target, Lens2D):  # Lens3D derives from Lens2D
+            return editor_rows_for_drawn_surfaces(
+                self.connector,
+                optic,
+                [member.surf for member in target.surfaces],
+                as_element=True,
+            )
+        surface = target.surf if isinstance(target, Surface2D) else target
+        return editor_rows_for_drawn_surfaces(self.connector, optic, [surface])

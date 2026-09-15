@@ -242,6 +242,7 @@ class PanelManager:
         self.lens_editor.surfaceSelectionChanged.connect(
             self.viewer_panel.set_highlighted_surfaces
         )
+        self.viewer_panel.surfacesPicked.connect(self.lens_editor.select_surfaces)
 
     def _on_sidebar_wip_message(self, message: str) -> None:
         """Forward a WIP message from the sidebar to the toast manager.

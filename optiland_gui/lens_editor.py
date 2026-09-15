@@ -2564,6 +2564,53 @@ class LensEditor(QWidget):
         """Publish the selection when only the current cell moved."""
         self._emit_surface_selection()
 
+    @Slot(list)
+    def select_surfaces(self, surface_indices) -> None:  # noqa: ANN001
+        """Select the rows of *surface_indices*, e.g. after a click in a layout.
+
+        A surface of a collapsed element is selected through that element's
+        summary row, which stands for all of its members.
+        """
+        rows = self._visible_rows_for_surfaces(surface_indices)
+        if not rows:
+            return
+        table = self.tableWidget
+        table.clearSelection()
+        table.setRangeSelected(
+            QTableWidgetSelectionRange(rows[0], 0, rows[-1], table.columnCount() - 1),
+            True,
+        )
+        column = self.connector.COL_TYPE
+        table.selectionModel().setCurrentIndex(
+            table.model().index(rows[0], column),
+            QItemSelectionModel.SelectionFlag.NoUpdate,
+        )
+        self._remember_active_cell(rows[0], column)
+        item = table.item(rows[0], column)
+        if item is not None:
+            table.scrollToItem(item, QAbstractItemView.PositionAtCenter)
+
+    def _visible_rows_for_surfaces(self, surface_indices) -> list[int]:  # noqa: ANN001
+        """Table rows for *surface_indices*, skipping what the table does not show."""
+        surface_count = self.connector.get_surface_count()
+        wanted: set[int] = set()
+        for index in surface_indices:
+            index = int(index)
+            if not 0 <= index < surface_count:
+                continue
+            group_rows = self.connector.get_group_rows(index)
+            if group_rows and self._is_collapsed_summary_surface_row(group_rows[0]):
+                index = group_rows[0]
+            wanted.add(index)
+        rows = []
+        for index in sorted(wanted):
+            ui_row = self.map_surface_index_to_ui_row(index)
+            if 0 <= ui_row < self.tableWidget.rowCount() and not (
+                self.tableWidget.isRowHidden(ui_row)
+            ):
+                rows.append(ui_row)
+        return rows
+
     def _emit_surface_selection(self) -> None:
         """Publish the current selection for the layout highlight."""
         surfaces, is_element = self._surface_selection()

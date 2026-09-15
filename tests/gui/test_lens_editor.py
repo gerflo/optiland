@@ -1679,3 +1679,61 @@ def test_focus_cell_survives_commit_triggered_rebuild(qapp, mock_connector):
     assert editor._focus_cell(row, col, edit=False)
     assert table.currentRow() == row
     assert table.currentColumn() == col
+
+
+def test_lens_editor_select_surfaces_selects_rows_and_publishes_them(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    editor = LensEditor(mock_connector)
+    published: list[tuple[list[int], bool]] = []
+    editor.surfaceSelectionChanged.connect(
+        lambda surfaces, is_element: published.append((surfaces, is_element))
+    )
+
+    editor.select_surfaces([1, 2])
+
+    table = editor.tableWidget
+    assert sorted({index.row() for index in table.selectedIndexes()}) == [1, 2]
+    assert table.currentRow() == 1
+    assert published[-1] == ([1, 2], False)
+
+
+def test_lens_editor_select_surfaces_uses_the_collapsed_element_row(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    editor = LensEditor(mock_connector)
+    assert editor.tableWidget.isRowHidden(2) is True
+    published: list[tuple[list[int], bool]] = []
+    editor.surfaceSelectionChanged.connect(
+        lambda surfaces, is_element: published.append((surfaces, is_element))
+    )
+
+    editor.select_surfaces([1, 2])
+
+    # The hidden member row is not selected; the summary row stands for both.
+    table = editor.tableWidget
+    assert sorted({index.row() for index in table.selectedIndexes()}) == [1]
+    assert published[-1] == ([1, 2], True)
+
+
+def test_lens_editor_select_surfaces_ignores_rows_it_cannot_show(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+
+    editor = LensEditor(mock_connector)
+    editor.select_surfaces([3])
+
+    editor.select_surfaces([7, -1])
+    editor.select_surfaces([])
+
+    table = editor.tableWidget
+    assert sorted({index.row() for index in table.selectedIndexes()}) == [3]
