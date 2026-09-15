@@ -783,48 +783,54 @@ def _make_2d_viewer_with_dimensions(monkeypatch, optic):  # noqa: ANN001, ANN202
     return viewer
 
 
-def test_viewer_dimensions_stay_under_the_axes_within_their_width_when_zoomed(
+def _assert_inside_axes(viewer, artists) -> None:  # noqa: ANN001
+    renderer = viewer.canvas.get_renderer()
+    axes_box = viewer.ax.bbox
+    for artist in artists:
+        assert artist.get_clip_on()
+        extent = artist.get_window_extent(renderer)
+        assert axes_box.y0 <= extent.y0
+        assert extent.y1 <= axes_box.y1
+
+
+def test_viewer_dimensions_sit_just_below_the_optic_inside_the_axes(
     qapp, minimal_optic, monkeypatch
 ) -> None:
     viewer = _make_2d_viewer_with_dimensions(monkeypatch, minimal_optic)
+    viewer.canvas.draw()
     lines, labels = _dimension_artists(viewer)
     assert len(lines) == 2
     assert len(labels) == 2
 
-    # Zoom in on the image plane: the 0-5 mm dimension now lies left of the view.
-    viewer.ax.set_xlim(40.0, 55.0)
-    viewer.ax.set_ylim(-2.0, 2.0)
-    viewer.canvas.draw()
-
     renderer = viewer.canvas.get_renderer()
-    axes_box = viewer.ax.bbox
-    for artist in (*lines, *labels):
-        assert artist.get_clip_on()
-        clip_box = artist.get_clip_box()
-        assert clip_box.x0 == pytest.approx(axes_box.x0)
-        assert clip_box.x1 == pytest.approx(axes_box.x1)
-        assert artist.get_window_extent(renderer).y1 < axes_box.y0
+    optic_bottom_px = min(
+        artist.get_window_extent(renderer).y0 for artist in viewer._layout_artists
+    )
+    for line in lines:
+        gap_px = optic_bottom_px - line.get_window_extent(renderer).y1
+        assert 0.0 < gap_px <= 20.0
+    _assert_inside_axes(viewer, (*lines, *labels))
 
 
-def test_viewer_dimensions_do_not_stretch_the_y_range(
+def test_viewer_dimensions_stay_inside_the_axes_when_the_optic_leaves_the_view(
     qapp, minimal_optic, monkeypatch
 ) -> None:
-    viewer = _make_2d_viewer(monkeypatch, minimal_optic)
-    viewer.preserve_xy_ratio_checkbox.setChecked(False)
-    viewer._plot_optic_sync()
-    ylim_without_dimensions = viewer.ax.get_ylim()
+    viewer = _make_2d_viewer_with_dimensions(monkeypatch, minimal_optic)
+    lines, labels = _dimension_artists(viewer)
 
-    viewer.display_y_measures_checkbox.setChecked(True)
-    viewer._plot_optic_sync()
+    # Zoomed in on the image plane with the optic below, then above the view.
+    for ylim in ((20.0, 40.0), (-40.0, -20.0)):
+        viewer.ax.set_xlim(40.0, 55.0)
+        viewer.ax.set_ylim(*ylim)
+        viewer.canvas.draw()
 
-    assert viewer.ax.get_ylim() == pytest.approx(ylim_without_dimensions)
+        _assert_inside_axes(viewer, (*lines, *labels))
 
 
 def test_viewer_bottom_margin_keeps_its_height_when_the_viewer_grows(
     qapp, minimal_optic, monkeypatch
 ) -> None:
     viewer = _make_2d_viewer_with_dimensions(monkeypatch, minimal_optic)
-    _, labels = _dimension_artists(viewer)
     axes_bottom_px = viewer.ax.bbox.y0
 
     viewer.figure.set_size_inches(5.0, 8.0, forward=False)
@@ -833,10 +839,9 @@ def test_viewer_bottom_margin_keeps_its_height_when_the_viewer_grows(
 
     # The extra height goes to the axes, not to the strip below them ...
     assert viewer.ax.bbox.y0 == pytest.approx(axes_bottom_px, abs=1.0)
-    # ... and that strip ends just below the lowest dimension label.
+    # ... which only holds the x-axis tick labels and label.
     renderer = viewer.canvas.get_renderer()
-    lowest_px = min(label.get_window_extent(renderer).y0 for label in labels)
-    assert 0.0 <= lowest_px <= 15.0
+    assert 0.0 <= viewer.ax.xaxis.label.get_window_extent(renderer).y0 <= 15.0
 
 
 # ---------------------------------------------------------------------------
