@@ -88,6 +88,8 @@ class MMDFTPSF(BasePSF):
         )
 
         clear_size = num_rays - 1
+        # The argument may still be a name such as "primary"; BasePSF resolved it.
+        wavelength = self.wavelengths[0].value
 
         # General idea for below:
         #  - If only pixel_pitch is None, calculate based off of image_size, assuming

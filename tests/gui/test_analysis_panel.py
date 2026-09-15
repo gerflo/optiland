@@ -515,17 +515,12 @@ _FIXED_SHAPE_ANALYSES = frozenset(
 def _registered_analyses():
     from optiland_gui.services.analysis_runner import AnalysisRunner
 
-    params = []
-    for _category, name, analysis_class in AnalysisRunner(None).get_analysis_registry():
-        marks = ()
-        if name == "MMDFT PSF":
-            marks = pytest.mark.xfail(
-                raises=TypeError,
-                strict=True,
-                reason="MMDFTPSF does not resolve the default wavelength 'primary'",
-            )
-        params.append(pytest.param(name, analysis_class, id=name, marks=marks))
-    return params
+    return [
+        pytest.param(name, analysis_class, id=name)
+        for _category, name, analysis_class in AnalysisRunner(
+            None
+        ).get_analysis_registry()
+    ]
 
 
 class TestPlotsFillTheirSpace:

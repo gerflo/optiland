@@ -78,6 +78,19 @@ def make_mmdftpsf_and_fftpsf(set_test_backend):
     return _factory
 
 
+@pytest.mark.parametrize(
+    "image_size, pixel_pitch", [(None, None), (None, 1.0)], ids=["sampling", "pitch"]
+)
+def test_primary_wavelength_by_name(make_mmdftpsf, image_size, pixel_pitch):
+    # The Analysis panel asks for the PSF at wavelength "primary".
+    sampling = {"image_size": image_size, "pixel_pitch": pixel_pitch}
+    by_name = make_mmdftpsf(wavelength="primary", **sampling)
+    by_value = make_mmdftpsf(wavelength=CookeTriplet().primary_wavelength, **sampling)
+
+    assert by_name.image_size == by_value.image_size
+    assert_allclose(by_name.pixel_pitch, by_value.pixel_pitch)
+
+
 def test_initialization(make_mmdftpsf):
     mmdftpsf = make_mmdftpsf(image_size=1024)
     assert mmdftpsf.image_size == 1024
