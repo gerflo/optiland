@@ -494,6 +494,79 @@ class TestPlotZoom:
         assert (ax.get_xlim(), ax.get_ylim()) != limits
 
 
+# Canvas sizes in inches: like the docked panel, a wide and a tall window.
+_PANEL_SHAPES = {"panel": (8.0, 6.0), "wide": (12.0, 5.0), "tall": (6.0, 9.0)}
+# These draw images pixel for pixel or spots in square boxes: each axes keeps
+# its shape, so it can fill its layout box in one direction only.
+_FIXED_SHAPE_ANALYSES = frozenset(
+    {
+        "Spot Diagram",
+        "Through-Focus Spot",
+        "OPD",
+        "Zernike OPD",
+        "FFT PSF",
+        "Huygens PSF",
+        "MMDFT PSF",
+        "Incoherent Irradiance",
+    }
+)
+
+
+def _registered_analyses():
+    from optiland_gui.services.analysis_runner import AnalysisRunner
+
+    params = []
+    for _category, name, analysis_class in AnalysisRunner(None).get_analysis_registry():
+        marks = ()
+        if name == "MMDFT PSF":
+            marks = pytest.mark.xfail(
+                raises=TypeError,
+                strict=True,
+                reason="MMDFTPSF does not resolve the default wavelength 'primary'",
+            )
+        params.append(pytest.param(name, analysis_class, id=name, marks=marks))
+    return params
+
+
+class TestPlotsFillTheirSpace:
+    @pytest.mark.parametrize(("name", "analysis_class"), _registered_analyses())
+    def test_axes_use_all_the_space_the_layout_gives_them(
+        self, panel, name, analysis_class
+    ):
+        """Every analysis plot fills the canvas, whatever shape the panel has."""
+        import matplotlib.pyplot as plt
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        from optiland.samples.objectives import CookeTriplet
+
+        args, _ = panel._prepare_filtered_args(CookeTriplet(), analysis_class, name, {})
+        instance = analysis_class(**args)
+
+        try:
+            for shape, size in _PANEL_SHAPES.items():
+                canvas = FigureCanvasAgg(Figure(figsize=size, dpi=100))
+                panel._draw_plot_on_canvas(instance, canvas, {})
+                canvas.draw()
+                plot_axes = [
+                    ax
+                    for ax in canvas.figure.axes
+                    if ax.get_visible() and ax.axison and ax.get_label() != "<colorbar>"
+                ]
+                assert plot_axes
+                for ax in plot_axes:
+                    given = ax.get_position(original=True)
+                    drawn = ax.get_position()
+                    fill = (drawn.width / given.width, drawn.height / given.height)
+                    context = (shape, ax.get_title(), fill)
+                    if name in _FIXED_SHAPE_ANALYSES:
+                        assert max(fill) == pytest.approx(1.0, abs=0.01), context
+                    else:
+                        assert fill == pytest.approx((1.0, 1.0), abs=0.01), context
+        finally:
+            plt.close("all")
+
+
 @pytest.fixture()
 def surface_panel(mock_connector, minimal_optic, qapp):
     from optiland.analysis import FootprintDiagram, SpotDiagram

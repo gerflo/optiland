@@ -18,7 +18,7 @@ import numpy as _np
 
 import optiland.backend as be
 
-from .base import BaseAnalysis, surface_label
+from .base import BaseAnalysis, EqualAspectAxes, surface_label
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
@@ -175,16 +175,18 @@ class FootprintDiagram(BaseAnalysis):
         n_wl = len(self.wavelengths)
         colors = plt.cm.tab10.colors
 
+        subplot_kw = {"axes_class": EqualAspectAxes}
         if fig_to_plot_on is not None:
             fig = fig_to_plot_on
             fig.clear()
-            axs = fig.subplots(1, n_wl, squeeze=False)[0]
+            axs = fig.subplots(1, n_wl, squeeze=False, subplot_kw=subplot_kw)[0]
         else:
             fig, axs_2d = plt.subplots(
                 1,
                 n_wl,
                 figsize=(figsize[0] * n_wl, figsize[1]),
                 squeeze=False,
+                subplot_kw=subplot_kw,
             )
             axs = axs_2d[0]
 
@@ -208,9 +210,6 @@ class FootprintDiagram(BaseAnalysis):
             ax.set_xlabel("X (mm)")
             ax.set_ylabel("Y (mm)")
             ax.set_title(f"$\\lambda$ = {wp.value:.3f} µm")
-            # "box" keeps the aspect by resizing the axes, so a zoom that fixes
-            # both limits needs no data-limit override (and logs no warning).
-            ax.set_aspect("equal", adjustable="box")
             ax.grid(True, linewidth=0.4)
 
         # A field has the same colour in every subplot, so one legend beside

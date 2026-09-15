@@ -11,10 +11,47 @@ from __future__ import annotations
 import abc
 from typing import TYPE_CHECKING
 
+from matplotlib.axes import Axes
+
 from optiland.utils import resolve_wavelengths
 
 if TYPE_CHECKING:
+    from matplotlib.transforms import Bbox
+
     from optiland.optic import Optic
+
+
+class EqualAspectAxes(Axes):
+    """Axes that show x and y at the same scale and fill their layout box.
+
+    Pass it as ``axes_class`` when creating the subplot. The equal scale is
+    kept by widening one of the view limits (``adjustable="datalim"``) rather
+    than by shrinking the axes, so the plot uses all the space the figure
+    layout gives it, also after the toolbar zoomed or panned.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.set_aspect("equal", adjustable="datalim")
+
+    def apply_aspect(self, position: Bbox | None = None) -> None:
+        """Widen the view limits to equal scale, including limits a zoom fixed.
+
+        Matplotlib logs "Ignoring fixed x limits to fulfill fixed data aspect"
+        before widening limits that are not autoscaled, which every zoom
+        rectangle leaves behind. Widening them is intended here, so the limits
+        count as autoscaled while the aspect is applied.
+        """
+        # Pending autoscaling must not run on limits the user fixed.
+        self._unstale_viewLim()
+        autoscale = self.get_autoscalex_on(), self.get_autoscaley_on()
+        self.set_autoscalex_on(True)
+        self.set_autoscaley_on(True)
+        try:
+            super().apply_aspect(position)
+        finally:
+            self.set_autoscalex_on(autoscale[0])
+            self.set_autoscaley_on(autoscale[1])
 
 
 def surface_label(optic: Optic, surface_index: int) -> str:

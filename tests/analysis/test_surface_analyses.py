@@ -78,6 +78,37 @@ def test_footprint_plot_zooms_without_aspect_warnings(caplog) -> None:
         plt.close(figure)
 
 
+def _assert_axes_fill_their_box_at_equal_scale(figure) -> None:  # noqa: ANN001
+    for ax in figure.axes:
+        given = ax.get_position(original=True)
+        drawn = ax.get_position()
+        assert (drawn.width, drawn.height) == pytest.approx((given.width, given.height))
+        x0, x1 = ax.get_xlim()
+        y0, y1 = ax.get_ylim()
+        assert (x1 - x0) / ax.bbox.width == pytest.approx(
+            (y1 - y0) / ax.bbox.height, rel=0.01
+        )
+
+
+def test_footprint_axes_fill_their_space_at_equal_scale() -> None:
+    # The image footprint of the triplet is far narrower than it is tall.
+    footprint = analysis.FootprintDiagram(CookeTriplet(), num_rays=50)
+    figure = plt.figure(figsize=(8, 6))
+    try:
+        footprint.view(fig_to_plot_on=figure)
+        figure.tight_layout()
+        figure.canvas.draw()
+        _assert_axes_fill_their_box_at_equal_scale(figure)
+
+        # A toolbar zoom rectangle fixes both limits.
+        figure.axes[0].set_xlim(-2.0, 2.0)
+        figure.axes[0].set_ylim(-1.0, 1.0)
+        figure.canvas.draw()
+        _assert_axes_fill_their_box_at_equal_scale(figure)
+    finally:
+        plt.close(figure)
+
+
 def test_spot_diagram_on_a_surface_takes_the_spots_there(set_test_backend) -> None:
     optic = CookeTriplet()
     stop = _stop_index(optic)

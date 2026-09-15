@@ -16,7 +16,7 @@ from matplotlib.lines import Line2D
 
 import optiland.backend as be
 
-from .base import BaseAnalysis
+from .base import BaseAnalysis, EqualAspectAxes
 from .distortion_strategies import DistortionModel, create_distortion_model
 
 if TYPE_CHECKING:
@@ -101,9 +101,11 @@ class GridDistortion(BaseAnalysis):
         if is_gui_embedding:
             fig = fig_to_plot_on
             fig.clear()
-            ax = fig.add_subplot(111)
+            ax = fig.add_subplot(111, axes_class=EqualAspectAxes)
         else:
-            fig, ax = plt.subplots(figsize=figsize)
+            fig, ax = plt.subplots(
+                figsize=figsize, subplot_kw={"axes_class": EqualAspectAxes}
+            )
 
         self._plot_grid(ax)
         self._style_axes(ax)
@@ -154,7 +156,6 @@ class GridDistortion(BaseAnalysis):
         ax.set_title(f"Grid Distortion (Max: {max_distortion:.2f}%)")
         ax.set_xlabel("Image X (mm)")
         ax.set_ylabel("Image Y (mm)")
-        ax.set_aspect("equal", adjustable="box")
         ax.spines["right"].set_visible(False)
         ax.spines["top"].set_visible(False)
         ax.grid(True, linestyle=":", alpha=0.6)
