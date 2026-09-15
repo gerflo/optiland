@@ -17,6 +17,31 @@ if TYPE_CHECKING:
     from optiland.optic import Optic
 
 
+def surface_label(optic: Optic, surface_index: int) -> str:
+    """Name a surface of *optic* for plot titles.
+
+    Args:
+        optic: The optic that holds the surface.
+        surface_index: Index into ``optic.surfaces``; negative values count
+            from the end, so ``-1`` is the image surface.
+
+    Returns:
+        ``"Surface <n>: <comment>"`` with the resolved, non-negative surface
+        number, or ``"Surface <n>"`` when the surface has no comment.
+
+    Raises:
+        IndexError: If *surface_index* does not name a surface of *optic*.
+    """
+    count = optic.surfaces.num_surfaces
+    if not -count <= surface_index < count:
+        raise IndexError(
+            f"Surface index {surface_index} is out of range for {count} surfaces."
+        )
+    index = surface_index % count
+    comment = str(getattr(optic.surfaces[index], "comment", "") or "").strip()
+    return f"Surface {index}: {comment}" if comment else f"Surface {index}"
+
+
 class BaseAnalysis(abc.ABC):
     """Base class for all analysis routines.
 

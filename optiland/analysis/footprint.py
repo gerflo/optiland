@@ -1,8 +1,8 @@
 """Footprint Diagram Analysis
 
-Shows the geometric ray footprint on the image (target) surface.
-All fields are overlaid with distinct colours, making it easy to see the
-total illuminated area and individual field contributions.
+Shows the geometric ray footprint on a chosen surface, by default the image
+(target) surface. All fields are overlaid with distinct colours, making it
+easy to see the total illuminated area and individual field contributions.
 
 This is particularly useful for illumination systems where PSF / irradiance
 analysis is not appropriate: run FootprintDiagram to see where light from
@@ -18,14 +18,14 @@ import numpy as _np
 
 import optiland.backend as be
 
-from .base import BaseAnalysis
+from .base import BaseAnalysis, surface_label
 
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
 
 class FootprintDiagram(BaseAnalysis):
-    """Ray footprint on the image (target) surface.
+    """Ray footprint on a surface, by default the image (target) surface.
 
     Unlike IncoherentIrradiance – which bins power into pixels *per field* –
     FootprintDiagram overlays the raw ray landing positions for **all** fields
@@ -51,6 +51,11 @@ class FootprintDiagram(BaseAnalysis):
         distribution: Pupil-sampling strategy.  Default ``"random"``.
         marker_size: Scatter-plot point size (matplotlib *s* parameter).
             Default ``1.0``.
+        surface_idx: Index of the surface whose footprint is shown; negative
+            values count from the end. Default ``-1`` (image surface).
+
+    Attributes:
+        surface_label: Names the analysed surface in the plot title.
     """
 
     def __init__(
@@ -64,6 +69,7 @@ class FootprintDiagram(BaseAnalysis):
             "random", "hexapolar", "grid", "ring", "line_x", "line_y"
         ] = "random",
         marker_size: float = 1.0,
+        surface_idx: int = -1,
     ):
         if fields == "all":
             self.fields = optic.fields.get_field_coords()
@@ -73,6 +79,8 @@ class FootprintDiagram(BaseAnalysis):
         self.num_rays = num_rays
         self.distribution = distribution
         self.marker_size = marker_size
+        self.surface_idx = int(surface_idx)
+        self.surface_label = surface_label(optic, self.surface_idx)
         super().__init__(optic, wavelengths)
 
     # ------------------------------------------------------------------
@@ -80,12 +88,12 @@ class FootprintDiagram(BaseAnalysis):
     # ------------------------------------------------------------------
 
     def _generate_data(self):
-        """Trace rays and collect image-plane hit positions.
+        """Trace rays and collect their hit positions on the analysed surface.
 
         Returns:
             list[list[tuple]]: ``data[f][w]`` is ``(x, y, intensity)`` NumPy
-            arrays containing only rays that survived to the image surface
-            (intensity > 0).
+            arrays in the surface's local coordinates, containing only rays
+            that still carry light at that surface (intensity > 0).
         """
         from optiland.visualization.system.utils import transform
 
@@ -103,7 +111,7 @@ class FootprintDiagram(BaseAnalysis):
                     "mode": "iterative",
                 }
 
-        image_surf = self.optic.surfaces[-1]
+        surface = self.optic.surfaces[self.surface_idx]
         data = []
         try:
             for field in self.fields:
@@ -111,17 +119,21 @@ class FootprintDiagram(BaseAnalysis):
                 for wp in self.wavelengths:
                     Hx, Hy = float(field[0]), float(field[1])
                     try:
-                        rays = self.optic.trace(
+                        # Every surface records the rays as they cross it.
+                        self.optic.trace(
                             Hx, Hy, wp.value, self.num_rays, self.distribution
                         )
-                        x_g = be.to_numpy(rays.x)
-                        y_g = be.to_numpy(rays.y)
-                        z_g = be.to_numpy(rays.z)
-                        i_np = be.to_numpy(rays.i)
+                        x_g = be.to_numpy(surface.x)
+                        y_g = be.to_numpy(surface.y)
+                        z_g = be.to_numpy(surface.z)
+                        i_np = be.to_numpy(surface.intensity)
 
                         x_loc, y_loc, _ = transform(
-                            be.array(x_g), be.array(y_g), be.array(z_g),
-                            image_surf, is_global=True,
+                            be.array(x_g),
+                            be.array(y_g),
+                            be.array(z_g),
+                            surface,
+                            is_global=True,
                         )
                         x_loc = be.to_numpy(x_loc)
                         y_loc = be.to_numpy(y_loc)
@@ -169,7 +181,8 @@ class FootprintDiagram(BaseAnalysis):
             axs = fig.subplots(1, n_wl, squeeze=False)[0]
         else:
             fig, axs_2d = plt.subplots(
-                1, n_wl,
+                1,
+                n_wl,
                 figsize=(figsize[0] * n_wl, figsize[1]),
                 squeeze=False,
             )
@@ -185,7 +198,8 @@ class FootprintDiagram(BaseAnalysis):
                 color = colors[f_idx % len(colors)]
                 Hx, Hy = self.fields[f_idx][0], self.fields[f_idx][1]
                 ax.scatter(
-                    x, y,
+                    x,
+                    y,
                     s=self.marker_size,
                     color=color,
                     label=f"Field {f_idx} ({Hx:.2f}, {Hy:.2f})",
@@ -201,7 +215,7 @@ class FootprintDiagram(BaseAnalysis):
             if any_plotted:
                 ax.legend(markerscale=6, fontsize="small")
 
-        fig.suptitle("Footprint Diagram")
+        fig.suptitle(f"Footprint Diagram — {self.surface_label}")
         if hasattr(fig, "canvas"):
             fig.canvas.draw_idle()
         return fig, axs

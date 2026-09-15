@@ -41,6 +41,7 @@ class SpotReferenceStrategy(abc.ABC):
         fields: list[tuple[float, float]],
         wavelength: float,
         coordinates: str,
+        surface_index: int = -1,
     ) -> list[tuple[BEArray, BEArray]]:
         """Computes the (x, y) center for each field.
 
@@ -51,6 +52,7 @@ class SpotReferenceStrategy(abc.ABC):
             fields: List of (Hx, Hy) field coordinates.
             wavelength: Reference wavelength value in micrometers.
             coordinates: Coordinate system ('global' or 'local').
+            surface_index: Index of the surface the spots are taken on.
 
         Returns:
             A list of (x, y) center tuples, one per field.
@@ -69,6 +71,7 @@ class CentroidReference(SpotReferenceStrategy):
         fields: list[tuple[float, float]],
         wavelength: float,
         coordinates: str,
+        surface_index: int = -1,
     ) -> list[tuple[BEArray, BEArray]]:
         """Computes centroids from the mean of ray intersections."""
         return [
@@ -92,20 +95,20 @@ class ChiefRayReference(SpotReferenceStrategy):
         fields: list[tuple[float, float]],
         wavelength: float,
         coordinates: str,
+        surface_index: int = -1,
     ) -> list[tuple[BEArray, BEArray]]:
         """Computes centers from chief ray (Px=0, Py=0) intersections."""
         from optiland.visualization.system.utils import transform
 
+        # Every surface records the chief ray as it crosses it.
+        surface = optic.surfaces[surface_index]
         centers = []
         for H_x, H_y in fields:
-            ray = optic.trace_generic(Hx=H_x, Hy=H_y, Px=0, Py=0, wavelength=wavelength)
+            optic.trace_generic(Hx=H_x, Hy=H_y, Px=0, Py=0, wavelength=wavelength)
+            x, y = surface.x, surface.y
             if coordinates == "local":
-                x, y, _ = transform(
-                    ray.x, ray.y, ray.z, optic.image_surface, is_global=True
-                )
-                centers.append((x.ravel()[0], y.ravel()[0]))
-            else:
-                centers.append((ray.x.ravel()[0], ray.y.ravel()[0]))
+                x, y, _ = transform(x, y, surface.z, surface, is_global=True)
+            centers.append((x.ravel()[0], y.ravel()[0]))
         return centers
 
 

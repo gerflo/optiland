@@ -40,3 +40,25 @@ def test_panel_manager_selects_layout_clicks_in_the_lens_editor() -> None:
     manager.viewer_panel.surfacesPicked.connect.assert_called_once_with(
         manager.lens_editor.select_surfaces
     )
+
+
+def test_panel_manager_runs_lens_editor_surface_analyses() -> None:
+    manager = PanelManager(MagicMock(), MagicMock())
+    manager.sidebar_content_widget = MagicMock()
+    manager.python_terminal = MagicMock()
+    manager.lens_editor = MagicMock()
+    manager.viewer_panel = MagicMock()
+    manager.analysis_panel = MagicMock()
+    manager.analysis_dock = MagicMock()
+
+    manager.connect_signals()
+    manager.lens_editor.surfaceAnalysisRequested.connect.assert_called_once_with(
+        manager._run_surface_analysis
+    )
+
+    manager._run_surface_analysis("Footprint Diagram", 19)
+
+    manager.analysis_dock.raise_.assert_called_once_with()
+    manager.analysis_panel.run_surface_analysis.assert_called_once_with(
+        "Footprint Diagram", 19
+    )

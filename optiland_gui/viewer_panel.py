@@ -81,6 +81,11 @@ from optiland.visualization.system.system import (
 from . import gui_plot_utils
 from .analysis_panel import CustomMatplotlibToolbar
 from .config import APPLICATION_NAME, ORGANIZATION_NAME
+from .surface_indexing import (
+    disabled_surface_indices,
+    editor_surface_index,
+    effective_surface_index,
+)
 from .worker import BusyOverlay
 
 if TYPE_CHECKING:
@@ -803,48 +808,6 @@ def emphasize_color(
     return (*mixed, a if alpha is None else alpha)
 
 
-def effective_surface_index(
-    surface_index: int, disabled: set[int], surface_count: int
-) -> int | None:
-    """Map a Lens Data Editor row onto the drawn optic, which omits disabled rows.
-
-    ``surface_count`` is the row count of the editor. Returns ``None`` when
-    the row itself is disabled and therefore not drawn.
-    """
-    removed = {index for index in disabled if 0 < index < surface_count - 1}
-    if surface_index in removed:
-        return None
-    return surface_index - sum(1 for index in removed if index < surface_index)
-
-
-def editor_surface_index(
-    drawn_index: int, disabled: set[int], surface_count: int
-) -> int | None:
-    """Map a surface of the drawn optic back onto its Lens Data Editor row.
-
-    The inverse of :func:`effective_surface_index`: the drawn optic omits the
-    disabled rows, so the *drawn_index*-th drawn surface is the
-    *drawn_index*-th row that is not disabled. Returns ``None`` when the drawn
-    optic has no such surface.
-    """
-    removed = {index for index in disabled if 0 < index < surface_count - 1}
-    kept = [index for index in range(surface_count) if index not in removed]
-    if 0 <= drawn_index < len(kept):
-        return kept[drawn_index]
-    return None
-
-
-def _disabled_surface_indices(connector) -> set[int]:
-    """Disabled editor rows, or none when the connector keeps no such state."""
-    getter = getattr(connector, "get_disabled_surface_indices", None)
-    if not callable(getter):
-        return set()
-    try:
-        return {int(index) for index in getter()}
-    except TypeError:
-        return set()
-
-
 def editor_rows_for_drawn_surfaces(
     connector, optic, surfaces, *, as_element: bool = False
 ) -> list[int]:
@@ -862,7 +825,7 @@ def editor_rows_for_drawn_surfaces(
     )
     if not positions:
         return []
-    disabled = _disabled_surface_indices(connector)
+    disabled = disabled_surface_indices(connector)
     surface_count = connector.get_surface_count() if disabled else len(drawn)
     rows = [
         row
@@ -2219,7 +2182,7 @@ class MatplotlibViewer(QWidget):
             self._clear_highlight()
 
     def _disabled_surface_indices(self) -> set[int]:
-        return _disabled_surface_indices(self.connector)
+        return disabled_surface_indices(self.connector)
 
     def _highlighted_layout_surfaces(self) -> list:
         """Surfaces of the drawn optic that the highlighted editor rows refer to."""

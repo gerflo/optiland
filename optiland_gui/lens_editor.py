@@ -62,6 +62,7 @@ from shiboken6 import isValid
 from optiland.materials.material import Material
 
 from .config import APPLICATION_NAME, ORGANIZATION_NAME
+from .registry import SURFACE_ANALYSES
 from .theme_manager import get_theme
 
 if TYPE_CHECKING:
@@ -933,6 +934,8 @@ class LensEditor(QWidget):
     #: Emitted with the selected surface indices and whether they form one
     #: element, so other panels (the 2D layout) can highlight the selection.
     surfaceSelectionChanged = Signal(list, bool)
+    # Analysis name and surface index chosen in the row context menu.
+    surfaceAnalysisRequested = Signal(str, int)
 
     _material_names_cache: list[str] | None = None
     TABLE_SETTINGS_PREFIX = "LensEditor/Table"
@@ -2966,6 +2969,12 @@ class LensEditor(QWidget):
             )
             props_action.setEnabled(not is_obj_or_img and not is_collapsed_row)
 
+            # ── analysis ──────────────────────────────────────────────────────
+            analysis_menu = menu.addMenu("Analysis")
+            self._fill_surface_analysis_menu(
+                analysis_menu, surface_index, is_collapsed_row
+            )
+
             # ── element actions ───────────────────────────────────────────────
             create_element_action = None
             select_element_action = None
@@ -3062,6 +3071,34 @@ class LensEditor(QWidget):
                 self._paste_clipboard_into_current_row()
             elif chosen == paste_cell_action:
                 self._paste_clipboard_into_current_cell()
+
+    def _fill_surface_analysis_menu(
+        self, menu: QMenu, surface_index: int, is_collapsed_row: bool
+    ) -> None:
+        """List the analyses that can evaluate *surface_index*, or why none can.
+
+        Choosing one emits ``surfaceAnalysisRequested`` with its name and the
+        surface index.
+        """
+        _, is_element = self._surface_selection()
+        if is_collapsed_row or is_element:
+            reason = "Only available for surfaces"
+        elif surface_index <= 0:
+            reason = "Not available for the object surface"
+        elif surface_index in self.connector.get_disabled_surface_indices():
+            reason = "Not available for disabled surfaces"
+        else:
+            reason = None
+        if reason is not None:
+            menu.addAction(reason).setEnabled(False)
+            return
+        for analysis_name in SURFACE_ANALYSES:
+            action = menu.addAction(analysis_name)
+            action.triggered.connect(
+                lambda _=False, name=analysis_name, si=surface_index: (
+                    self.surfaceAnalysisRequested.emit(name, si)
+                )
+            )
 
     def _selected_surface_rows(self) -> list[int]:
         """Return selected table rows mapped to one contiguous surface-row block."""

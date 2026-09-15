@@ -243,6 +243,13 @@ class PanelManager:
             self.viewer_panel.set_highlighted_surfaces
         )
         self.viewer_panel.surfacesPicked.connect(self.lens_editor.select_surfaces)
+        self.lens_editor.surfaceAnalysisRequested.connect(self._run_surface_analysis)
+
+    def _run_surface_analysis(self, analysis_name: str, surface_index: int) -> None:
+        """Bring the Analysis panel forward and run *analysis_name* on the surface."""
+        self.analysis_dock.show()
+        self.analysis_dock.raise_()
+        self.analysis_panel.run_surface_analysis(analysis_name, surface_index)
 
     def _on_sidebar_wip_message(self, message: str) -> None:
         """Forward a WIP message from the sidebar to the toast manager.

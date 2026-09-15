@@ -23,7 +23,7 @@ import numpy as _np  # Use _np for plotting logic.
 import optiland.backend as be
 from optiland.rays import RealRays
 
-from .base import BaseAnalysis
+from .base import BaseAnalysis, surface_label
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
@@ -82,8 +82,14 @@ class IncoherentIrradiance(BaseAnalysis):
         fields="all",
         wavelengths="all",
         distribution: Literal[
-            "random", "hexapolar", "grid", "ring",
-            "line_x", "line_y", "gaussian", "uniform"
+            "random",
+            "hexapolar",
+            "grid",
+            "ring",
+            "line_x",
+            "line_y",
+            "gaussian",
+            "uniform",
         ] = "random",
         user_initial_rays=None,
         source=None,
@@ -113,6 +119,7 @@ class IncoherentIrradiance(BaseAnalysis):
             None if px_size is None else (float(px_size[0]), float(px_size[1]))
         )
         self.detector_surface = int(detector_surface)
+        self.surface_label = surface_label(optic, self.detector_surface)
         # self.user_initial_rays = user_initial_rays
         self._initial_ray_data = None
         if self.user_initial_rays is not None:
@@ -205,8 +212,14 @@ class IncoherentIrradiance(BaseAnalysis):
             else:
                 fig, _ = plt.subplots(1, 1, figsize=figsize)
             ax = fig.add_subplot(111)
-            ax.text(0.5, 0.5, "No irradiance data to display.",
-                    ha="center", va="center", transform=ax.transAxes)
+            ax.text(
+                0.5,
+                0.5,
+                "No irradiance data to display.",
+                ha="center",
+                va="center",
+                transform=ax.transAxes,
+            )
             return fig, _np.array([[ax]])
 
         cs_info = self._validate_cross_section_request(cross_section)
@@ -279,14 +292,22 @@ class IncoherentIrradiance(BaseAnalysis):
                 rays_traced = rays_to_trace
 
         surf = self.optic.surfaces[self.detector_surface]
-        if rays_traced is not None:
+        num_surfaces = self.optic.surfaces.num_surfaces
+        on_image = self.detector_surface % num_surfaces == num_surfaces - 1
+        if rays_traced is not None and on_image:
             x_g, y_g, z_g, power = (
-                rays_traced.x, rays_traced.y, rays_traced.z, rays_traced.i,
+                rays_traced.x,
+                rays_traced.y,
+                rays_traced.z,
+                rays_traced.i,
             )
         else:
+            # The traced rays end on the image; any other detector surface
+            # recorded them as they crossed it.
             x_g, y_g, z_g, power = surf.x, surf.y, surf.z, surf.intensity
 
         from optiland.visualization.system.utils import transform
+
         x_local, y_local, _ = transform(x_g, y_g, z_g, surf, is_global=True)
 
         # ── Differentiable path (torch autograd) ────────────────────────
@@ -578,7 +599,7 @@ class IncoherentIrradiance(BaseAnalysis):
         main_title = "Irradiance Analysis"
         if is_cs_plot:
             main_title += self._get_cross_section_title(cs_axis, cs_idx, normalize)
-        fig.suptitle(main_title)
+        fig.suptitle(f"{main_title} — {self.surface_label}")
 
         if hasattr(fig, "canvas"):
             fig.canvas.draw_idle()

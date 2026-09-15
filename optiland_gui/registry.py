@@ -90,3 +90,14 @@ ANALYSIS_REGISTRY: list[tuple[str, str, str]] = [
         "optiland.analysis.FootprintDiagram",
     ),
 ]
+
+# Analyses that evaluate one chosen surface, mapped to the constructor
+# parameter taking its index. The Lens Data Editor offers them for a selected
+# surface; the Analysis panel numbers that parameter like the editor rows.
+SURFACE_ANALYSES: dict[str, str] = {
+    "Spot Diagram": "surface_idx",
+    "Angle vs Height (Pupil)": "surface_idx",
+    "Angle vs Height (Field)": "surface_idx",
+    "Incoherent Irradiance": "detector_surface",
+    "Footprint Diagram": "surface_idx",
+}

@@ -15,7 +15,7 @@ import optiland.backend as be
 from optiland.utils import resolve_fields
 from optiland.visualization.system.utils import transform
 
-from ..base import BaseAnalysis
+from ..base import BaseAnalysis, surface_label
 from .plotting import (
     calculate_axis_limits,
     finalize_plot,
@@ -48,10 +48,12 @@ class SpotData:
 
 
 class SpotDiagram(BaseAnalysis):
-    """Generates and plots real ray intersection data on the image surface.
+    """Generates and plots real ray intersection data on a surface.
 
     This class creates spot diagrams, which are purely geometric plots that give
-    an indication of the blur produced by aberrations in an optical system.
+    an indication of the blur produced by aberrations in an optical system. The
+    spots are taken on the image surface unless another surface is chosen, e.g.
+    an intermediate image.
 
     Attributes:
         optic: Instance of the optic object to be assessed.
@@ -64,6 +66,8 @@ class SpotDiagram(BaseAnalysis):
         coordinates: The coordinate system ('global' or 'local') for data and
             plotting.
         reference: The reference point type used for centering spots.
+        surface_idx: Index of the surface on which the spots are taken.
+        surface_label: Names that surface in the plot title.
     """
 
     def __init__(
@@ -75,6 +79,7 @@ class SpotDiagram(BaseAnalysis):
         distribution: DistributionType = "hexapolar",
         coordinates: Literal["global", "local"] = "local",
         reference: str | SpotReferenceType = SpotReferenceType.CHIEF_RAY,
+        surface_idx: int = -1,
     ):
         """Initializes the SpotDiagram analysis.
 
@@ -95,11 +100,17 @@ class SpotDiagram(BaseAnalysis):
                 Defaults to "local".
             reference: Reference point type for centering spots. Can be
                 "chief_ray" or "centroid". Defaults to "chief_ray".
+            surface_idx: Index of the surface on which the spots are taken;
+                negative values count from the end. Defaults to -1 (image
+                surface).
 
         Raises:
             ValueError: If `coordinates` is not 'global' or 'local'.
             ValueError: If `reference` is not a valid SpotReferenceType.
+            IndexError: If `surface_idx` does not name a surface.
         """
+        self.surface_idx = int(surface_idx)
+        self.surface_label = surface_label(optic, self.surface_idx)
         self.fields = resolve_fields(optic, fields)  # list[FieldPoint]
 
         if coordinates not in ["global", "local"]:
@@ -160,11 +171,12 @@ class SpotDiagram(BaseAnalysis):
                 self.fields[i].coord,
                 axis_lim,
                 i,
-                self.optic.image_surface,
+                self.optic.surfaces[self.surface_idx],
                 airy_disk_data,
             )
 
         finalize_plot(fig, axs, len(self.fields), self.wavelengths)
+        fig.suptitle(f"Spot Diagram — {self.surface_label}")
         is_gui_embedding = fig_to_plot_on is not None
         if show and not is_gui_embedding:
             import matplotlib.pyplot as plt
@@ -245,6 +257,8 @@ class SpotDiagram(BaseAnalysis):
     ) -> tuple:
         """Generates direction cosines for each marginal ray of a given field.
 
+        The directions are those after the analysed surface.
+
         Args:
             H_x: The x-field coordinate.
             H_y: The y-field coordinate.
@@ -254,11 +268,16 @@ class SpotDiagram(BaseAnalysis):
             A tuple of direction cosine vectors for north, south, east, and
             west rays.
         """
-        rays = self.generate_marginal_rays(H_x, H_y, wavelength)
-        return tuple(be.array([ray.L, ray.M, ray.N]).ravel() for ray in rays)
+        pupil_points = ((0, 1), (0, -1), (1, 0), (-1, 0))  # north, south, east, west
+        return tuple(
+            self._direction_at_surface(H_x, H_y, P_x, P_y, wavelength)
+            for P_x, P_y in pupil_points
+        )
 
     def generate_chief_rays_cosines(self, wavelength: float) -> BEArray:
         """Generates direction cosines for the chief ray of each field.
+
+        The directions are those after the analysed surface.
 
         Args:
             wavelength: The wavelength for the rays.
@@ -267,19 +286,14 @@ class SpotDiagram(BaseAnalysis):
             An array of shape (num_fields, 3) containing the direction cosines.
         """
         cosines = [
-            be.array([ray.L, ray.M, ray.N]).ravel()
+            self._direction_at_surface(*fp.coord, 0, 0, wavelength)
             for fp in self.fields
-            for ray in [
-                self.optic.trace_generic(
-                    Hx=fp.coord[0], Hy=fp.coord[1], Px=0, Py=0, wavelength=wavelength
-                )
-            ]
         ]
         return be.stack(cosines, axis=0)
 
     def generate_chief_rays_centers(self, wavelength: float) -> BEArray:
         """Generates the (x, y) intersection points for the chief ray of each
-        field.
+        field on the analysed surface.
 
         Args:
             wavelength: The wavelength for the rays.
@@ -287,16 +301,25 @@ class SpotDiagram(BaseAnalysis):
         Returns:
             An array of shape (num_fields, 2) with (x, y) coordinates.
         """
-        centers = [
-            [ray.x.item(), ray.y.item()]
-            for fp in self.fields
-            for ray in [
-                self.optic.trace_generic(
-                    Hx=fp.coord[0], Hy=fp.coord[1], Px=0, Py=0, wavelength=wavelength
-                )
-            ]
-        ]
+        centers = []
+        for fp in self.fields:
+            surface = self._trace_to_surface(*fp.coord, 0, 0, wavelength)
+            centers.append([surface.x.item(), surface.y.item()])
         return be.stack(centers, axis=0)
+
+    def _trace_to_surface(
+        self, H_x: float, H_y: float, P_x: float, P_y: float, wavelength: float
+    ):
+        """Trace one real ray and return the analysed surface, which records it."""
+        self.optic.trace_generic(Hx=H_x, Hy=H_y, Px=P_x, Py=P_y, wavelength=wavelength)
+        return self.optic.surfaces[self.surface_idx]
+
+    def _direction_at_surface(
+        self, H_x: float, H_y: float, P_x: float, P_y: float, wavelength: float
+    ) -> BEArray:
+        """Direction cosines of one real ray after the analysed surface."""
+        surface = self._trace_to_surface(H_x, H_y, P_x, P_y, wavelength)
+        return be.array([surface.L, surface.M, surface.N]).ravel()
 
     def airy_disc_x_y(self, wavelength: float) -> tuple[list[float], list[float]]:
         """Generates the Airy disk radii for the x and y axes for each field.
@@ -400,6 +423,7 @@ class SpotDiagram(BaseAnalysis):
             fields_coords,
             ref_wl,
             self.coordinates,
+            surface_index=self.surface_idx,
         )
 
     def _center_spots(self, data: list[list[SpotData]]) -> list[list[SpotData]]:
@@ -468,22 +492,16 @@ class SpotDiagram(BaseAnalysis):
             A SpotData object with the traced ray intersection data.
         """
         self.optic.trace(*field, wavelength, num_rays, distribution)
-        surf_group = self.optic.surfaces
-        x_g, y_g, z_g, i_g = (
-            surf_group.x[-1, :],
-            surf_group.y[-1, :],
-            surf_group.z[-1, :],
-            surf_group.intensity[-1, :],
-        )
+        # Every surface records the rays as they cross it.
+        surface = self.optic.surfaces[self.surface_idx]
+        x_g, y_g, z_g, i_g = surface.x, surface.y, surface.z, surface.intensity
 
         # Ignore rays with zero intensity
         mask = i_g > 0
         x_g, y_g, z_g, i_g = x_g[mask], y_g[mask], z_g[mask], i_g[mask]
 
         if coordinates == "local":
-            x_plot, y_plot, _ = transform(
-                x_g, y_g, z_g, self.optic.image_surface, is_global=True
-            )
+            x_plot, y_plot, _ = transform(x_g, y_g, z_g, surface, is_global=True)
         else:
             x_plot, y_plot = x_g, y_g
 

@@ -85,10 +85,13 @@ from optiland.analysis import (
     ThroughFocusSpotDiagram,
     YYbar,
 )
+from optiland.analysis.base import surface_label
 from optiland.mtf import FFTMTF, GeometricMTF
 
 from . import gui_plot_utils
 from .config import CONTROL_HEIGHT_PX
+from .registry import SURFACE_ANALYSES
+from .surface_indexing import disabled_surface_indices, effective_surface_index
 from .theme_manager import get_theme
 from .worker import BusyOverlay, _Worker
 
@@ -994,9 +997,26 @@ class AnalysisPanel(QWidget):
         for param_name, param_info in view_params.items():
             self._add_setting_widget(param_name, param_info)
 
+        self._configure_surface_setting(analysis_name)
         self.settings_form_layout.addItem(
             QSpacerItem(20, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         )
+
+    def _configure_surface_setting(self, analysis_name: str) -> None:
+        """Number the surface setting of a surface analysis like the editor rows.
+
+        Its value is the surface number shown in the Lens Data Editor; the
+        lowest value, -1, stands for the image surface.
+        """
+        widget = self.current_settings_widgets.get(SURFACE_ANALYSES.get(analysis_name))
+        if not isinstance(widget, QSpinBox):
+            return
+        widget.setRange(-1, 9999)
+        widget.setSpecialValueText("Image")
+        widget.setToolTip("Surface number as shown in the Lens Data Editor")
+        label = self.settings_form_layout.labelForField(widget)
+        if isinstance(label, QLabel):
+            label.setText("Surface:")
 
     def _set_line_edit_value(self, widget, value):
         """Sets the text of a QLineEdit, handling tuples."""
@@ -1671,12 +1691,51 @@ class AnalysisPanel(QWidget):
             and "max_freq" not in filtered_args
         ):
             filtered_args["max_freq"] = final_args["max_freq"]
+        surface_parameter = SURFACE_ANALYSES.get(analysis_name)
+        if surface_parameter in filtered_args:
+            filtered_args[surface_parameter] = self._analysed_surface_index(
+                filtered_args[surface_parameter]
+            )
         return filtered_args, final_args
+
+    def _analysed_surface_index(self, editor_index) -> int:  # noqa: ANN001
+        """Map a Lens Data Editor surface number onto the optic being analysed.
+
+        Analyses trace the effective optic, which leaves out disabled surfaces.
+        Negative numbers count from the end, so -1 stays the image surface.
+
+        Raises:
+            ValueError: If the surface is the object surface, is disabled or
+                does not exist.
+        """
+        editor_index = int(editor_index)
+        if editor_index < 0:
+            return editor_index
+        if editor_index == 0:
+            raise ValueError(
+                "Surface analyses are not available for the object surface."
+            )
+        surface_count = self.connector.get_surface_count()
+        if editor_index >= surface_count:
+            raise ValueError(f"Surface {editor_index} does not exist.")
+        index = effective_surface_index(
+            editor_index, disabled_surface_indices(self.connector), surface_count
+        )
+        if index is None:
+            raise ValueError(f"Surface {editor_index} is disabled.")
+        return index
 
     def _finish_analysis(
         self, instance, analysis_name, constructor_args, view_args, optic, final_args
     ):
         """Package a completed analysis instance into page_data — main thread."""
+        surface_parameter = SURFACE_ANALYSES.get(analysis_name)
+        if surface_parameter in constructor_args and hasattr(instance, "surface_label"):
+            # Name the surface by its editor row: the analysed optic numbers
+            # the surfaces differently once some of them are disabled.
+            instance.surface_label = surface_label(
+                self.connector.get_optic(), int(constructor_args[surface_parameter])
+            )
         can_embed = (
             hasattr(instance, "view")
             and "fig_to_plot_on" in inspect.signature(instance.view).parameters
@@ -1980,6 +2039,28 @@ class AnalysisPanel(QWidget):
         self._execute_analysis_threaded(
             analysis_class, analysis_name, on_complete=on_complete
         )
+
+    @Slot(str, int)
+    def run_surface_analysis(self, analysis_name: str, surface_index: int) -> None:
+        """Run *analysis_name* on Lens Data Editor surface *surface_index*.
+
+        The analysis starts from its default settings with the surface filled
+        in and opens on a new result page, like a run from the toolbar.
+        """
+        surface_parameter = SURFACE_ANALYSES.get(analysis_name)
+        if surface_parameter is None or analysis_name not in self._analysis_class_map:
+            return
+        if self._analysis_thread is not None:
+            tm = getattr(self.connector, "toast_manager", None)
+            if tm:
+                tm.notify("An analysis is still running.", "warning")
+            return
+        self.analysisTypeCombo.setCurrentText(analysis_name)
+        self._update_settings_ui(analysis_name)
+        widget = self.current_settings_widgets.get(surface_parameter)
+        if isinstance(widget, QSpinBox):
+            widget.setValue(int(surface_index))
+        self.run_analysis_slot()
 
     @Slot()
     def run_all_analysis_slot(self):

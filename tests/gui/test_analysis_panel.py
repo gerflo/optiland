@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -491,3 +492,97 @@ class TestPlotZoom:
 
         assert bar.value() == 0
         assert (ax.get_xlim(), ax.get_ylim()) != limits
+
+
+@pytest.fixture()
+def surface_panel(mock_connector, minimal_optic, qapp):
+    from optiland.analysis import FootprintDiagram, SpotDiagram
+    from optiland_gui.analysis_panel import AnalysisPanel
+
+    mock_connector._analysis_runner.get_analysis_registry.return_value = [
+        ("Spot & Ray", "Spot Diagram", SpotDiagram),
+        ("Illumination", "Footprint Diagram", FootprintDiagram),
+    ]
+    mock_connector.get_surface_count.return_value = minimal_optic.surfaces.num_surfaces
+    mock_connector.get_disabled_surface_indices.return_value = set()
+    return AnalysisPanel(mock_connector)
+
+
+class TestSurfaceAnalyses:
+    def test_surface_setting_is_numbered_like_the_editor(self, surface_panel):
+        surface_panel._update_settings_ui("Footprint Diagram")
+
+        widget = surface_panel.current_settings_widgets["surface_idx"]
+        label = surface_panel.settings_form_layout.labelForField(widget)
+        assert widget.minimum() == -1
+        assert widget.value() == -1
+        assert widget.specialValueText() == "Image"
+        assert label.text() == "Surface:"
+
+    def test_editor_surface_numbers_skip_disabled_surfaces(
+        self, surface_panel, mock_connector, minimal_optic
+    ):
+        from optiland.analysis import FootprintDiagram
+
+        mock_connector.get_disabled_surface_indices.return_value = {1}
+
+        def analysed_surface(editor_number):
+            filtered, _ = surface_panel._prepare_filtered_args(
+                minimal_optic,
+                FootprintDiagram,
+                "Footprint Diagram",
+                {"surface_idx": editor_number},
+            )
+            return filtered["surface_idx"]
+
+        assert analysed_surface(2) == 1
+        assert analysed_surface(-1) == -1
+        with pytest.raises(ValueError, match="disabled"):
+            analysed_surface(1)
+        with pytest.raises(ValueError, match="object surface"):
+            analysed_surface(0)
+        with pytest.raises(ValueError, match="does not exist"):
+            analysed_surface(4)
+
+    def test_plot_names_the_surface_by_its_editor_row(
+        self, surface_panel, minimal_optic
+    ):
+        minimal_optic.surfaces[2].comment = "Stop"
+        # As computed on an effective optic without a disabled surface 1.
+        instance = SimpleNamespace(
+            surface_label="Surface 1: Stop", view=lambda fig_to_plot_on=None: None
+        )
+
+        surface_panel._finish_analysis(
+            instance, "Footprint Diagram", {"surface_idx": 2}, {}, minimal_optic, {}
+        )
+
+        assert instance.surface_label == "Surface 2: Stop"
+
+    def test_run_surface_analysis_opens_a_page_for_the_surface(
+        self, surface_panel, minimal_optic, monkeypatch
+    ):
+        minimal_optic.surfaces[2].comment = "Stop"
+
+        def run_now(
+            analysis_class,
+            analysis_name,
+            constructor_args=None,
+            view_args=None,
+            on_complete=None,
+        ):
+            on_complete(
+                surface_panel._execute_analysis(
+                    analysis_class, analysis_name, constructor_args, view_args
+                )
+            )
+
+        monkeypatch.setattr(surface_panel, "_execute_analysis_threaded", run_now)
+
+        surface_panel.run_surface_analysis("Footprint Diagram", 2)
+
+        page = surface_panel.analysis_results_pages[-1]
+        figure = surface_panel.active_mpl_canvas_widget.figure
+        assert surface_panel.analysisTypeCombo.currentText() == "Footprint Diagram"
+        assert page["constructor_args_used"]["surface_idx"] == 2
+        assert "Surface 2: Stop" in figure.get_suptitle()

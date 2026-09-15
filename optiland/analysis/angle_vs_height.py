@@ -20,7 +20,7 @@ from matplotlib.collections import LineCollection
 import optiland.backend as be
 from optiland.utils import resolve_wavelength
 
-from .base import BaseAnalysis
+from .base import BaseAnalysis, surface_label
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
@@ -39,6 +39,7 @@ class _AngleVsHeightPlotSpec:
     title: str | None
     color_label: str
     cmap: str | Colormap
+    surface_label: str
 
 
 def _compose_title(title: str | None, optic_name: str, legend_labels: list[str]) -> str:
@@ -82,9 +83,9 @@ def _plot_angle_vs_height(plot_spec: _AngleVsHeightPlotSpec, ax: Axes) -> None:
 
     fig = ax.get_figure()
     axis_suffix = " (x-axis)" if plot_spec.axis == 0 else ""
-    fig.suptitle("Incident Angle vs Image Height" + axis_suffix)
+    fig.suptitle(f"Incident Angle vs Height{axis_suffix} — {plot_spec.surface_label}")
     ax.set_title(full_title, fontsize=10)
-    ax.set_xlabel("Image Height in Millimeters")
+    ax.set_xlabel("Height in Millimeters")
     ax.set_ylabel("Incident Angle in Degrees")
     cbar = fig.colorbar(line, ax=ax, label=plot_spec.color_label)
     cbar.set_label(plot_spec.color_label, labelpad=15)
@@ -129,6 +130,7 @@ class BaseAngleVsHeightAnalysis(BaseAnalysis, abc.ABC):
         num_points: int = 128,
     ):
         self.surface_idx = surface_idx
+        self.surface_label = surface_label(optic, surface_idx)
         self.axis = axis
         self.num_points = num_points
 
@@ -332,6 +334,7 @@ class BaseAngleVsHeightAnalysis(BaseAnalysis, abc.ABC):
                 title=title,
                 color_label=color_label,
                 cmap=cmap,
+                surface_label=self.surface_label,
             ),
             ax=ax,
         )

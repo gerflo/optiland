@@ -189,6 +189,9 @@ def test_lens_editor_context_menu_contains_copy_actions(qapp, mock_connector, mo
             self._actions.append(action)
             return action
 
+        def addMenu(self, *_args, **_kwargs):
+            return type(self)()
+
         def addSeparator(self):
             return None
 
@@ -249,6 +252,9 @@ def test_lens_editor_context_menu_shows_create_element_only_for_valid_multi_sele
             self._actions.append(action)
             return action
 
+        def addMenu(self, *_args, **_kwargs):
+            return type(self)()
+
         def addSeparator(self):
             return None
 
@@ -301,6 +307,9 @@ def test_lens_editor_context_menu_shows_element_actions_for_grouped_surface(
             action.isEnabled.side_effect = lambda: enabled["value"]
             self._actions.append(action)
             return action
+
+        def addMenu(self, *_args, **_kwargs):
+            return type(self)()
 
         def addSeparator(self):
             return None
@@ -359,6 +368,9 @@ def test_lens_editor_context_menu_hides_create_element_for_already_grouped_selec
             action.isEnabled.side_effect = lambda: enabled["value"]
             self._actions.append(action)
             return action
+
+        def addMenu(self, *_args, **_kwargs):
+            return type(self)()
 
         def addSeparator(self):
             return None
@@ -608,6 +620,9 @@ def test_lens_editor_right_click_keeps_multi_row_selection_on_selected_row(
             action.isEnabled.side_effect = lambda: True
             self._actions.append(action)
             return action
+
+        def addMenu(self, *_args, **_kwargs):
+            return type(self)()
 
         def addSeparator(self):
             return None
@@ -1737,3 +1752,111 @@ def test_lens_editor_select_surfaces_ignores_rows_it_cannot_show(qapp, mock_conn
 
     table = editor.tableWidget
     assert sorted({index.row() for index in table.selectedIndexes()}) == [3]
+
+
+def _surface_analysis_entries(editor, surface_index, is_collapsed_row=False):  # noqa: ANN001, ANN202
+    from PySide6.QtWidgets import QMenu
+
+    menu = QMenu(editor)
+    editor._fill_surface_analysis_menu(menu, surface_index, is_collapsed_row)
+    return [(action.text(), action.isEnabled()) for action in menu.actions()], menu
+
+
+def test_lens_editor_analysis_menu_offers_the_surface_analyses(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+    from optiland_gui.registry import SURFACE_ANALYSES
+
+    mock_connector.get_disabled_surface_indices.return_value = set()
+    editor = LensEditor(mock_connector)
+    requested: list[tuple[str, int]] = []
+    editor.surfaceAnalysisRequested.connect(
+        lambda name, surface: requested.append((name, surface))
+    )
+    editor.select_surfaces([2])
+
+    entries, menu = _surface_analysis_entries(editor, 2)
+    assert entries == [(name, True) for name in SURFACE_ANALYSES]
+
+    menu.actions()[-1].trigger()
+    assert requested == [(list(SURFACE_ANALYSES)[-1], 2)]
+
+
+def test_lens_editor_analysis_menu_is_only_for_surfaces(qapp, mock_connector):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_group_rows.side_effect = lambda row: [1, 2] if row in (1, 2) else []
+    mock_connector.get_surface_group_metadata.side_effect = lambda row: (
+        {"group_id": "grp1", "group_name": "L1", "group_role": "lens"}
+        if row in (1, 2)
+        else {"group_id": None, "group_name": None, "group_role": None}
+    )
+    mock_connector.get_disabled_surface_indices.return_value = set()
+    editor = LensEditor(mock_connector)
+    editor.select_surfaces([1, 2])  # the whole element
+
+    entries, _ = _surface_analysis_entries(editor, 1)
+    assert entries == [("Only available for surfaces", False)]
+
+
+def test_lens_editor_analysis_menu_explains_surfaces_it_cannot_analyse(
+    qapp, mock_connector
+):
+    from optiland_gui.lens_editor import LensEditor
+
+    mock_connector.get_disabled_surface_indices.return_value = {2}
+    editor = LensEditor(mock_connector)
+
+    editor.select_surfaces([0])
+    entries, _ = _surface_analysis_entries(editor, 0)
+    assert entries == [("Not available for the object surface", False)]
+
+    editor.select_surfaces([2])
+    entries, _ = _surface_analysis_entries(editor, 2)
+    assert entries == [("Not available for disabled surfaces", False)]
+
+
+def test_lens_editor_context_menu_has_an_analysis_submenu(
+    qapp, mock_connector, monkeypatch
+):
+    from optiland_gui.lens_editor import LensEditor
+    from optiland_gui.registry import SURFACE_ANALYSES
+
+    mock_connector.get_group_rows.return_value = []
+    mock_connector.get_surface_group_metadata.return_value = {
+        "group_id": None,
+        "group_name": None,
+        "group_role": None,
+    }
+    mock_connector.get_disabled_surface_indices.return_value = set()
+    editor = LensEditor(mock_connector)
+    submenus: dict[str, list[str]] = {}
+
+    class _FakeMenu:
+        def __init__(self, *_args, **_kwargs):
+            self.entries: list[str] = []
+
+        def setObjectName(self, *_args, **_kwargs):
+            return None
+
+        def addAction(self, text):  # noqa: ANN001
+            self.entries.append(text)
+            return MagicMock()
+
+        def addMenu(self, title):  # noqa: ANN001
+            submenu = _FakeMenu()
+            submenus[title] = submenu.entries
+            return submenu
+
+        def addSeparator(self):
+            return None
+
+        def exec(self, *_args, **_kwargs):  # noqa: ANN201
+            return None
+
+    monkeypatch.setattr("optiland_gui.lens_editor.QMenu", _FakeMenu)
+    target_item = editor.tableWidget.item(2, mock_connector.COL_COMMENT)
+    assert target_item is not None
+
+    editor.show_context_menu(editor.tableWidget.visualItemRect(target_item).center())
+
+    assert submenus["Analysis"] == list(SURFACE_ANALYSES)
