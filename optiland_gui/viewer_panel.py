@@ -1394,6 +1394,7 @@ class MatplotlibViewer(QWidget):
         _apply_equal_xy_limits already reflects the new pixel dimensions.
         """
         self._measure_overlay.resize(self.canvas.size())
+        self._fit_bottom_margin()
         self._refresh_highlight_markers()
         if (
             not self._preserve_xy_ratio
@@ -2831,13 +2832,27 @@ class MatplotlibViewer(QWidget):
                 with contextlib.suppress(Exception):
                     setter(original)
 
-    def _draw_surface_dimensions(self, ax, optic):
+    def _draw_surface_dimensions(self, ax, optic, top_pts: float) -> float:
         """Draw Z-spacing dimension annotations below the 2D layout.
 
         Identifies external surfaces (standalone + first/last of each group),
         then draws horizontal dimension lines with labels between each
         consecutive pair.  When adjacent labels are close enough to overlap,
         every other label is dropped to a second row.
+
+        The annotations follow the Z axis when zooming and panning, but stay
+        at a fixed distance below the axes and are clipped to their width, so
+        they never spill out beside the diagram.
+
+        Args:
+            ax: The layout axes.
+            optic: The optic whose surface spacings are annotated.
+            top_pts: Distance below the axes, in points, where the annotations
+                may start (below the x-axis tick labels and label).
+
+        Returns:
+            The distance below the axes, in points, down to which the
+            annotations reach; ``top_pts`` when there is nothing to draw.
         """
         # Collect group boundary indices
         group_bounds = {}  # group_id → [first_idx, last_idx]
@@ -2863,17 +2878,32 @@ class MatplotlibViewer(QWidget):
                     ext_z.append(z)
 
         if len(ext_z) < 2:
-            return
+            return top_pts
+
+        from matplotlib.lines import Line2D
+        from matplotlib.transforms import (
+            Bbox,
+            ScaledTranslation,
+            TransformedBbox,
+            blended_transform_factory,
+        )
 
         text_color = matplotlib.rcParams.get("text.color", "white")
         dim_color = "#8A9BAD"
-        ylim = ax.get_ylim()
-        y_span = ylim[1] - ylim[0]
+        label_size = 6.5
+        line_pts = top_pts + 4.0
+        row_pts = (line_pts + 6.0, line_pts + 16.0)  # tops of the two label rows
+        fig = ax.get_figure()
 
-        tick_h = y_span * 0.025
-        dim_y = ylim[0] - y_span * 0.07
-        label_y_row0 = dim_y - tick_h * 1.6
-        label_y_row1 = label_y_row0 - tick_h * 3.5  # second row, further down
+        def below_axes(points: float):
+            # x follows the Z data; y sits a fixed number of points below the axes.
+            offset = ScaledTranslation(0.0, -points / 72.0, fig.dpi_scale_trans)
+            return blended_transform_factory(ax.transData, ax.transAxes + offset)
+
+        # As wide as the axes, but reaching down to the bottom of the figure.
+        clip_box = TransformedBbox(
+            Bbox.unit(), blended_transform_factory(ax.transAxes, fig.transFigure)
+        )
 
         # Build dimension segments
         dims = []
@@ -2885,7 +2915,7 @@ class MatplotlibViewer(QWidget):
             dims.append((z1, z2, dz, (z1 + z2) / 2.0))
 
         if not dims:
-            return
+            return top_pts
 
         # Estimate label width in data coords (approx 6 chars × ~0.55 em at 6.5pt)
         # Use the axis data range to convert points → data units.
@@ -2917,33 +2947,50 @@ class MatplotlibViewer(QWidget):
                     last_end_row1 = zm + hw
 
         for i, (z1, z2, dz, zm) in enumerate(dims):
-            label_y = label_y_row1 if rows[i] == 1 else label_y_row0
-
-            ax.plot(
-                [z1, z2], [dim_y, dim_y], color=dim_color, linewidth=0.8, clip_on=False
+            # Added as a plain artist so the annotation never enters the data
+            # limits; the "|" markers are the end ticks.
+            line = Line2D(
+                [z1, z2],
+                [0.0, 0.0],
+                color=dim_color,
+                linewidth=0.8,
+                marker="|",
+                markersize=8,
+                markeredgewidth=0.8,
+                transform=below_axes(line_pts),
             )
-            for zz in (z1, z2):
-                ax.plot(
-                    [zz, zz],
-                    [dim_y - tick_h, dim_y + tick_h],
-                    color=dim_color,
-                    linewidth=0.8,
-                    clip_on=False,
-                )
-            ax.text(
+            ax.add_artist(line)
+            label = ax.text(
                 zm,
-                label_y,
+                0.0,
                 f"{dz:.2f}",
                 ha="center",
                 va="top",
-                fontsize=6.5,
+                fontsize=label_size,
                 color=text_color,
-                clip_on=False,
+                transform=below_axes(row_pts[rows[i]]),
             )
+            for artist in (line, label):
+                artist.set_clip_on(True)
+                artist.set_clip_box(clip_box)
 
-        # Extend y-axis to include both rows
-        bottom = label_y_row1 - tick_h * 2
-        ax.set_ylim(bottom, ylim[1])
+        return row_pts[max(rows)] + label_size * 1.3
+
+    def _xaxis_decoration_pts(self) -> float:
+        """Height of the x-axis tick labels and axis label below the axes, in points."""
+        bbox = self.ax.xaxis.get_tightbbox(self.canvas.get_renderer())
+        if bbox is None:
+            return 0.0
+        return max(0.0, self.ax.bbox.y0 - bbox.y0) * 72.0 / self.figure.dpi
+
+    def _fit_bottom_margin(self) -> None:
+        """Keep the room reserved below the axes at its height in points."""
+        bottom_pts = getattr(self, "_bottom_margin_pts", None)
+        if bottom_pts is None:
+            return
+        figure_pts = max(self.figure.get_figheight() * 72.0, 1.0)
+        top = self.figure.subplotpars.top
+        self.figure.subplots_adjust(bottom=min(bottom_pts / figure_pts, top - 0.1))
 
     def _plot_optic_sync(self, preserve_zoom=None):
         """Synchronous matplotlib render — must stay on the main thread."""
@@ -3046,13 +3093,18 @@ class MatplotlibViewer(QWidget):
                         self.ax.relim()
                         self.ax.autoscale_view()
                         self.ax.margins(x=0.03, y=0.08)
-                    bottom_margin = 0.12
+                    # Reserve only the room the x-axis labels and dimension
+                    # annotations need below the axes, as a fixed height in
+                    # points, so a taller viewer gives the layout more space.
+                    bottom_pts = self._xaxis_decoration_pts() + 4.0
                     if show_measures:
-                        self._draw_surface_dimensions(self.ax, optic)
-                        bottom_margin = 0.28
-                    self.figure.subplots_adjust(
-                        left=0.06, right=0.995, top=0.92, bottom=bottom_margin
-                    )
+                        bottom_pts = (
+                            self._draw_surface_dimensions(self.ax, optic, bottom_pts)
+                            + 4.0
+                        )
+                    self._bottom_margin_pts = bottom_pts
+                    self.figure.subplots_adjust(left=0.06, right=0.995, top=0.92)
+                    self._fit_bottom_margin()
                     if self._preserve_xy_ratio:
                         self._apply_equal_xy_limits(
                             self.ax.get_xlim(), self.ax.get_ylim()
@@ -3085,6 +3137,7 @@ class MatplotlibViewer(QWidget):
                     )
             else:
                 self.ax.text(0.5, 0.5, "No system loaded", ha="center", va="center")
+                self._bottom_margin_pts = None
                 self.figure.subplots_adjust(
                     left=0.06, right=0.995, top=0.92, bottom=0.12
                 )
