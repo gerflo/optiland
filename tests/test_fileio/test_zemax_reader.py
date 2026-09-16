@@ -370,6 +370,66 @@ class TestEndToEnd:
             n = float(be.to_numpy(be.atleast_1d(material.n(wavelength))).ravel()[0])
             assert n == pytest.approx(1.406)
 
+    def test_legacy_wavl_line_lists_every_wavelength(self, zemax_dir):
+        """Regression: ZEMAX 2003 writes all wavelengths on one WAVL line.
+
+        That dialect lists every wavelength on a single ``WAVL`` line, with the
+        weights on ``WWGT``, where current files write one ``WAVM index value
+        weight`` line per wavelength. Reading WAVL with the WAVM layout took the
+        second token as the only wavelength and the third as its weight.
+        """
+        optic = load_zemax_file(os.path.join(zemax_dir, "lens_legacy_wavl.zmx"))
+
+        values = [float(w.value) for w in optic.wavelengths]
+        weights = [float(w.weight) for w in optic.wavelengths]
+        assert values == pytest.approx([0.4861, 0.5876, 0.6563])
+        assert weights == pytest.approx([1.0, 2.0, 1.0])
+        assert float(optic.primary_wavelength) == pytest.approx(0.5876)
+
+    def test_legacy_monochromatic_wavl_line(self):
+        """Regression: a single-wavelength WAVL line has only two tokens.
+
+        The WAVM layout indexes ``data[2]``, so every monochromatic file in the
+        ZEMAX 2003 dialect failed to load with an IndexError.
+        """
+        text = "\n".join(
+            [
+                "VERS 30106 149",
+                "MODE SEQ",
+                "UNIT MM NW NWC",
+                "ENPD 10",
+                "FTYP 0 0",
+                "XFLD 0.000000000000E+000",
+                "YFLD 0.000000000000E+000",
+                "WAVL 5.500000000000E-001",
+                "WWGT 1.000000000000E+000",
+                "PWAV 1",
+                "SURF 0",
+                "  TYPE STANDARD",
+                "  CURV 0.000000000000E+000 0 0.000000000000E+000 0.000000000000E+000",
+                "  DISZ INFINITY",
+                "SURF 1",
+                "  STOP",
+                "  TYPE STANDARD",
+                "  CURV 2.000000000000E-002 0 0.000000000000E+000 0.000000000000E+000",
+                "  DISZ 5.000000000000E+000",
+                "  GLAS N-BK7 0 0 1.51680000 64.17000000 0.00000000 0 0 0 0 0",
+                "SURF 2",
+                "  TYPE STANDARD",
+                "  CURV -2.000000000000E-002 0 0.000000000000E+000 0.000000000000E+000",
+                "  DISZ 9.500000000000E+001",
+                "SURF 3",
+                "  TYPE STANDARD",
+                "  CURV 0.000000000000E+000 0 0.000000000000E+000 0.000000000000E+000",
+                "  DISZ 0.000000000000E+000",
+            ]
+        )
+
+        optic = load_zemax_text(text)
+
+        assert [float(w.value) for w in optic.wavelengths] == pytest.approx([0.55])
+        assert float(optic.primary_wavelength) == pytest.approx(0.55)
+
     def test_load_toroidal_surface(self, zemax_dir):
         filename = os.path.join(zemax_dir, "thorlabs_lj1598l1.zmx")
         optic = load_zemax_file(filename)

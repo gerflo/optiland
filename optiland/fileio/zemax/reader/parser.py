@@ -52,7 +52,8 @@ class ZemaxDataParser:
             "YFLD": self._read_y_fields,
             "XFLN": self._read_x_fields,
             "YFLN": self._read_y_fields,
-            "WAVL": self._read_wavelength,
+            "WAVL": self._read_wavelengths_legacy,
+            "WWGT": self._read_wavelength_weights_legacy,
             "WAVM": self._read_wavelength,
             "PWAV": self._read_primary_wave,
             "SURF": self._read_surface,
@@ -206,6 +207,31 @@ class ZemaxDataParser:
         if len(self.data_model.wavelengths["data"]) < n:
             self.data_model.wavelengths["data"].append(val)
             self.data_model.wavelengths["weights"].append(weight)
+
+    def _read_wavelengths_legacy(self, data: list[str]) -> None:
+        """Read a legacy ``WAVL v1 v2 ...`` line: every wavelength at once.
+
+        ZEMAX releases into the mid-2000s wrote the whole wavelength list on
+        one WAVL line, with the weights following on WWGT, rather than one
+        ``WAVM index value weight`` line per wavelength. Handing such a line
+        to the WAVM reader indexed ``data[2]``, which raises IndexError for a
+        monochromatic file — so no file in that dialect could be read at all.
+        """
+        values = [float(v) for v in data[1:]]
+        if not values:
+            return
+        wavelengths = self.data_model.wavelengths
+        wavelengths["data"] = values
+        wavelengths["num_wavelengths"] = len(values)
+        existing = wavelengths.get("weights") or []
+        if len(existing) != len(values):
+            wavelengths["weights"] = [1.0] * len(values)
+
+    def _read_wavelength_weights_legacy(self, data: list[str]) -> None:
+        """Read a legacy ``WWGT w1 w2 ...`` line (the weights for WAVL)."""
+        weights = [float(v) for v in data[1:]]
+        if weights:
+            self.data_model.wavelengths["weights"] = weights
 
     def _read_primary_wave(self, data: list[str]) -> None:
         self.data_model.wavelengths["primary_index"] = int(data[1]) - 1
