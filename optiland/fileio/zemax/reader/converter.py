@@ -284,17 +284,19 @@ class ZemaxToOpticConverter(BaseOpticReader):
         aperture_data = self.data["aperture"]
 
         if aperture_data.get("floating_stop"):
-            stop_diameter = None
+            stop_semi_diameter = None
             for surf_data in self.data["surfaces"].values():
                 if surf_data.get("is_stop") and "diameter" in surf_data:
-                    stop_diameter = surf_data["diameter"]
+                    stop_semi_diameter = surf_data["diameter"]
                     break
-            if stop_diameter is None:
+            if stop_semi_diameter is None:
                 raise ValueError(
                     "Floating stop aperture specified but no stop diameter found"
                 )
+            # A Zemax DIAM operand is a semi-diameter, whereas
+            # float_by_stop_size is defined as the full stop diameter.
             self.optic.set_aperture(
-                aperture_type="float_by_stop_size", value=stop_diameter
+                aperture_type="float_by_stop_size", value=2.0 * stop_semi_diameter
             )
         else:
             for key, value in aperture_data.items():

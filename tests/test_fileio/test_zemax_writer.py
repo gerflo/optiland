@@ -44,6 +44,20 @@ def _round_trip(filename: str, tmp_path) -> tuple[Optic, Optic]:
     return original, reloaded
 
 
+def _surface_operand(text: str, surf_index: int, operand: str) -> list[str]:
+    """Return the argument tokens of *operand* inside block ``SURF surf_index``."""
+    current = None
+    for line in text.splitlines():
+        tokens = line.split()
+        if not tokens:
+            continue
+        if tokens[0] == "SURF":
+            current = int(tokens[1])
+        elif current == surf_index and tokens[0] == operand:
+            return tokens[1:]
+    raise AssertionError(f"{operand} not found on surface {surf_index}")
+
+
 def _surfaces_match(orig: Optic, reloaded: Optic, rtol: float = 1e-5) -> None:
     """Assert that surface radii and thicknesses match within rtol."""
     assert orig.surfaces.num_surfaces == reloaded.surfaces.num_surfaces
@@ -157,6 +171,22 @@ class TestRoundTripFloaAperture:
     def test_aperture_value(self, tmp_path, set_test_backend):
         orig, reloaded = _round_trip("lens_floa.zmx", tmp_path)
         assert_allclose(orig.aperture.value, reloaded.aperture.value, rtol=1e-5)
+
+    def test_written_diam_is_half_the_aperture_value(self, tmp_path, set_test_backend):
+        """Regression: DIAM is a semi-diameter, float_by_stop_size a diameter.
+
+        Writing the full diameter into the stop's DIAM operand doubled the
+        stop of every floating-stop system once the file was opened in Zemax.
+        """
+        optic = load_zemax_file(_zemax("lens_floa.zmx"))
+        optic.set_aperture(aperture_type="float_by_stop_size", value=14.0)
+        out = tmp_path / "floa.zmx"
+        save_zemax_file(optic, str(out))
+
+        diam = _surface_operand(
+            out.read_text(encoding="utf-8"), optic.surfaces.stop_index, "DIAM"
+        )
+        assert float(diam[0]) == pytest.approx(7.0)
 
 
 # ---------------------------------------------------------------------------

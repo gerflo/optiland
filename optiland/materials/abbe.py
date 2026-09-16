@@ -34,6 +34,15 @@ class AbbeModel(ABC):
         """Predicts the extinction coefficient at a given wavelength."""
         pass
 
+    def _is_nondispersive(self) -> bool:
+        """True if the Abbe number is zero, i.e. the index is constant.
+
+        Zemax writes a non-dispersive model glass as Vd = 0, and every Abbe
+        dispersion fit in this module carries 1/V terms that are singular
+        there. Callers short-circuit those fits rather than propagate NaN.
+        """
+        return not bool(be.any(self.abbe != 0))
+
 
 class AbbePolynomialModel(AbbeModel):
     """Legacy polynomial model for Abbe materials (d-line).
@@ -45,10 +54,14 @@ class AbbePolynomialModel(AbbeModel):
     def __init__(self, index: float, abbe: float):
         self.index = be.array([index])
         self.abbe = be.array([abbe])
-        self._p = self._get_coefficients()
+        self._p = None if self._is_nondispersive() else self._get_coefficients()
 
     def predict_n(self, wavelength: float | be.ndarray) -> float | be.ndarray:
         wavelength = be.array(wavelength)
+        if self._is_nondispersive():
+            # A constant index is defined at every wavelength, so the legacy
+            # range check below does not apply to it.
+            return be.atleast_1d(be.ones_like(wavelength) * self.index[0])
         if be.any(wavelength < 0.380) or be.any(wavelength > 0.750):
             # This legacy check is preserved
             raise ValueError("Wavelength out of range for this model.")
@@ -89,7 +102,11 @@ class BuchdahlModel(AbbeModel):
     def __init__(self, index, abbe):
         self.index = be.array([index])
         self.abbe = be.array([abbe])
-        self.v1, self.v2, self.v3 = self._calculate_buchdahl_coefficients()
+        if self._is_nondispersive():
+            zero = be.zeros_like(self.index)
+            self.v1, self.v2, self.v3 = zero, zero, zero
+        else:
+            self.v1, self.v2, self.v3 = self._calculate_buchdahl_coefficients()
 
     @property
     @abstractmethod

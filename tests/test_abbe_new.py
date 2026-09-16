@@ -183,3 +183,31 @@ class TestAbbeMaterialE:
         assert mat.index == 1.5
         assert mat.abbe == 60.0
         assert isinstance(mat.model, BuchdahlEModel)
+
+
+class TestNonDispersiveAbbeMaterial:
+    """Regression: an Abbe number of zero means an index that never varies.
+
+    Zemax writes a non-dispersive model glass as Vd = 0. Every dispersion fit
+    in this module carries 1/V terms, so such a glass used to evaluate to NaN
+    at every wavelength - which silently killed every ray traced through it
+    rather than raising anything.
+    """
+
+    @pytest.mark.parametrize("model", ["polynomial", "buchdahl"])
+    def test_abbe_material_index_is_constant(self, model, set_test_backend):
+        mat = AbbeMaterial(1.406, 0.0, model=model)
+        for wavelength in (0.45, 0.5875618, 0.65):
+            assert_allclose(mat.n(wavelength), 1.406, atol=1e-12)
+
+    def test_buchdahl_d_model_is_finite(self, set_test_backend):
+        model = BuchdahlDModel(1.406, 0.0)
+        assert_allclose(model.predict_n(0.55), 1.406, atol=1e-12)
+
+    def test_buchdahl_e_model_is_finite(self, set_test_backend):
+        model = BuchdahlEModel(1.3376, 0.0)
+        assert_allclose(model.predict_n(0.55), 1.3376, atol=1e-12)
+
+    def test_abbe_material_e_index_is_constant(self, set_test_backend):
+        mat = AbbeMaterialE(1.3376, 0.0)
+        assert_allclose(mat.n(0.48), 1.3376, atol=1e-12)

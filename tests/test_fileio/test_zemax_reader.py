@@ -309,7 +309,66 @@ class TestEndToEnd:
         optic = load_zemax_file(filename)
         assert isinstance(optic, Optic)
         assert optic.aperture.ap_type == "float_by_stop_size"
-        assert optic.aperture.value == 8.5
+        # The stop carries "DIAM 8.5" and a Zemax DIAM operand is a
+        # semi-diameter, so the full stop diameter is 17.0.
+        assert optic.aperture.value == 17.0
+
+    def test_floa_value_is_full_stop_diameter(self, zemax_dir):
+        """Regression: a Zemax DIAM operand is a semi-diameter.
+
+        float_by_stop_size is defined as the full stop diameter, so taking
+        the operand at face value halved every floating-stop system on
+        import - and doubled it again on export.
+        """
+        filename = os.path.join(zemax_dir, "lens_floa.zmx")
+        optic = load_zemax_file(filename)
+
+        stop_semi_diameter = 8.5  # the DIAM operand on the stop in the file
+        assert optic.aperture.value == pytest.approx(2.0 * stop_semi_diameter)
+
+    def test_model_glass_with_zero_abbe_is_non_dispersive(self):
+        """Regression: Zemax writes a non-dispersive model glass as Vd = 0.
+
+        The Abbe dispersion fits divide by V, so such a glass used to come
+        back as a NaN index and every ray traced through it died silently.
+        """
+        text = "\n".join(
+            [
+                "MODE SEQ",
+                "UNIT MM",
+                "ENPD 10",
+                "FTYP 0 0 1 1 0 0 0",
+                "XFLN 0",
+                "YFLN 0",
+                "PWAV 1",
+                "WAVM 1 0.55 1",
+                "SURF 0",
+                "  TYPE STANDARD",
+                "  CURV 0",
+                "  DISZ INFINITY",
+                "SURF 1",
+                "  STOP",
+                "  TYPE STANDARD",
+                "  CURV 0.02",
+                "  DISZ 5",
+                "  GLAS ___BLANK 1 0 1.406 0 0 0 0 0 0 0",
+                "SURF 2",
+                "  TYPE STANDARD",
+                "  CURV 0",
+                "  DISZ 10",
+                "SURF 3",
+                "  TYPE STANDARD",
+                "  CURV 0",
+                "  DISZ 0",
+            ]
+        )
+
+        optic = load_zemax_text(text)
+
+        material = optic.surfaces[1].material_post
+        for wavelength in (0.45, 0.55, 0.65):
+            n = float(be.to_numpy(be.atleast_1d(material.n(wavelength))).ravel()[0])
+            assert n == pytest.approx(1.406)
 
     def test_load_toroidal_surface(self, zemax_dir):
         filename = os.path.join(zemax_dir, "thorlabs_lj1598l1.zmx")
