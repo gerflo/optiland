@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 import optiland.backend as be
-from optiland.nonsequential._utils import as_param
+from optiland.nonsequential._utils import (
+    SELF_HIT_EPSILON_ABS,
+    as_param,
+    self_intersection_offset,
+)
 
 if TYPE_CHECKING:
     from optiland.coordinate_system import CoordinateSystem
@@ -108,15 +112,25 @@ class BaseComponent(ABC):
         positions_l = (positions_g - t_be) @ R_be
         directions_l = directions_g @ R_be
 
-        t_hit, normals_l, hit_mask, n_geom_l = self.geometry.ray_intersect(
-            positions_l, directions_l
-        )
+        # Self-intersection guard: push every origin forward by a
+        # dtype- and scale-aware offset before the geometry test, then add
+        # the offset back to the hit distance. A ray that has just left this
+        # surface sits on it up to rounding (about 1e-6 mm under float32 at
+        # a 10 mm scale); without the offset the geometry re-hits it and the
+        # ray bounces on the same surface again and again.
+        offset = self_intersection_offset(positions_g, translation)
+        origins_l = positions_l + offset[:, None] * directions_l
 
-        # T_EPSILON guard: prevent self-intersection after surface crossing
-        T_EPSILON = 1e-9
+        t_hit, normals_l, hit_mask, n_geom_l = self.geometry.ray_intersect(
+            origins_l, directions_l
+        )
+        t_hit = t_hit + offset
+
+        # Absolute floor on top of the offset, for geometries that report a
+        # hit at t = 0 exactly.
         inf_like = be.ones_like(t_hit) * be.inf
-        t_hit = be.where(t_hit > T_EPSILON, t_hit, inf_like)
-        hit_mask = hit_mask & (t_hit > T_EPSILON)
+        t_hit = be.where(t_hit > SELF_HIT_EPSILON_ABS, t_hit, inf_like)
+        hit_mask = hit_mask & (t_hit > SELF_HIT_EPSILON_ABS)
 
         # Dead rays can't hit
         t_hit = be.where(rays.alive, t_hit, inf_like)

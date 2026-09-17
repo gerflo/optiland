@@ -8,6 +8,9 @@ from __future__ import annotations
 import importlib.util
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
+
+import optiland.backend as be
 from optiland.backend.utils import to_numpy  # noqa: F401
 
 if TYPE_CHECKING:
@@ -19,6 +22,15 @@ _TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
 # holds several temporaries per live ray, and measured CPU throughput peaks
 # between roughly 10k and 20k rays per batch, falling off 2-3x on either side.
 DEFAULT_BATCH_SIZE = 16_384
+
+# Self-intersection guard. A ray that has just interacted with a surface sits
+# *on* that surface, up to the rounding error of its stored position. Every
+# geometry rejects hits closer than this absolute floor [mm]; the relative
+# factor below scales it with the coordinate magnitude and the float dtype so
+# a float32 trace at 10 mm scale (rounding residual ~1e-6 mm) does not
+# re-hit the surface it just left, which float64 never did.
+SELF_HIT_EPSILON_ABS = 1e-9
+SELF_HIT_EPSILON_REL_FACTOR = 16.0
 
 
 def is_tensor(value: Any) -> bool:
@@ -200,6 +212,62 @@ def get_detector_names(scene: Any) -> list[str]:
         return list(scene.detector_registry._registry.keys())  # type: ignore[attr-defined]
     except AttributeError:
         return []
+
+
+def float_eps(arr: Any) -> float:
+    """Machine epsilon of ``arr``'s floating-point dtype.
+
+    Args:
+        arr: A NumPy array or torch tensor. Non-float dtypes (and anything
+            that is not an array) fall back to float64.
+
+    Returns:
+        The dtype's ``eps`` (``2**-23`` for float32, ``2**-52`` for float64).
+    """
+    if is_tensor(arr):
+        import torch  # noqa: PLC0415
+
+        if arr.is_floating_point():
+            return float(torch.finfo(arr.dtype).eps)
+        return float(np.finfo(np.float64).eps)
+    dtype = np.asarray(arr).dtype
+    if np.issubdtype(dtype, np.floating):
+        return float(np.finfo(dtype).eps)
+    return float(np.finfo(np.float64).eps)
+
+
+def self_intersection_offset(positions: Any, translation: Any) -> Any:
+    """Per-ray distance [mm] to push a ray origin forward before intersecting.
+
+    The intersection routines shift each local ray origin by this amount
+    along its direction and add it back to the returned hit distance, so a
+    residual self-hit at ``t <= offset`` is rejected by the geometry's own
+    ``t > 0`` test while a genuine hit farther along the ray (the far side
+    of a ball lens, a second face) is still found. The offset is
+    ``max(SELF_HIT_EPSILON_ABS, SELF_HIT_EPSILON_REL_FACTOR * eps *
+    (1 + |p|_inf + |t|_inf))`` with ``eps`` the dtype's machine epsilon,
+    ``p`` the global ray position and ``t`` the component translation:
+    that is the magnitude of the rounding error the global-to-local
+    transform ``(p - t) @ R`` leaves in the local coordinates. Under
+    float64 the absolute floor dominates (unchanged behaviour); under
+    float32 it is roughly ``4e-5`` mm at a 10 mm scale.
+
+    Args:
+        positions: Global ray positions, shape (N, 3), NumPy or torch.
+        translation: Component/detector translation, shape (3,).
+
+    Returns:
+        A detached backend array of shape (N,) -- a numerical guard, never
+        part of the autograd graph.
+    """
+    pos_np = np.asarray(to_numpy(positions), dtype=np.float64)
+    if pos_np.ndim != 2:
+        return be.array(np.full(pos_np.shape[:1], SELF_HIT_EPSILON_ABS))
+    eps = float_eps(positions)
+    magnitude = np.abs(pos_np).max(axis=1) if pos_np.shape[0] else pos_np[:, 0]
+    t_mag = float(np.abs(np.asarray(translation, dtype=np.float64)).max())
+    relative = SELF_HIT_EPSILON_REL_FACTOR * eps * (1.0 + magnitude + t_mag)
+    return be.array(np.maximum(relative, SELF_HIT_EPSILON_ABS))
 
 
 def as_float(value: ScalarOrArrayT) -> float:

@@ -9,6 +9,10 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
 import optiland.backend as be
+from optiland.nonsequential._utils import (
+    SELF_HIT_EPSILON_ABS,
+    self_intersection_offset,
+)
 from optiland.nonsequential.components.base import _get_transform
 
 if TYPE_CHECKING:
@@ -87,21 +91,27 @@ class BaseDetector(ABC):
         positions_l = (positions_g - t_arr) @ R_arr
         directions_l = directions_g @ R_arr
 
+        # Self-intersection guard, identical to BaseComponent.intersect: a
+        # transmissive (absorb=False) detector must not record the ray it
+        # just let through a second time under float32 rounding.
+        offset = self_intersection_offset(positions_g, translation)
+        origins_l = positions_l + offset[:, None] * directions_l
+
         t_hit, normals_l, hit_mask, _n_geom_l = self.geometry.ray_intersect(
-            positions_l, directions_l
+            origins_l, directions_l
         )
 
         # Geometry may return numpy arrays even in torch-backend mode (geometry
         # internals are numpy-based). Convert to the current backend format so
         # that be.where dispatches correctly in both NumPy and Torch paths.
-        t_hit = be.array(t_hit)
+        t_hit = be.array(t_hit) + offset
         normals_l = be.array(normals_l)
         hit_mask = be.array(hit_mask)
 
-        # T_EPSILON guard: prevent self-intersection
-        T_EPSILON = 1e-9
-        t_hit = be.where(t_hit > T_EPSILON, t_hit, be.full_like(t_hit, be.inf))
-        hit_mask = hit_mask & (t_hit > T_EPSILON)
+        t_hit = be.where(
+            t_hit > SELF_HIT_EPSILON_ABS, t_hit, be.full_like(t_hit, be.inf)
+        )
+        hit_mask = hit_mask & (t_hit > SELF_HIT_EPSILON_ABS)
 
         alive_be = be.array(rays.alive)
         t_hit = be.where(alive_be, t_hit, be.full_like(t_hit, be.inf))
