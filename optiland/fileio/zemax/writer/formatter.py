@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import optiland.backend as be
@@ -19,7 +20,10 @@ from optiland.fileio.zemax.surfaces import (
     CoordinateBreakSurfaceHandler,
     get_handler_for_optiland_type,
 )
+from optiland.materials.ideal import IdealMaterial
 from optiland.materials.material import Material
+from optiland.physical_apertures import RadialAperture
+from optiland.physical_apertures.base import DifferenceAperture
 
 if TYPE_CHECKING:
     from optiland.optic import Optic
@@ -51,6 +55,25 @@ _GEOM_STR_TO_TYPE: dict[str, str] = {
     "Odd Asphere": "odd_asphere",
     "Toroidal": "toroidal",
 }
+
+
+def _catalog_from_data_file(material: Material) -> str | None:
+    """Return the manufacturer catalog named by a glass's data file, if any.
+
+    A glass looked up by name alone (``Material("N-SF10")``) carries no
+    ``reference``, yet its data file names the manufacturer:
+    ``glass/schott/N-SF10.yml``. Imported catalogs nest one level deeper
+    (``glass/winlens/schott/...``), so the catalog is the directory that holds
+    the file.
+    """
+    data = getattr(material, "material_data", None)
+    filename = data.get("filename") if isinstance(data, dict) else None
+    if not filename:
+        return None
+    parts = Path(str(filename)).parts
+    if len(parts) >= 3 and parts[0] == "glass":
+        return parts[-2]
+    return None
 
 
 class OpticToZemaxConverter:
@@ -190,7 +213,7 @@ class OpticToZemaxConverter:
         output_idx = 0
         cb_handler = CoordinateBreakSurfaceHandler()
 
-        for surface in self._optic.surfaces:
+        for surface_index, surface in enumerate(self._optic.surfaces):
             optiland_type = self._resolve_geometry_type(surface, output_idx)
             cs_angles = self._coordinate_break_angles(surface.geometry.cs)
 
@@ -206,7 +229,7 @@ class OpticToZemaxConverter:
                 output_idx += 1
 
             raw = self._encode_surface_body(
-                surface, optiland_type, output_idx, glass_catalogs
+                surface, optiland_type, output_idx, glass_catalogs, surface_index
             )
             model.surfaces[output_idx] = raw
             output_idx += 1
@@ -263,13 +286,13 @@ class OpticToZemaxConverter:
         optiland_type: str,
         output_idx: int,
         glass_catalogs: list[str],
+        surface_index: int | None = None,
     ) -> dict[str, Any]:
         """Build the raw Zemax surface dict for a single optic surface."""
         handler = get_handler_for_optiland_type(optiland_type)
         raw = handler.format(surface)
 
-        thickness = float(be.atleast_1d(be.array(surface.thickness)).ravel()[0])
-        raw["DISZ"] = "INFINITY" if be.isinf(thickness) else thickness
+        raw["DISZ"] = self._surface_thickness(surface, surface_index)
 
         if surface.is_stop:
             raw["STOP"] = True
@@ -285,7 +308,9 @@ class OpticToZemaxConverter:
 
         # Physical aperture (CLAP)
         if surface.aperture is not None:
-            raw["CLAP"] = surface.aperture
+            clap = self._zemax_aperture(surface.aperture, output_idx)
+            if clap is not None:
+                raw["CLAP"] = clap
 
         # Glass — check the reflective flag first (mirror)
         is_reflective = getattr(
@@ -298,6 +323,57 @@ class OpticToZemaxConverter:
             raw["GLAS"] = glass_entry
 
         return raw
+
+    def _surface_thickness(self, surface: Any, surface_index: int | None) -> Any:
+        """Return the DISZ value for a surface: its thickness, or ``INFINITY``.
+
+        The object surface is the exception. Its position lives in its
+        coordinate system, and its ``thickness`` attribute is not kept in step
+        with it: a finite object restored from a saved design reads
+        ``thickness == 0``. Writing that put the object on top of the first
+        surface, which Zemax rejects ("Entrance pupil cannot be located at
+        object"), so the object's DISZ is its axial gap to the first surface.
+        """
+        surfaces = self._optic.surfaces.surfaces
+        if surface_index == 0 and len(surfaces) > 1:
+            if self._optic.object_surface.is_infinite:
+                return "INFINITY"
+            z_object = be.atleast_1d(be.array(surface.geometry.cs.z)).ravel()[0]
+            z_first = be.atleast_1d(be.array(surfaces[1].geometry.cs.z)).ravel()[0]
+            return float(z_first) - float(z_object)
+        thickness = float(be.atleast_1d(be.array(surface.thickness)).ravel()[0])
+        return "INFINITY" if be.isinf(thickness) else thickness
+
+    def _zemax_aperture(self, aperture: Any, surf_idx: int) -> Any:
+        """Map a physical aperture onto a Zemax circular aperture, if possible.
+
+        A Zemax circular surface aperture is the annulus ``r_min <= r <= r_max``.
+        A centred disc cut out of a centred radial aperture (a
+        ``DifferenceAperture`` such as a mushroom stop) is exactly that
+        annulus; it used to reach the encoder unconverted and was dropped
+        without a word. A shape that still cannot be written is reported.
+        """
+        if isinstance(aperture, RadialAperture):
+            return aperture
+        if isinstance(aperture, DifferenceAperture):
+            outer, cut = aperture.a, aperture.b
+            if (
+                type(outer) is RadialAperture
+                and type(cut) is RadialAperture
+                and float(cut.r_min) == 0.0
+                and float(cut.r_max) < float(outer.r_max)
+            ):
+                return RadialAperture(
+                    r_max=float(outer.r_max),
+                    r_min=max(float(outer.r_min), float(cut.r_max)),
+                )
+        warnings.warn(
+            f"Surface {surf_idx}: a {type(aperture).__name__} cannot be written "
+            "as a Zemax surface aperture and is not exported.",
+            UserWarning,
+            stacklevel=4,
+        )
+        return None
 
     def _format_glass(
         self,
@@ -331,19 +407,26 @@ class OpticToZemaxConverter:
         if isinstance(mat, str) and mat.lower() == "mirror":
             return {"name": "MIRROR"}
 
-        # Catalog glass (Material from glass catalog)
-        if isinstance(mat, Material) and mat.reference:
-            catalog = mat.reference.upper()
+        # Catalog glass (Material from glass catalog). A glass looked up by name
+        # alone has no reference, but its data file still names the
+        # manufacturer; without it the export carried no GCAT line and Zemax
+        # could not find the glass.
+        if isinstance(mat, Material):
+            catalog = mat.reference or _catalog_from_data_file(mat)
+            if not catalog:
+                return {"name": mat.name.upper()}
+            catalog = catalog.upper()
             glass_catalogs.append(catalog)
             n_d, v_d = compute_abbe_number(mat, WL_D)
             return {"name": mat.name.upper(), "catalog": catalog, "n": n_d, "V": v_d}
 
-        # Named glass without explicit reference — try to use name only
-        if isinstance(mat, Material):
-            return {"name": mat.name.upper()}
-
         # AbbeMaterial or any other material -> MODEL glass
         n_d, v_num = compute_abbe_number(mat, float(self._optic.primary_wavelength))
+        if isinstance(mat, IdealMaterial):
+            # Zemax reads a model glass with Vd = 0 as a constant index. The
+            # generic fallback of 99.99 for a flat dispersion curve would make
+            # the medium dispersive there.
+            v_num = 0.0
 
         mat_name = getattr(mat, "name", type(mat).__name__)
         warnings.warn(

@@ -607,3 +607,109 @@ class TestWriterPrecision:
 
         for value in (9.05795225862422e-05, -11040.02286, 1.0 / 3.0, 6365.20955):
             assert float(_fmt(value)) == value
+
+
+# ---------------------------------------------------------------------------
+# Regressions: exporting a design restored from a saved .json file
+# ---------------------------------------------------------------------------
+
+
+def _saved_design() -> Optic:
+    """A finite-object doublet as it comes back from a saved .json design."""
+    optic = Optic()
+    optic.surfaces.add(index=0, thickness=25.0)
+    optic.surfaces.add(
+        index=1, radius=50.0, thickness=5.0, material="N-BK7", is_stop=True
+    )
+    optic.surfaces.add(index=2, radius=-50.0, thickness=40.0, material="S-BAH11")
+    optic.surfaces.add(index=3)
+    optic.set_aperture(aperture_type="float_by_stop_size", value=10.0)
+    optic.fields.set_type(field_type="object_height")
+    optic.fields.add(y=0.0)
+    optic.fields.add(y=2.0)
+    optic.wavelengths.add(0.55, is_primary=True)
+    return Optic.from_dict(optic.to_dict())
+
+
+class TestSavedDesignExport:
+    def test_finite_object_distance_is_written(self, tmp_path):
+        """Regression: the object was written on top of the first surface.
+
+        A finite object restored from JSON keeps its position in its
+        coordinate system but reads thickness 0, and the writer used that
+        thickness, so Zemax reported "Entrance pupil cannot be located at
+        object".
+        """
+        optic = _saved_design()
+        assert optic.surfaces[0].thickness == 0.0  # the stale attribute
+
+        model = OpticToZemaxConverter(optic).convert()
+        assert model.surfaces[0]["DISZ"] == pytest.approx(25.0)
+
+        out = tmp_path / "saved.zmx"
+        save_zemax_file(optic, str(out))
+        reloaded = load_zemax_file(str(out))
+        gap = float(reloaded.surfaces[1].geometry.cs.z) - float(
+            reloaded.surfaces[0].geometry.cs.z
+        )
+        assert gap == pytest.approx(25.0)
+
+    def test_glass_looked_up_by_name_declares_its_catalog(self):
+        """Regression: without an explicit reference no GCAT line was written.
+
+        Zemax then could not find N-BK7 or S-BAH11 in its current catalogs.
+        """
+        model = OpticToZemaxConverter(_saved_design()).convert()
+
+        assert model.glass_catalogs == ["SCHOTT", "OHARA"]
+        assert model.surfaces[1]["GLAS"]["catalog"] == "SCHOTT"
+        assert model.surfaces[2]["GLAS"]["catalog"] == "OHARA"
+
+    def test_mushroom_stop_is_written_as_annular_aperture(self, tmp_path):
+        """Regression: a DifferenceAperture was dropped without a warning.
+
+        A centred disc cut out of a centred radial aperture is exactly the
+        annulus a Zemax circular aperture describes.
+        """
+        from optiland.physical_apertures import RadialAperture
+        from optiland.physical_apertures.base import DifferenceAperture
+
+        optic = _saved_design()
+        optic.surfaces[2].aperture = DifferenceAperture(
+            RadialAperture(r_max=15.0), RadialAperture(r_max=2.25)
+        )
+        out = tmp_path / "mushroom.zmx"
+        save_zemax_file(optic, str(out))
+
+        claps = [
+            [float(v) for v in line.split()[1:3]]
+            for line in out.read_text(encoding="utf-8").splitlines()
+            if line.strip().startswith("CLAP")
+        ]
+        assert claps == [[2.25, 15.0]]
+
+    def test_unwritable_aperture_is_reported(self):
+        """Regression: an aperture the file cannot carry vanished silently."""
+        from optiland.physical_apertures.elliptical import EllipticalAperture
+
+        optic = _saved_design()
+        optic.surfaces[2].aperture = EllipticalAperture(a=5.0, b=3.0)
+
+        with pytest.warns(UserWarning, match="EllipticalAperture cannot be written"):
+            model = OpticToZemaxConverter(optic).convert()
+        assert "CLAP" not in model.surfaces[2]
+
+    def test_constant_index_medium_is_written_without_dispersion(self, tmp_path):
+        """Regression: an IdealMaterial became a model glass with Vd = 99.99.
+
+        That is the generic fallback for a flat dispersion curve, and Zemax
+        treats it as a dispersive glass; a constant index is Vd = 0.
+        """
+        from optiland.materials import IdealMaterial
+
+        optic = _saved_design()
+        optic.surfaces[2].material_post = IdealMaterial(1.406)
+
+        with pytest.warns(UserWarning, match="writing as MODEL glass"):
+            model = OpticToZemaxConverter(optic).convert()
+        assert model.surfaces[2]["GLAS"]["V"] == 0.0
