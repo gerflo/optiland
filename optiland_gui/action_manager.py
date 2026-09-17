@@ -139,6 +139,11 @@ class ActionManager:
             triggered=self.main_window.export_zemax_action,
         )
         self._create_action(
+            "export_zemax_2003",
+            "To Zemax &2003 (.zmx)...",
+            triggered=self.main_window.export_zemax_2003_action,
+        )
+        self._create_action(
             "export_codev",
             "To &CODE V (.seq)...",
             triggered=self.main_window.export_codev_action,

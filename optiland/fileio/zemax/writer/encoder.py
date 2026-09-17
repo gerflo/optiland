@@ -10,6 +10,7 @@ Kramer Harrison, 2024
 from __future__ import annotations
 
 import math
+import warnings
 from typing import TYPE_CHECKING, Any
 
 from optiland.physical_apertures import OffsetRadialAperture
@@ -246,3 +247,277 @@ class ZemaxFileEncoder:
             return f"  GLAS {name} 0 0 {_fmt(glas['n'])} {_fmt(glas['V'])} 0 0 0 0 0 0"
         # Catalog glass without index data (e.g. round-tripped from another format)
         return f"  GLAS {name} 0 0 0 0 0 0 0 0 0 0"
+
+
+# ---------------------------------------------------------------------------
+# ZEMAX 2003 dialect
+# ---------------------------------------------------------------------------
+
+# ZEMAX 2003 ships Schott's pre-2000 glasses as SCHOTT and the lead-free
+# N-glasses as SCHOTT_2000; the sample files of that release declare both.
+_ZEMAX_2003_CATALOGS: dict[str, tuple[str, ...]] = {
+    "SCHOTT": ("SCHOTT", "SCHOTT_2000"),
+}
+_ZEMAX_2003_MAX_FIELDS = 12
+_ZEMAX_2003_MAX_WAVELENGTHS = 12
+_ZEMAX_2003_VIGNETTING_KEYS = (
+    "vignette_decenter_x",
+    "vignette_decenter_y",
+    "vignette_compress_x",
+    "vignette_compress_y",
+    "vignette_tangent_angle",
+)
+
+
+def _fmt_2003(value: float) -> str:
+    """Format a float at full float64 precision with a three-digit exponent.
+
+    ``1.0`` becomes ``1.0000000000000000E+000``, the exponent width ZEMAX 2003
+    itself writes.
+    """
+    mantissa, exponent = f"{float(value):.16E}".split("E")
+    return f"{mantissa}E{exponent[0]}{int(exponent[1:]):03d}"
+
+
+class Zemax2003FileEncoder(ZemaxFileEncoder):
+    """Encodes a ZemaxDataModel for ZEMAX-EE of January 2003.
+
+    That release reads current OpticStudio output only partly. The operands
+    written here, their order and their token counts follow the sample files
+    shipped with it:
+
+    - ``VERS 30106 149`` and ``UNIT MM NW NWC``. Test files that froze ZEMAX
+      2003 on open all had a bare ``UNIT MM`` and a ``VERS`` line without its
+      build number.
+    - Fields and wavelengths as value lists (``XFLD``/``YFLD``/``FWGT``,
+      ``WAVL``/``WWGT``) under a two-token ``FTYP``; at most 12 of each.
+    - A mode on every ``DIAM`` (fixed for a floating stop), the solve slots on
+      ``CURV``, a ``POPS`` line per surface, the ``BLNK``/``TOL``/``MNUM``/
+      ``MOFF`` trailer, and ``___BLANK`` as the name of a model glass.
+
+    Vignetting factors and decentred surface apertures have no operand in that
+    format; they are left out with a warning.
+    """
+
+    def encode(self) -> list[str]:
+        """Produce the complete list of .zmx text lines.
+
+        Returns:
+            A list of strings, one per line of the output file.
+
+        Raises:
+            ValueError: If the system has more fields or wavelengths than
+                ZEMAX 2003 holds.
+        """
+        self._check_limits()
+        lines: list[str] = []
+        self._encode_header(lines)
+        self._encode_surfaces(lines)
+        self._encode_trailer(lines)
+        return lines
+
+    def _check_limits(self) -> None:
+        n_fields = self._model.fields.get("num_fields", 0)
+        n_wavelengths = len(self._model.wavelengths.get("data", []))
+        if n_fields > _ZEMAX_2003_MAX_FIELDS:
+            raise ValueError(
+                f"ZEMAX 2003 holds at most {_ZEMAX_2003_MAX_FIELDS} fields; "
+                f"this system has {n_fields}."
+            )
+        if n_wavelengths > _ZEMAX_2003_MAX_WAVELENGTHS:
+            raise ValueError(
+                f"ZEMAX 2003 holds at most {_ZEMAX_2003_MAX_WAVELENGTHS} "
+                f"wavelengths; this system has {n_wavelengths}."
+            )
+
+    # ------------------------------------------------------------------
+    # Header block
+    # ------------------------------------------------------------------
+
+    def _encode_header(self, lines: list[str]) -> None:
+        zero, one = _fmt_2003(0.0), _fmt_2003(1.0)
+        lines.append("VERS 30106 149")
+        lines.append("MODE SEQ")
+        lines.append(f"NAME {self._model.name}" if self._model.name else "NAME")
+        lines.append("NOTE 1 Notes...")
+        lines.append("NOTE 2  ")
+        lines.append("NOTE 3  ")
+        lines.append("UNIT MM NW NWC")
+        self._encode_aperture(lines)
+        lines.append("GFAC 0 0")
+        lines.append("GCAT " + " ".join(self._catalogs()))
+        lines.append("RAIM 1.0E-8 0 1 1 0 0")
+        lines.append(f"PUSH {zero} {zero} {zero} 0")
+        lines.append(f"SDMA {zero} 1 {zero}")
+        self._encode_fields(lines)
+        self._encode_wavelengths(lines)
+        lines.append(f"POLS 1 {zero} {one} {zero} {zero} 1")
+        lines.append("GLRS 1")
+        lines.append(
+            "GSTD 0 100.00000 100.00000 100.00000 100.00000 100.00000 100.00000 0"
+        )
+        tol = _fmt_2003(1e-6)
+        lines.append(f"NSCD 100 500 {zero} {tol} 5 {tol} 0 0 0 0 {zero} 0")
+        lines.append("COFN COATING.DAT SCATTER_PROFILE.DAT ABG_DATA.DAT")
+
+    def _encode_aperture(self, lines: list[str]) -> None:
+        ap = self._model.aperture
+        for ap_type, operand in _AP_TYPE_TO_OPERAND.items():
+            if ap_type not in ap:
+                continue
+            value = _fmt_2003(ap[ap_type])
+            if operand == "FLOA":
+                lines.append("FLOA")
+            elif operand in ("FNUM", "PFIL"):
+                # One FNUM operand, flagged real (0) or paraxial (1).
+                lines.append(f"FNUM {value} {1 if operand == 'PFIL' else 0}")
+            elif operand == "OBNA":
+                lines.append(f"OBNA {value} 0")
+            else:
+                lines.append(f"{operand} {value}")
+            return
+
+    def _catalogs(self) -> list[str]:
+        names: list[str] = []
+        for catalog in self._model.glass_catalogs or ["SCHOTT"]:
+            key = catalog.upper()
+            names.extend(_ZEMAX_2003_CATALOGS.get(key, (key,)))
+        return list(dict.fromkeys(names))
+
+    def _encode_fields(self, lines: list[str]) -> None:
+        fields = self._model.fields
+        n = fields.get("num_fields", 0)
+        ftyp = fields.get(
+            "ftyp_int", _FIELD_TYPE_TO_FTYP.get(fields.get("type", "angle"), 0)
+        )
+        lines.append(f"FTYP {ftyp} 0")
+        lines.append("ROPD 2")
+        lines.append("PICB 1")
+        if n == 0:
+            # ZEMAX needs at least one field point.
+            n, fields = 1, {"x": [0.0], "y": [0.0], "weights": [1.0]}
+
+        def values(key: str, default: float) -> str:
+            return " ".join(_fmt_2003(v) for v in fields.get(key, [default] * n))
+
+        lines.append("XFLD " + values("x", 0.0))
+        lines.append("YFLD " + values("y", 0.0))
+        lines.append("FWGT " + values("weights", 1.0))
+
+        if any(
+            float(v) != 0.0
+            for key in _ZEMAX_2003_VIGNETTING_KEYS
+            for v in fields.get(key, [])
+        ):
+            warnings.warn(
+                "ZEMAX 2003 has no operand for field vignetting factors; they "
+                "are not exported.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    def _encode_wavelengths(self, lines: list[str]) -> None:
+        wavelengths = self._model.wavelengths
+        data = list(wavelengths.get("data", []))
+        weights = list(wavelengths.get("weights") or [])
+        if len(weights) != len(data):
+            weights = [1.0] * len(data)
+        if data:
+            lines.append("WAVL " + " ".join(_fmt_2003(v) for v in data))
+            lines.append("WWGT " + " ".join(_fmt_2003(w) for w in weights))
+        lines.append(f"PWAV {wavelengths.get('primary_index', 0) + 1}")
+
+    # ------------------------------------------------------------------
+    # Surface blocks
+    # ------------------------------------------------------------------
+
+    def _encode_surfaces(self, lines: list[str]) -> None:
+        for idx in sorted(self._model.surfaces.keys()):
+            self._surface_index = idx
+            lines.append(f"SURF {idx}")
+            self._encode_surface(lines, self._model.surfaces[idx])
+
+    def _encode_surface(self, lines: list[str], raw: dict[str, Any]) -> None:
+        zero, one = _fmt_2003(0.0), _fmt_2003(1.0)
+        if raw.get("STOP"):
+            lines.append("  STOP")
+        lines.append(f"  TYPE {raw.get('TYPE', 'STANDARD')}")
+        lines.append(f"  CURV {_fmt_2003(raw.get('CURV', 0.0))} 0 {zero} {zero}")
+        self._encode_parameters(lines, raw)
+        self._encode_thickness(lines, raw)
+        self._encode_glass_line(lines, raw)
+        self._encode_conic(lines, raw)
+        self._encode_diameter(lines, raw)
+        lines.append(f"  POPS 0 0 0 0 0 0 0 0 1 1 {one} {one}")
+        self._encode_physical_aperture(lines, raw)
+
+    def _encode_parameters(self, lines: list[str], raw: dict[str, Any]) -> None:
+        # That release writes every parameter a surface holds, zeros included.
+        for i in range(1, 17):
+            key = f"PARM_{i}"
+            if key in raw:
+                lines.append(f"  PARM {i} {_fmt_2003(float(raw[key]))}")
+
+    def _encode_thickness(self, lines: list[str], raw: dict[str, Any]) -> None:
+        disz = raw.get("DISZ", 0.0)
+        if disz == "INFINITY" or (isinstance(disz, float) and math.isinf(disz)):
+            lines.append("  DISZ INFINITY")
+        else:
+            lines.append(f"  DISZ {_fmt_2003(float(disz))}")
+
+    def _encode_conic(self, lines: list[str], raw: dict[str, Any]) -> None:
+        coni = raw.get("CONI", 0.0)
+        if coni is not None and abs(float(coni)) > 1e-16:
+            lines.append(f"  CONI {_fmt_2003(float(coni))}")
+
+    def _encode_diameter(self, lines: list[str], raw: dict[str, Any]) -> None:
+        diam = raw.get("DIAM")
+        if diam is None:
+            lines.append(f"  DIAM {_fmt_2003(0.0)} 0 0")
+            return
+        mode = 1 if raw.get("DIAM_FIXED") else 0
+        lines.append(f"  DIAM {_fmt_2003(float(diam))} {mode} 0")
+
+    def _encode_physical_aperture(self, lines: list[str], raw: dict[str, Any]) -> None:
+        clap = raw.get("CLAP")
+        if clap is None or not hasattr(clap, "r_min"):
+            return
+        if isinstance(clap, OffsetRadialAperture) and (
+            clap.offset_x != 0.0 or clap.offset_y != 0.0
+        ):
+            warnings.warn(
+                f"Surface {self._surface_index}: ZEMAX 2003 has no operand for a "
+                "decentred surface aperture; the aperture is not exported rather "
+                "than written centred.",
+                UserWarning,
+                stacklevel=2,
+            )
+            return
+        lines.append(
+            f"  CLAP {_fmt_2003(float(clap.r_min))} {_fmt_2003(float(clap.r_max))}"
+        )
+
+    def _encode_glas(self, glas: dict[str, Any]) -> str:
+        name = glas.get("name", "")
+        nd = float(glas.get("n", 0.0))
+        vd = float(glas.get("V", 0.0))
+        if name == "MIRROR":
+            label, flags, nd, vd = "MIRROR", "0 0", 0.0, 0.0
+        elif "catalog" not in glas and "n" in glas and "V" in glas:
+            label, flags = "___BLANK", "1 0"
+        else:
+            label, flags = name, "0 0"
+        return (
+            f"  GLAS {label} {flags} {nd:.8f} {vd:.8f} 0.00000000 0 0 0 "
+            "0.00000000 0.00000000 "
+        )
+
+    # ------------------------------------------------------------------
+    # Trailer
+    # ------------------------------------------------------------------
+
+    def _encode_trailer(self, lines: list[str]) -> None:
+        lines.append("BLNK ")
+        lines.append("TOL TOFF   0   0              0              0   0")
+        lines.append("MNUM 1")
+        lines.append('MOFF   0   1 "" 0 0 0 1 1 0.0 0.0 ')

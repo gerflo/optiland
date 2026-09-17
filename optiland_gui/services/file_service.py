@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import warnings
 
 import optiland.backend as be
 from optiland.fileio import (
@@ -298,21 +299,39 @@ class FileService:
         except Exception as e:
             self._toast(f"Failed to import CODE V file from {filepath}: {e}", "error")
 
-    def export_zemax(self, filepath: str) -> None:
+    def export_zemax(self, filepath: str, dialect: str = "opticstudio") -> None:
         """Export the current system to a Zemax ``.zmx`` file.
 
         This is a non-destructive export: it does not update
-        :attr:`_current_filepath` or modify the modified flag.
+        :attr:`_current_filepath` or modify the modified flag. Whatever the
+        file cannot carry (an aperture shape, vignetting factors) is left out
+        with a warning, which is shown as a toast rather than lost on the
+        console.
 
         Args:
             filepath: Destination path for the ``.zmx`` file.
+            dialect: ``"opticstudio"`` or ``"zemax2003"``; see
+                :func:`optiland.fileio.save_zemax_file`.
         """
         try:
             optic = self._connector._optic
             if optic is None:
                 self._toast("No optical system loaded to export.", "warning")
                 return
-            save_zemax_file(optic, filepath)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                save_zemax_file(optic, filepath, dialect=dialect)
+            messages = list(
+                dict.fromkeys(
+                    str(w.message) for w in caught if w.category is UserWarning
+                )
+            )
+            if messages:
+                self._toast(
+                    f"Exported to {filepath} with {len(messages)} warning(s).",
+                    "warning",
+                    sub="\n".join(messages),
+                )
         except Exception as e:
             self._toast(f"Failed to export Zemax file to {filepath}: {e}", "error")
 

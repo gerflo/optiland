@@ -447,7 +447,9 @@ class MainWindow(FramelessWindow):
             )
         )
         export_menu = file_menu.addMenu("&Export")
-        export_menu.addActions(am.get_actions("export_zemax", "export_codev"))
+        export_menu.addActions(
+            am.get_actions("export_zemax", "export_zemax_2003", "export_codev")
+        )
         file_menu.addSeparator()
         file_menu.addAction(am.get_action("exit"))
 
@@ -1327,9 +1329,17 @@ class MainWindow(FramelessWindow):
     @Slot()
     def export_zemax_action(self):
         """Show a file dialog and export the current system as a Zemax .zmx file."""
+        self._export_zemax("Export to Zemax", "opticstudio")
+
+    @Slot()
+    def export_zemax_2003_action(self):
+        """Show a file dialog and export the current system for ZEMAX 2003."""
+        self._export_zemax("Export to ZEMAX 2003", "zemax2003")
+
+    def _export_zemax(self, title: str, dialect: str) -> None:
         filepath, _ = QFileDialog.getSaveFileName(
             self,
-            "Export to Zemax",
+            title,
             self._get_dialog_start_dir("Paths/LastSaveDir", "Paths/LastOpenDir"),
             "Zemax Files (*.zmx);;All Files (*)",
         )
@@ -1337,7 +1347,7 @@ class MainWindow(FramelessWindow):
             if not filepath.lower().endswith(".zmx"):
                 filepath += ".zmx"
             self._remember_dialog_path("Paths/LastSaveDir", filepath)
-            self.connector.export_zemax(filepath)
+            self.connector.export_zemax(filepath, dialect=dialect)
 
     @Slot()
     def export_codev_action(self):

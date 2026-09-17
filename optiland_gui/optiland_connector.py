@@ -547,13 +547,14 @@ class OptilandConnector(QObject):
         """
         self._file_service.import_codev(filepath)
 
-    def export_zemax(self, filepath: str) -> None:
+    def export_zemax(self, filepath: str, dialect: str = "opticstudio") -> None:
         """Export the current system to a Zemax ``.zmx`` file.
 
         Args:
             filepath: Destination path for the ``.zmx`` file.
+            dialect: ``"opticstudio"`` or ``"zemax2003"``.
         """
-        self._file_service.export_zemax(filepath)
+        self._file_service.export_zemax(filepath, dialect=dialect)
 
     def export_codev(self, filepath: str) -> None:
         """Export the current system to a CODE V ``.seq`` file.
