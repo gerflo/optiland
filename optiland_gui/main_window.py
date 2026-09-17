@@ -167,6 +167,18 @@ class MainWindow(FramelessWindow):
             """
             return self._win.panel_manager.viewer_panel
 
+        def get_nsq_panel(self):
+            """Returns the non-sequential (beam splitter / illumination) panel.
+
+            Returns:
+                NSQPanel: The non-sequential scene panel widget.
+            """
+            return self._win.panel_manager.nsq_panel
+
+        def show_nsq_panel(self):
+            """Brings the Non-Sequential dock widget to the front."""
+            self._win.focus_dock_widget(self._win.panel_manager.nsq_dock)
+
         def get_catalog_browser_panel(self):
             """Returns the stock parts catalog browser panel."""
             return self._win.panel_manager.catalog_browser_panel
@@ -837,6 +849,10 @@ class MainWindow(FramelessWindow):
         parent_tab_widget = dock_widget.parentWidget()
         if isinstance(parent_tab_widget, QTabWidget):
             parent_tab_widget.setCurrentWidget(dock_widget)
+        elif not dock_widget.isFloating():
+            # QMainWindow tabifies docks with an internal tab bar and keeps
+            # itself as their parent; raise_() is what selects the tab.
+            dock_widget.raise_()
         dock_widget.setFocus(Qt.FocusReason.OtherFocusReason)
         if dock_widget.isFloating():
             top_level = dock_widget.window()

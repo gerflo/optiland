@@ -84,6 +84,7 @@ class SidebarWidget(QWidget):
             ("dash", "Dash", "dash.svg"),
             ("design", "Design", "design.svg"),
             ("analysis", "Analysis", "analysis.svg"),
+            ("nonsequential", "Non-Seq", "flash.svg"),
             ("optimization", "Optimization", "optimization.svg"),
             ("catalogs", "Catalogs", "materials.svg"),
             ("tolerancing", "Tolerancing", "tolerancing.svg"),

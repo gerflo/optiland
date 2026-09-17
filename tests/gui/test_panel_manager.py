@@ -14,6 +14,7 @@ def test_panel_manager_update_theme_propagates_to_all_theme_aware_panels() -> No
     manager.viewer_panel = MagicMock()
     manager.python_terminal = MagicMock()
     manager.optimization_panel = MagicMock()
+    manager.nsq_panel = MagicMock()
     manager.system_properties = MagicMock()
 
     manager.update_theme("light")
@@ -25,6 +26,7 @@ def test_panel_manager_update_theme_propagates_to_all_theme_aware_panels() -> No
     manager.viewer_panel.update_theme.assert_called_once_with("light")
     manager.python_terminal.set_theme.assert_called_once_with("light")
     manager.optimization_panel.update_theme.assert_called_once_with("light")
+    manager.nsq_panel.update_theme.assert_called_once_with("light")
     manager.system_properties.update_theme.assert_called_once_with("light")
 
 

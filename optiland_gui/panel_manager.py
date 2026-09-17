@@ -18,6 +18,7 @@ from .catalog_browser_panel import CatalogBrowserPanel
 from .catalogs_panel import CatalogsPanel
 from .lens_editor import LensEditor
 from .material_browser_panel import MaterialBrowserPanel
+from .nsq_panel import NSQPanel
 from .optimization_panel import OptimizationPanel
 from .system_properties_panel import SystemPropertiesPanel
 from .viewer_panel import ViewerPanel
@@ -94,6 +95,9 @@ class PanelManager:
             self.optimization_panel, "OptimizationDock", "Optimization"
         )
 
+        self.nsq_panel = NSQPanel(self.connector)
+        self.nsq_dock = self._create_dock(self.nsq_panel, "NSQDock", "Non-Sequential")
+
         self.catalog_browser_panel = CatalogBrowserPanel(self.connector)
         self.material_browser_panel = MaterialBrowserPanel(self.connector)
         self.catalogs_panel = CatalogsPanel(
@@ -123,6 +127,7 @@ class PanelManager:
             self.lens_editor_dock,
             self.system_properties_dock,
             self.analysis_dock,
+            self.nsq_dock,
             self.optimization_dock,
             self.catalog_browser_dock,
             self.terminal_dock,
@@ -196,6 +201,8 @@ class PanelManager:
         self.main_window.tabifyDockWidget(
             self.optimization_dock, self.catalog_browser_dock
         )
+        # The non-sequential panel shares the analysis area as a tab.
+        self.main_window.tabifyDockWidget(self.analysis_dock, self.nsq_dock)
         self.main_window.splitDockWidget(
             self.analysis_dock, self.terminal_dock, Qt.Vertical
         )
@@ -228,6 +235,9 @@ class PanelManager:
         optimization_parent = self.optimization_dock.parentWidget()
         if isinstance(optimization_parent, QTabWidget):
             optimization_parent.setCurrentWidget(self.optimization_dock)
+        analysis_parent = self.analysis_dock.parentWidget()
+        if isinstance(analysis_parent, QTabWidget):
+            analysis_parent.setCurrentWidget(self.analysis_dock)
         self.catalogs_panel.show_catalog_tab()
 
     def get_all_docks(self) -> list[QDockWidget]:
@@ -270,6 +280,7 @@ class PanelManager:
         """
         dock_map = {
             "analysis": self.analysis_dock,
+            "nonsequential": self.nsq_dock,
             "optimization": self.optimization_dock,
             "catalogs": self.catalog_browser_dock,
             "scripts": self.terminal_dock,
@@ -302,5 +313,6 @@ class PanelManager:
         self.viewer_panel.update_theme(theme_name)
         self.python_terminal.set_theme(theme_name)
         self.optimization_panel.update_theme(theme_name)
+        self.nsq_panel.update_theme(theme_name)
         if hasattr(self.system_properties, "update_theme"):
             self.system_properties.update_theme(theme_name)
