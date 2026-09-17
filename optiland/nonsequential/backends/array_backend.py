@@ -348,6 +348,7 @@ class ArrayBackend(TracerBackend):
                         self.rng,
                         log_hit_fn=path_recorder.log_hits,
                         ray_id_allocator=_alloc_ray_ids,
+                        log_split_fn=path_recorder.log_split,
                     )
 
                     # Kill rays with no hit (escaped)

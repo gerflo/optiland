@@ -27,7 +27,9 @@ from optiland.visualization.system.utils import project_rays
 if TYPE_CHECKING:
     from optiland.nonsequential.scene import NSQScene
 
-_EVENT_ORDER = {"birth": 0, "hit": 1, "death": 2}
+# A bounded-splitting child has no birth: its path starts at its "split"
+# event on the surface it was spawned from, so that event sorts like a birth.
+_EVENT_ORDER = {"birth": 0, "split": 0, "hit": 1, "death": 2}
 
 
 def _sort_ray_events(ev: np.ndarray) -> np.ndarray:

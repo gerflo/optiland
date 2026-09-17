@@ -46,6 +46,10 @@ class SimulationResult:
         ray_paths: Optional per-ray event log dict (``{"events":
             structured_array}``), populated when ``record_paths`` is
             truthy -- see :mod:`optiland.nonsequential.path_recording`.
+            Event types are ``"birth"``, ``"hit"``, ``"death"`` and, under
+            bounded splitting, ``"split"``: the first event of a spawned
+            child, whose ``parent_id`` column names the ray it was split
+            from (``-1`` everywhere else).
         diagnostics: Self-diagnosing summary of this trace --
             depth truncation, roulette loss, unreached geometry, per
             -detector sampling quality, and a threshold-based warning list.

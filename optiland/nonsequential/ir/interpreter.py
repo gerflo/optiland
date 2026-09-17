@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from optiland.nonsequential.rng import NSQRng
 
 LogHitFn = Callable[["NSQRayBundle", "np.ndarray", str, object], None]
+LogSplitFn = Callable[["NSQRayBundle", "np.ndarray", str], None]
 RayIdAllocator = Callable[[int], "np.ndarray"]
 
 
@@ -145,6 +146,7 @@ def apply_primitive_interactions(
     rng: NSQRng,
     log_hit_fn: LogHitFn | None = None,
     ray_id_allocator: RayIdAllocator | None = None,
+    log_split_fn: LogSplitFn | None = None,
 ) -> NSQRayBundle | None:
     """Apply each hit primitive's interaction to ``rays``, in-place.
 
@@ -185,6 +187,13 @@ def apply_primitive_interactions(
             ``ir.sampling.split_depth > 0``) -- omit (the default) on the
             Torch backend, which forces ``split_depth=0`` and never spawns
             rays (fixed tensor shapes are required for the autograd graph).
+        log_split_fn: Optional ``(children, parent_id, primitive_name)``
+            callback, called once per splitting primitive and bounce with
+            the spawned transmit children (after their forced-transmit
+            interaction) and the id of the ray each child was split from.
+            Records the branch provenance -- see
+            :meth:`optiland.nonsequential.path_recording.PathRecorder
+            .log_split`.
 
     Returns:
         A new :class:`NSQRayBundle` of transmit-branch children spawned by
@@ -275,6 +284,7 @@ def apply_primitive_interactions(
 
         # 4) Transmit child: force the other branch on the snapshot, which
         #    becomes a newly spawned ray in the live bundle.
+        parent_ids = np.asarray(rays.ray_id)[split_idx]
         component.interact(
             transmit_snapshot,
             snap_t,
@@ -286,6 +296,20 @@ def apply_primitive_interactions(
             sampling=ir.sampling,
             forced_branch="transmit",
         )
+        # A child with no flux has nothing to carry: total internal
+        # reflection forces T = 0, and a coating with T = 0 does the same.
+        # Spawning it anyway would only add dead weight to the live bundle
+        # (roulette never kills a zero-flux ray) and a phantom branch to
+        # the provenance log.
+        alive_flux = np.asarray(transmit_snapshot.flux) > 0.0
+        if not alive_flux.all():
+            keep = np.where(alive_flux)[0]
+            transmit_snapshot = transmit_snapshot.select(keep)
+            parent_ids = parent_ids[keep]
+        if transmit_snapshot.num_rays == 0:
+            continue
+        if log_split_fn is not None:
+            log_split_fn(transmit_snapshot, parent_ids, primitive.name)
         spawned_chunks.append(transmit_snapshot)
 
     if not spawned_chunks:

@@ -53,11 +53,17 @@ _EVENT_DTYPE = np.dtype(
         ("wavelength", np.float64),
         ("bounce", np.int32),
         ("component_name", "U64"),
+        # Provenance: the id of the ray this one was split off from, or -1
+        # for a source-born ray and for every event that is not a split.
+        # Filled by the ``"split"`` event that bounded splitting logs for
+        # each spawned transmit child (see :meth:`PathRecorder.log_split`).
+        ("parent_id", np.int64),
     ]
 )
 
-_EVENT_TYPE_NAMES = np.array(["birth", "hit", "death"])
-_BIRTH, _HIT, _DEATH = 0, 1, 2
+_EVENT_TYPE_NAMES = np.array(["birth", "hit", "death", "split"])
+_BIRTH, _HIT, _DEATH, _SPLIT = 0, 1, 2, 3
+_NO_PARENT = -1
 
 # Columnar fields as (attribute, dtype) pairs, shared by allocation, growth,
 # and the final structured-array assembly.
@@ -74,6 +80,7 @@ _FIELDS: tuple[tuple[str, type], ...] = (
     ("_wavelength", np.float64),
     ("_bounce", np.int32),
     ("_name_id", np.int32),
+    ("_parent_id", np.int64),
 )
 
 
@@ -174,12 +181,13 @@ class ColumnarPathLog:
         rays: NSQRayBundle,
         t_offset: object | None,
         name: str,
+        parent_id: np.ndarray | None = None,
     ) -> None:
         """Append one event per True row of ``mask``, vectorised.
 
         Args:
             event_type_code: One of :data:`_BIRTH`, :data:`_HIT`,
-                :data:`_DEATH`.
+                :data:`_DEATH`, :data:`_SPLIT`.
             mask: Boolean array/tensor, shape (N,); rows to log.
             rays: Ray bundle to read positions/directions/flux from.
             t_offset: If given, advance the logged position by
@@ -188,6 +196,8 @@ class ColumnarPathLog:
                 ``None`` logs the position as-is (birth, death -- already
                 advanced by the caller).
             name: Component/source/death-cause label for every logged row.
+            parent_id: Per-row parent ray ids, shape (N,), for split
+                events. ``None`` records :data:`_NO_PARENT`.
         """
         mask_np = np.asarray(to_numpy(mask), dtype=bool)
         idx = np.where(mask_np)[0]
@@ -225,6 +235,10 @@ class ColumnarPathLog:
         self._wavelength[s] = wl_np
         self._bounce[s] = bounce_np
         self._name_id[s] = self._name_id_for(name)
+        if parent_id is None:
+            self._parent_id[s] = _NO_PARENT
+        else:
+            self._parent_id[s] = np.asarray(parent_id, dtype=np.int64)[idx]
         self._count += k
 
     def to_events(self) -> np.ndarray | None:
@@ -251,6 +265,7 @@ class ColumnarPathLog:
         arr["bounce"] = self._bounce[:n]
         names_arr = np.array(self._names) if self._names else np.array([], dtype="<U1")
         arr["component_name"] = names_arr[self._name_id[:n]]
+        arr["parent_id"] = self._parent_id[:n]
         return arr
 
 
@@ -279,10 +294,45 @@ class PathRecorder:
         self._num_rays_total = num_rays_total
         self._seed = seed
         self._log = ColumnarPathLog() if self.enabled else None
+        # Spawned (split) child id -> source-born root id, kept sorted by
+        # child id so a child's in-sample decision follows its root's.
+        self._child_ids = np.empty(0, dtype=np.int64)
+        self._root_ids = np.empty(0, dtype=np.int64)
+
+    def root_of(self, ray_id: np.ndarray) -> np.ndarray:
+        """Map ray ids to the source-born ray each one descends from.
+
+        Source-born rays map to themselves; a bounded-splitting child maps
+        to the root of its parent, however many splits deep.
+
+        Args:
+            ray_id: Ray ids, any shape.
+
+        Returns:
+            Root ids, same shape.
+        """
+        ray_id_np = np.asarray(to_numpy(ray_id), dtype=np.int64)
+        if self._child_ids.size == 0 or ray_id_np.size == 0:
+            return ray_id_np
+        pos = np.searchsorted(self._child_ids, ray_id_np)
+        pos = np.minimum(pos, self._child_ids.size - 1)
+        is_child = self._child_ids[pos] == ray_id_np
+        return np.where(is_child, self._root_ids[pos], ray_id_np)
+
+    def _register_children(self, child_ids: np.ndarray, parent_ids: np.ndarray) -> None:
+        roots = self.root_of(parent_ids)
+        child_ids = np.concatenate([self._child_ids, child_ids])
+        root_ids = np.concatenate([self._root_ids, roots])
+        order = np.argsort(child_ids, kind="stable")
+        self._child_ids = child_ids[order]
+        self._root_ids = root_ids[order]
 
     def _sample_mask(self, rays: NSQRayBundle) -> np.ndarray:
         return resolve_path_sample_mask(
-            rays.ray_id, self._num_rays_total, self._record_paths, self._seed
+            self.root_of(rays.ray_id),
+            self._num_rays_total,
+            self._record_paths,
+            self._seed,
         )
 
     def log_birth(self, rays: NSQRayBundle, source_name: str) -> None:
@@ -318,6 +368,40 @@ class PathRecorder:
         mask_np = np.asarray(to_numpy(mask), dtype=bool)
         combined = mask_np & self._sample_mask(rays)
         self._log.log_event(_DEATH, combined, rays, None, cause)
+
+    def log_split(
+        self, children: NSQRayBundle, parent_id: np.ndarray, name: str
+    ) -> None:
+        """Log a ``"split"`` event for every spawned child in ``children``.
+
+        Called by the bounded-splitting orchestration once per primitive
+        and bounce with the freshly spawned transmit children, *after* their
+        forced-transmit interaction, so the event records the child's
+        starting state: its position on the surface, its transmitted
+        direction and its flux after the ``T`` weight. The child is linked
+        to the ray it was split from through the ``parent_id`` column, and
+        inherits that ray's in-sample decision under ``record_paths: int``
+        so a recorded parent's children are always recorded with it.
+
+        Matches the ``LogSplitFn`` contract in
+        :mod:`optiland.nonsequential.ir.interpreter`.
+
+        Args:
+            children: The spawned child bundle (every row is a child).
+            parent_id: Per-child id of the ray it was split from, shape
+                (num_children,).
+            name: Name of the splitting primitive.
+        """
+        if not self.enabled:
+            return
+        parent_np = np.asarray(to_numpy(parent_id), dtype=np.int64)
+        child_np = np.asarray(to_numpy(children.ray_id), dtype=np.int64)
+        if child_np.size == 0:
+            return
+        self._register_children(child_np, parent_np)
+        self._log.log_event(
+            _SPLIT, self._sample_mask(children), children, None, name, parent_np
+        )
 
     def finalize(self) -> dict | None:
         """Return ``{"events": structured_array}``, or ``None`` if empty.
