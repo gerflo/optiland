@@ -16,7 +16,9 @@ import optiland.backend as be
 from optiland.backend.utils import to_numpy
 from optiland.nonsequential.components.base import BaseComponent
 from optiland.nonsequential.components.coating_support import (
+    coating_coefficient,
     reject_polarized_coating,
+    validate_passive_coating,
 )
 from optiland.nonsequential.materials.nsq_material import medium_stack_id
 from optiland.nonsequential.ray_bundle import (
@@ -100,9 +102,14 @@ class RefractiveComponent(BaseComponent):
                 agrees with the sequential engine's coating model. Must be
                 unpolarized -- a ``BaseCoatingPolarized`` instance raises
                 ``NotImplementedError`` immediately, since NSQ rays carry no
-                polarization state.
+                polarization state. Its ``reflectance``/``transmittance``
+                must be finite, non-negative and sum to at most 1 (a
+                passive coating); anything else raises ``ValueError`` at
+                construction. A ``torch.Tensor`` coefficient stays attached
+                under the Torch backend, so ``d(flux)/dR`` is available.
         """
         reject_polarized_coating(coating, surface_name=name)
+        validate_passive_coating(coating, surface_name=name)
         self.coating = coating
         super().__init__(
             cs,
@@ -242,8 +249,15 @@ class RefractiveComponent(BaseComponent):
         # under TIR, where there is no real transmitted wave regardless of
         # what the coating claims, so reflection stays forced to R=1, T=0.
         if self.coating is not None:
-            R_used = be.ones_like(R_fresnel) * float(self.coating.reflectance)
-            T_used = be.ones_like(R_fresnel) * float(self.coating.transmittance)
+            # coating_coefficient keeps a tensor coefficient attached, so a
+            # coating built from torch parameters is differentiable; plain
+            # floats behave exactly as before.
+            R_used = be.ones_like(R_fresnel) * coating_coefficient(
+                self.coating.reflectance
+            )
+            T_used = be.ones_like(R_fresnel) * coating_coefficient(
+                self.coating.transmittance
+            )
         else:
             R_used = R_fresnel
             T_used = 1.0 - R_fresnel

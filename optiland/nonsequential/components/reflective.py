@@ -17,6 +17,7 @@ from optiland.nonsequential.components.base import BaseComponent
 from optiland.nonsequential.components.coating_support import (
     reject_polarized_coating,
     resolve_reflectance,
+    validate_reflectance,
 )
 from optiland.nonsequential.materials.nsq_material import VACUUM
 from optiland.nonsequential.rng import EventSlot
@@ -80,6 +81,7 @@ class ReflectiveComponent(BaseComponent):
                 ``bsdf`` rather than specularly reflected.
         """
         reject_polarized_coating(reflectance, surface_name=name)
+        validate_reflectance(reflectance, surface_name=name)
         self.reflectance = reflectance
         super().__init__(
             cs,
