@@ -130,7 +130,19 @@ class TestSurfaceViewCoatings:
         views = resolve_sequence(surfaces, [1, (2, "reflect"), (1, "reflect"), 2])
         reverse_view = views[2]
         assert reverse_view.reverse is True
+        # The ray arrives in glass and, being reflected, keeps travelling in
+        # glass ...
         assert reverse_view.material_pre == glass
         assert reverse_view.material_post == glass
+        # ... but the coating physics sees the physical glass/air interface
+        # from the glass side. Bound to (glass, glass) it would reflect
+        # nothing.
+        assert reverse_view.interface_materials == (glass, air)
         assert reverse_view.interaction_model.coating.material_pre == glass
-        assert reverse_view.interaction_model.coating.material_post == glass
+        assert reverse_view.interaction_model.coating.material_post == air
+
+        forward_view = views[0]
+        assert forward_view.reverse is False
+        assert forward_view.interface_materials == (air, glass)
+        assert forward_view.interaction_model.coating.material_pre == air
+        assert forward_view.interaction_model.coating.material_post == glass

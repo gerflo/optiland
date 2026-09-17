@@ -48,8 +48,31 @@ class SequencedOptic:
     def __init__(self, base_optic: Optic, name: str, steps: list[RawStep]):
         self.base_optic = base_optic
         self.name = name
-        self.raw_steps = steps
-        self.surfaces = SequencedSurfaceGroup(base_optic.surfaces.surfaces, steps)
+        # The live SurfaceGroup, not its cached tuple snapshot, so the
+        # sequence notices later inserts/removals (SequencedSurfaceGroup
+        # .is_stale / .refresh).
+        self.surfaces = SequencedSurfaceGroup(base_optic.surfaces, steps)
+
+    @property
+    def raw_steps(self) -> list[RawStep]:
+        """The raw step list, renumbered whenever the base optic was edited.
+
+        Reading it refreshes the sequence first (see
+        :meth:`~optiland.sequences.sequenced_surface_group.SequencedSurfaceGroup.refresh`),
+        so a serialized sequence always names the surfaces it actually
+        traverses.
+        """
+        self.surfaces.refresh()
+        return self.surfaces.raw_steps
+
+    @property
+    def is_stale(self) -> bool:
+        """Whether the base optic's surface list changed under this sequence."""
+        return self.surfaces.is_stale
+
+    def refresh(self) -> None:
+        """Renumber the steps after the base optic inserted or removed surfaces."""
+        self.surfaces.refresh()
 
     # -- Delegated to the base optic ---------------------------------------
 

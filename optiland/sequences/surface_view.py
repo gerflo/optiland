@@ -98,17 +98,29 @@ class SurfaceView:
         self.reset()
 
     def _rebind_coating(self) -> None:
-        """Rebind polarized coatings to this view's resolved media."""
+        """Rebind polarized coatings to the physical interface of this view.
+
+        A ``FresnelCoating``/``ThinFilmCoating`` is built against the two
+        media that physically meet at the surface, seen from this view's
+        incident side: ``(incident, far)`` = ``(material_pre, material_post)``
+        of the base surface, swapped for a reverse traversal. This is
+        deliberately *not* ``(self.material_pre, self.material_post)``: for a
+        reflective step ``material_post`` collapses to ``material_pre``
+        (the reflected ray keeps travelling in the incident medium), and a
+        Fresnel coating bound to identical media on both sides would report
+        zero reflectance. The medium the ray continues in and the media the
+        coating physics sees are two different things.
+        """
         coating = getattr(self.interaction_model, "coating", None)
         if coating is None:
             return
 
         from optiland.coatings import FresnelCoating, ThinFilmCoating
 
+        incident, far = self.interface_materials
+
         if isinstance(coating, FresnelCoating):
-            self.interaction_model.coating = FresnelCoating(
-                self.material_pre, self.material_post
-            )
+            self.interaction_model.coating = FresnelCoating(incident, far)
         elif isinstance(coating, ThinFilmCoating):
             layers = [
                 (layer.material, layer.thickness_nm, layer.name)
@@ -117,8 +129,20 @@ class SurfaceView:
             if self.reverse:
                 layers = layers[::-1]
             self.interaction_model.coating = ThinFilmCoating(
-                self.material_pre, self.material_post, layers=layers
+                incident, far, layers=layers
             )
+
+    @property
+    def interface_materials(self) -> tuple[BaseMaterial, BaseMaterial]:
+        """The ``(incident, far)`` media physically meeting at this view.
+
+        Independent of the interaction override: a reflected step still
+        sees the far medium through the coating physics even though the
+        reflected ray never enters it. Compare :attr:`material_pre` /
+        :attr:`material_post`, which describe the media the ray arrives in
+        and continues in.
+        """
+        return resolve_view_materials(self.base_surface, self.reverse, None)
 
     # -- Shared-by-reference passthrough properties -----------------------
 

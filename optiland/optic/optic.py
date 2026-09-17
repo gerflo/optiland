@@ -323,6 +323,22 @@ class Optic:
         self.sequences[name] = sequence
         return sequence
 
+    def refresh_sequences(self) -> None:
+        """Renumber every named sequence after surfaces were added or removed.
+
+        A sequence follows the surface objects it was defined over, not
+        their indices: inserting or removing other surfaces keeps the route
+        and only renumbers its raw steps. Tracing and serializing a
+        sequence do this on demand; call this to fail early instead.
+
+        Raises:
+            SequenceStaleError: If a sequence passes through a surface that
+                was removed from this optic. The offending sequence stays
+                registered so the caller can inspect or delete it.
+        """
+        for sequence in self.sequences.values():
+            sequence.refresh()
+
     @deprecated("optic.fields.add()")
     def add_field(self, y: float, x: float = 0.0, vx: float = 0.0, vy: float = 0.0):
         """Add a field to the optical system.

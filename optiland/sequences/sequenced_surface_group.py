@@ -7,6 +7,13 @@ interface that analyses and the tracing pipeline rely on. A sequence is
 static once resolved: unlike ``SurfaceGroup``, there is no ``add``/``remove``;
 to change a sequence's traversal, resolve a new one.
 
+A sequence follows its *surfaces*, not its indices. When the base optic
+inserts or removes surfaces the raw step indices go stale; the group notices
+(:attr:`SequencedSurfaceGroup.is_stale`) and :meth:`refresh` remaps every
+step to the current index of the same surface object, re-validating the
+sequence. Tracing a stale sequence refreshes it first; a sequence whose
+surface was removed from the optic raises :class:`SequenceStaleError`.
+
 Kramer Harrison, 2026
 """
 
@@ -17,6 +24,7 @@ from typing import TYPE_CHECKING
 import optiland.backend as be
 from optiland.coatings import BaseCoatingPolarized
 from optiland.sequences.resolver import resolve_sequence
+from optiland.sequences.steps import parse_steps
 
 if TYPE_CHECKING:
     from optiland.sequences.steps import RawStep
@@ -24,11 +32,18 @@ if TYPE_CHECKING:
     from optiland.surfaces.standard_surface import Surface
 
 
+class SequenceStaleError(ValueError):
+    """A sequence references a surface that no longer belongs to the optic."""
+
+
 class SequencedSurfaceGroup:
     """A traversal-ordered group of ``SurfaceView`` over shared base surfaces.
 
     Args:
-        base_surfaces: The optic's base surfaces, indexed as in ``raw_steps``.
+        base_surfaces: The optic's base surfaces, indexed as in ``raw_steps``:
+            either the live :class:`~optiland.surfaces.surface_group.SurfaceGroup`
+            (so later inserts/removals are seen, see :attr:`is_stale`) or a
+            plain list/tuple of surfaces.
         raw_steps: The raw sequence definition. See
             :func:`optiland.sequences.steps.parse_steps`.
 
@@ -39,14 +54,71 @@ class SequencedSurfaceGroup:
             consistent.
     """
 
-    def __init__(self, base_surfaces: list[Surface], raw_steps: list[RawStep]):
-        self.base_surfaces = base_surfaces
-        self.raw_steps = raw_steps
-        self._views: list[SurfaceView] = resolve_sequence(base_surfaces, raw_steps)
+    def __init__(self, base_surfaces, raw_steps: list[RawStep]):
+        self._base = base_surfaces
+        self.raw_steps = list(raw_steps)
+        self._views: list[SurfaceView] = resolve_sequence(self.base_surfaces, raw_steps)
+
+    @property
+    def base_surfaces(self) -> list[Surface]:
+        """The base surfaces as they are *now*, in the optic's current order."""
+        return list(self._base)
 
     @property
     def surfaces(self) -> tuple[SurfaceView, ...]:
         return tuple(self._views)
+
+    # -- Lifecycle after base-optic edits -------------------------------------
+
+    @property
+    def is_stale(self) -> bool:
+        """Whether the base surface list changed under this sequence.
+
+        True when any step's raw index no longer points at the surface
+        object the step was resolved against (a surface was inserted,
+        removed or replaced), so the raw indices must be remapped before
+        the sequence is traced or serialized again.
+        """
+        base = self.base_surfaces
+        for step, view in zip(parse_steps(self.raw_steps), self._views, strict=True):
+            if step.index >= len(base) or base[step.index] is not view.base_surface:
+                return True
+        return False
+
+    def refresh(self) -> None:
+        """Remap every step to the current index of its surface and re-resolve.
+
+        The route is defined by the surface *objects* each step was
+        resolved against, so inserting or removing other surfaces keeps the
+        route intact and only renumbers its raw steps. Re-resolving also
+        re-validates the medium chain, so an insertion between two route
+        steps that breaks physical consistency raises
+        :class:`~optiland.sequences.resolver.SequenceValidationError`.
+
+        Raises:
+            SequenceStaleError: If a surface the route passes through is no
+                longer in the base optic.
+        """
+        if not self.is_stale:
+            return
+        base = self.base_surfaces
+        remapped: list[RawStep] = []
+        for raw, view in zip(self.raw_steps, self._views, strict=True):
+            new_index = next(
+                (i for i, s in enumerate(base) if s is view.base_surface),
+                None,
+            )
+            if new_index is None:
+                raise SequenceStaleError(
+                    f"Sequence step {raw!r} refers to {view.base_surface!r}, which "
+                    "was removed from the optic. Define the sequence again."
+                )
+            if isinstance(raw, tuple | list):
+                remapped.append((new_index, raw[1]))
+            else:
+                remapped.append(new_index)
+        self._views = resolve_sequence(base, remapped)
+        self.raw_steps = remapped
 
     def __getitem__(self, index):
         return self._views[index]
@@ -172,7 +244,12 @@ class SequencedSurfaceGroup:
 
         Returns:
             BaseRays: The traced rays.
+
+        Raises:
+            SequenceStaleError: If a surface the route passes through was
+                removed from the base optic since the sequence was defined.
         """
+        self.refresh()
         self.reset()
         for view in self._views[skip:]:
             view.trace(rays)
