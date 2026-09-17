@@ -170,3 +170,20 @@ How to use it:
 - use the Analysis plot toolbar and right-side Analysis controls with matching hover/press/checked states
 - load a new optic to reframe viewers, then continue editing without losing the current view framing
 - close or refresh GUI windows without deleted-wrapper event-filter errors surfacing
+
+## 16. Beam Splitters and Multi-Path Illumination
+File: [beam-splitter-multi-path.md](./beam-splitter-multi-path.md)
+Commits: `9764572c` .. `HEAD` on `feat/beam-splitter-paths`
+
+Effect:
+- non-sequential beam splitters trace correctly on every backend and float precision
+- split children are linked to their parent ray in the event log
+- sequences bind coatings of reflected steps to the physical interface and follow their surfaces through edits
+- reference scenes for a beam splitter and for side illumination with imaging in transmission
+- raw surfaces and per-surface overrides round-trip through NSQ JSON; viewers draw raw surfaces and sources
+- new Non-Sequential GUI panel with a worker-thread trace, layout, detector maps and energy balance
+
+How to use it:
+- `from optiland.samples.nonsequential import beam_splitter_scene, side_illumination_transmission_scene`
+- open the `Non-Seq` sidebar entry, choose a scene, press `Trace`
+- `python tools/gui_screenshot.py --panel nonsequential --trace --all-tabs out/nsq.png`

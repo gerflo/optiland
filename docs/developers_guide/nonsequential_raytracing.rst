@@ -140,6 +140,57 @@ result:
   well-configured scene, making a nonzero value a genuine variance signal
   rather than an expected bookkeeping entry.
 
+.. _nsq_beam_splitters:
+
+4a. Beam splitters, precision and branch provenance
+----------------------------------------------------
+
+A partially reflecting interface is a
+:class:`~optiland.nonsequential.components.refractive.RefractiveComponent`
+whose two media are identical and whose ``coating`` is an unpolarized
+``SimpleCoating(transmittance=T, reflectance=R)``. The coating is
+*passive*: ``R`` and ``T`` are validated at construction to be finite,
+non-negative and to sum to at most 1 (``R + T < 1`` is an absorbing
+coating); a mirror's constant reflectance must lie in ``[0, 1]``. A
+``torch.Tensor`` coefficient is kept attached, so ``d(flux)/dR`` is
+available under the Torch backend. Two reference scenes live in
+:mod:`optiland.samples.nonsequential` (``beam_splitter_scene``,
+``side_illumination_transmission_scene``) and are walked through in
+:ref:`nsq_beam_splitter_paths`.
+
+- **Self-intersection guard.** A ray that has just interacted sits *on*
+  its surface up to the rounding error of its stored position: about
+  ``1e-6`` mm for a float32 coordinate near 10 mm, far above the fixed
+  ``1e-9`` mm guard the geometries apply. ``BaseComponent.intersect`` and
+  ``BaseDetector.intersect`` therefore push each origin forward by
+  :func:`~optiland.nonsequential._utils.self_intersection_offset`
+  (``max(1e-9, 16 * eps * (1 + |p| + |t|))`` with ``eps`` the dtype's
+  machine epsilon, ``p`` the global position and ``t`` the component
+  translation) before the geometry test and add it back to the hit
+  distance. Float64 behaves as before; float32 no longer re-hits the
+  surface it just left. Tests must cover both precisions explicitly --
+  the shared ``set_test_backend`` fixture selects float64 for Torch.
+- **Branch provenance.** Under bounded splitting each spawned transmit
+  child starts with a ``"split"`` event in ``ray_paths["events"]`` whose
+  ``parent_id`` column names the ray it was split from (``-1`` on every
+  other event). A child inherits its root ray's in-sample decision under
+  ``record_paths=<int>``, so a recorded parent's children are always
+  recorded with it, and the ray viewers start a child's path at the
+  split point. Children that would carry zero flux (total internal
+  reflection, ``T = 0``) are not spawned.
+- **Same-medium interfaces.** A transmit between identical media is not
+  a volume boundary: it leaves the diagnostic medium stack alone, so a
+  vacuum | vacuum splitter does not report one underflow per ray.
+- **Raw surfaces in JSON.** Components added with
+  ``NSQScene.add_component`` are wrapped in
+  :class:`~optiland.nonsequential.components.compound.SingleSurfaceCompound`
+  and round-trip through ``to_json``/``from_json`` as ``"surface"``
+  entries (planar, conic and spherical geometries; vacuum or catalog
+  glasses; ``SimpleCoating`` or a constant reflectance). ``Lens``,
+  ``Doublet`` and ``Mirror`` also persist their per-surface
+  ``SurfaceConfig`` overrides. A BSDF or a callable reflectance raises at
+  save time instead of being dropped.
+
 .. _nsq_rng:
 
 5. Reproducibility — PCG32

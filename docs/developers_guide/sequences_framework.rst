@@ -53,9 +53,15 @@ sequence built over it. Polarized coatings are the one exception: a
 ``FresnelCoating``/``ThinFilmCoating`` is constructed against a fixed ``(material_pre,
 material_post)`` pair, which a reversed or reflected view resolves differently than its
 base surface does. ``SurfaceView`` therefore rebuilds its own copy of the coating,
-bound to the view's own resolved media (and, for a multilayer ``ThinFilmCoating``, with
-the layer stack reversed for a ``reverse`` view) — everything else about the coating
-(materials, layer thicknesses) still traces back to the base surface's definition.
+bound to the physical interface the view meets, ``SurfaceView.interface_materials`` =
+``(incident, far)`` (and, for a multilayer ``ThinFilmCoating``, with the layer stack
+reversed for a ``reverse`` view) — everything else about the coating (materials, layer
+thicknesses) still traces back to the base surface's definition. The interface pair is
+deliberately *not* the view's ``(material_pre, material_post)``: for a reflective step
+``material_post`` collapses to ``material_pre`` (the reflected ray keeps travelling in
+the incident medium), and a Fresnel coating bound to the same medium on both sides would
+reflect nothing. The medium the ray continues in and the media the coating physics sees
+are two different things.
 
 Riding the existing pipeline
 -----------------------------
@@ -167,6 +173,21 @@ list under a top-level ``"sequences"`` key, and re-resolved against the (already
 deserialized) base surfaces on load. Because a sequence is just a raw step list resolved
 against the base surfaces, this is enough to reconstruct it exactly — there is no
 separate view state to persist.
+
+Editing the base optic
+------------------------
+
+A sequence follows its *surfaces*, not its indices. ``SequencedSurfaceGroup`` keeps the
+live ``SurfaceGroup`` and notices when a raw step index no longer points at the surface
+object it was resolved against (``is_stale``): inserting or removing other surfaces then
+renumbers the raw steps by surface identity and re-validates the medium chain on the next
+``trace()``, ``raw_steps`` read or ``to_dict()`` (``refresh()``;
+:meth:`~optiland.optic.optic.Optic.refresh_sequences` does it eagerly for every
+sequence). Removing a surface the route passes through raises
+:class:`~optiland.sequences.sequenced_surface_group.SequenceStaleError` on the next
+trace rather than silently tracing a different route; an insertion that breaks the
+physical medium chain between two route steps raises
+:class:`~optiland.sequences.resolver.SequenceValidationError` in the same place.
 
 Known limitations (v1)
 -------------------------

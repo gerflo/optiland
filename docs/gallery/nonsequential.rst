@@ -255,8 +255,13 @@ Examples
    nonsequential/10_advanced_topics
    nonsequential/11_differentiable_optimization
 
+Beam splitters — one beam into two arms, and a side illumination sharing
+one splitter with a transmission imaging path — are covered in the written
+walkthrough :doc:`nonsequential/12_beam_splitter_paths`.
+
 .. toctree::
    :hidden:
 
+   nonsequential/12_beam_splitter_paths
    nonsequential/limitations_and_roadmap
    nonsequential/validation_report

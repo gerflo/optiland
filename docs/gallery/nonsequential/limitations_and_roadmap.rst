@@ -70,9 +70,17 @@ Physics coverage, as of this page:
      - Unified intersection pass, ``absorb`` flag for transmissive
        (non-terminating) detectors, attached ``total_flux``, true
        differentiable Gaussian splat.
+   * - Beam splitters / partial reflectors
+     - ``RefractiveComponent`` with identical media and a passive
+       ``SimpleCoating`` (``R + T <= 1`` enforced at construction);
+       reference scenes in ``optiland.samples.nonsequential``. The
+       self-intersection guard scales with float precision, so Torch
+       float32 traces no longer re-hit the surface they just left
+       (:ref:`nsq_beam_splitters`).
    * - Rare-path sampling
      - Importance biasing (both backends), bounded splitting (NumPy only),
-       unbiased Russian roulette.
+       unbiased Russian roulette. Split children carry a ``"split"`` event
+       with ``parent_id`` and are recorded together with their root ray.
    * - Reproducibility
      - Counter-based PCG32, bit-identical random decisions across
        ``batch_size``/compaction/backend (see the developer guide).

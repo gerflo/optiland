@@ -76,6 +76,8 @@ When you first open the Optiland GUI, you'll see a main window containing severa
        :align: center
        :width: 600px
 
+*   **Non-Sequential Panel**: Builds, opens and saves non-sequential scenes (beam splitters, multi-path illumination) and traces them on a background thread. It shows the scene layout with recorded ray paths, one irradiance map per detector and the energy balance with the trace diagnostics. Two sample scenes are bundled: a 50:50 beam splitter and a side illumination that shares one splitter with a transmission imaging path.
+
 *   **System Properties Panel**: Manage system-wide settings that are not tied to individual surfaces. This includes:
 
     *   **Aperture**: Define the system aperture (e.g., Entrance Pupil Diameter, F-number).
