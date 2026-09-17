@@ -202,6 +202,10 @@ class NSQScene:
                 CollimatedSourceConfig, or ExtendedSourceConfig).
         """
         source = _build_source(cs, config)
+        # The registry name is what the event log and diagnostics report
+        # for this source's rays (their "birth" events).
+        if not getattr(source, "name", None):
+            source.name = name
         self.source_registry.add(name, source)
 
     def add_detector(
@@ -220,6 +224,10 @@ class NSQScene:
                 RayDatabaseConfig).
         """
         detector = _build_detector(cs, config)
+        # The registry name is what the event log reports for hits on this
+        # detector, and the key of ``SimulationResult.detectors``.
+        if not getattr(detector, "name", None):
+            detector.name = name
         self.detector_registry.add(name, detector)
 
     def remove_component(self, name: str) -> None:

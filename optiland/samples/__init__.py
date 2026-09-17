@@ -16,6 +16,12 @@ from .microscopes import (
 from .miscellaneous import (
     NavarroWideAngleEye,
 )
+from .nonsequential import (
+    SAMPLE_SCENES,
+    beam_splitter_scene,
+    build_sample_scene,
+    side_illumination_transmission_scene,
+)
 from .objectives import (
     CookeTriplet,
     DoubleGauss,
@@ -39,6 +45,11 @@ from .simple import (
 from .telescopes import HubbleTelescope
 
 __all__ = [
+    # From nonsequential.py
+    "SAMPLE_SCENES",
+    "beam_splitter_scene",
+    "build_sample_scene",
+    "side_illumination_transmission_scene",
     # From simple.py
     "Edmund_49_847",
     "SingletStopSurf2",
