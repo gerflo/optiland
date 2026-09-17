@@ -52,7 +52,6 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QToolBar,
     QVBoxLayout,
-    QWidget,
 )
 
 import optiland.samples
@@ -69,13 +68,13 @@ from .config import (
 )
 from .optiland_connector import OptilandConnector
 from .panel_manager import PanelManager
+from .services.catalog_service import EDMUND_ZEMAX_PAGE_URL, THORLABS_ZEMAX_PAGE_URL
 from .theme_manager import (
     DEFAULT_THEME_ID,
     THEMES,
     build_palette_override,
     get_theme,
 )
-from .services.catalog_service import EDMUND_ZEMAX_PAGE_URL, THORLABS_ZEMAX_PAGE_URL
 from .utils import logging_handler as _log_handler
 from .utils.plot_theme import apply_plot_theme
 from .widgets.command_palette import (
@@ -416,7 +415,9 @@ class MainWindow(FramelessWindow):
                         )
                     )
                 dock_widget_ref.topLevelChanged.connect(
-                    lambda floating, dock=dock_widget_ref: self._cancel_dock_animation(dock)
+                    lambda floating, dock=dock_widget_ref: self._cancel_dock_animation(
+                        dock
+                    )
                 )
 
     def _populate_main_menu_bar(self, menu_bar: QMenuBar):
@@ -495,7 +496,11 @@ class MainWindow(FramelessWindow):
         recent_files = self.settings.value("Files/Recent", [], type=list)
         if not isinstance(recent_files, list):
             return []
-        return [path for path in recent_files if isinstance(path, str) and os.path.isfile(path)]
+        return [
+            path
+            for path in recent_files
+            if isinstance(path, str) and os.path.isfile(path)
+        ]
 
     def _set_recent_files(self, recent_files: list[str]) -> None:
         """Persist and refresh the recent file list."""
@@ -629,7 +634,10 @@ class MainWindow(FramelessWindow):
         self.set_frameless_mode(frameless)
         if hasattr(self, "title_bar_as_toolbar"):
             self.title_bar_as_toolbar.setVisible(frameless)
-        if hasattr(self, "_native_menu_bar_instance") and self._native_menu_bar_instance:
+        if (
+            hasattr(self, "_native_menu_bar_instance")
+            and self._native_menu_bar_instance
+        ):
             native_menu_bar = self._native_menu_bar_instance
             menu_action = getattr(native_menu_bar, "menuAction", None)
             if callable(menu_action):
@@ -644,13 +652,19 @@ class MainWindow(FramelessWindow):
 
     def _restore_last_normal_geometry(self) -> None:
         """Restore the last remembered normal window geometry."""
-        if isinstance(self._last_normal_geometry, QByteArray) and self._last_normal_geometry:
+        if (
+            isinstance(self._last_normal_geometry, QByteArray)
+            and self._last_normal_geometry
+        ):
             self.restoreGeometry(self._last_normal_geometry)
 
     def _restore_window_placement(self) -> None:
         """Restore the last normal geometry and maximized state from settings."""
         self._last_normal_geometry = self.settings.value("Window/NormalGeometry")
-        if isinstance(self._last_normal_geometry, QByteArray) and self._last_normal_geometry:
+        if (
+            isinstance(self._last_normal_geometry, QByteArray)
+            and self._last_normal_geometry
+        ):
             self.restoreGeometry(self._last_normal_geometry)
         if self.settings.value("Window/WasMaximized", False, type=bool):
             self.showMaximized()
@@ -663,7 +677,10 @@ class MainWindow(FramelessWindow):
             self._capture_normal_window_geometry()
             was_maximized = self.isMaximized()
 
-        if isinstance(self._last_normal_geometry, QByteArray) and self._last_normal_geometry:
+        if (
+            isinstance(self._last_normal_geometry, QByteArray)
+            and self._last_normal_geometry
+        ):
             self.settings.setValue("Window/NormalGeometry", self._last_normal_geometry)
         self.settings.setValue("Window/WasMaximized", was_maximized)
 
@@ -722,7 +739,10 @@ class MainWindow(FramelessWindow):
         style_str += "\n" + build_palette_override(theme)
         style_str += "\n" + build_control_size_override()
         self.setStyleSheet(style_str)
-        if hasattr(self, "_native_menu_bar_instance") and self._native_menu_bar_instance:
+        if (
+            hasattr(self, "_native_menu_bar_instance")
+            and self._native_menu_bar_instance
+        ):
             self._native_menu_bar_instance.setStyleSheet(style_str)
         if (
             hasattr(self, "_fullscreen_menu_bar_instance")
@@ -839,7 +859,9 @@ class MainWindow(FramelessWindow):
             animation.setDuration(duration)
             animation.setEasingCurve(curve)
             animation.finished.connect(dock_widget.hide)
-            animation.finished.connect(lambda: self._restore_dock_size_constraints(dock_widget))
+            animation.finished.connect(
+                lambda: self._restore_dock_size_constraints(dock_widget)
+            )
             self._track_dock_animation(dock_widget, animation)
             animation.start()
 
@@ -867,14 +889,16 @@ class MainWindow(FramelessWindow):
                 self.dock_animations.pop(dock_widget, None)
 
         animation.finished.connect(cleanup)
-        animation.finished.connect(lambda: self._restore_dock_size_constraints(dock_widget))
+        animation.finished.connect(
+            lambda: self._restore_dock_size_constraints(dock_widget)
+        )
         animation.finished.connect(animation.deleteLater)
         animation.destroyed.connect(cleanup)
 
     def _get_live_dock_animation(
         self, dock_widget: QDockWidget
     ) -> QPropertyAnimation | None:
-        """Return the current dock animation if its underlying Qt object still exists."""
+        """Return the current dock animation if its Qt object still exists."""
         animation = self.dock_animations.get(dock_widget)
         if animation is None:
             return None
@@ -923,7 +947,10 @@ class MainWindow(FramelessWindow):
 
         # Stop any currently running animation on this dock
         current_animation = self._get_live_dock_animation(dock_widget)
-        if current_animation and current_animation.state() == QPropertyAnimation.Running:
+        if (
+            current_animation
+            and current_animation.state() == QPropertyAnimation.Running
+        ):
             current_animation.stop()
 
         if show_state_after_toggle:
@@ -986,7 +1013,9 @@ class MainWindow(FramelessWindow):
     @Slot()
     def new_system_action(self) -> None:
         """Slot for the *New System* action."""
-        if not self._maybe_save_changes_before_destructive_action("creating a new system"):
+        if not self._maybe_save_changes_before_destructive_action(
+            "creating a new system"
+        ):
             return
         self.connector.new_system()
         self._update_project_name_in_title_bar()
@@ -1065,7 +1094,9 @@ class MainWindow(FramelessWindow):
         if not self.connector.has_unsaved_changes():
             return True
         current_path = self.connector.get_current_filepath()
-        display_name = os.path.basename(current_path) if current_path else "Untitled system"
+        display_name = (
+            os.path.basename(current_path) if current_path else "Untitled system"
+        )
         reply = QMessageBox.warning(
             self,
             "Unsaved Changes",
@@ -1078,9 +1109,7 @@ class MainWindow(FramelessWindow):
         if reply == QMessageBox.StandardButton.Save:
             self.save_system_action()
             return not self.connector.has_unsaved_changes()
-        if reply == QMessageBox.StandardButton.Discard:
-            return True
-        return False
+        return reply == QMessageBox.StandardButton.Discard
 
     @Slot()
     def import_zemax_action(self):
@@ -1124,7 +1153,12 @@ class MainWindow(FramelessWindow):
             self,
             f"Import {manufacturer} Catalog",
             self._get_dialog_start_dir("Paths/LastOpenDir", "Paths/LastSaveDir"),
-            "Catalog Files (*.zip *.zmx *.zmf *.json);;Catalog Archives (*.zip);;Zemax Files (*.zmx);;Zemax Catalog Files (*.zmf);;Normalized Catalog JSON (*.json);;All Files (*)",
+            "Catalog Files (*.zip *.zmx *.zmf *.json);;"
+            "Catalog Archives (*.zip);;"
+            "Zemax Files (*.zmx);;"
+            "Zemax Catalog Files (*.zmf);;"
+            "Normalized Catalog JSON (*.json);;"
+            "All Files (*)",
         )
         if not filepaths:
             return
@@ -1147,7 +1181,7 @@ class MainWindow(FramelessWindow):
 
     @Slot()
     def download_edmund_catalog_action(self) -> None:
-        """Download Edmund's official online catalog archive and import supported files."""
+        """Download Edmund's official catalog archive and import supported files."""
         try:
             result = self.connector.download_edmund_catalog()
         except Exception as exc:  # noqa: BLE001
@@ -1155,7 +1189,9 @@ class MainWindow(FramelessWindow):
             return
         if self.toast_manager:
             level = "success" if result.imported_count else "info"
-            self.toast_manager.notify(result.message, level, sub_message=result.archive_path)
+            self.toast_manager.notify(
+                result.message, level, sub_message=result.archive_path
+            )
 
     @Slot()
     def download_excelitas_catalog_action(self) -> None:
@@ -1167,11 +1203,13 @@ class MainWindow(FramelessWindow):
             return
         if self.toast_manager:
             level = "success" if result.imported_count else "info"
-            self.toast_manager.notify(result.message, level, sub_message=result.archive_path)
+            self.toast_manager.notify(
+                result.message, level, sub_message=result.archive_path
+            )
 
     @Slot()
     def download_thorlabs_catalog_action(self) -> None:
-        """Download Thorlabs' official online catalog package and import supported files."""
+        """Download Thorlabs' official catalog package and import supported files."""
         try:
             result = self.connector.download_thorlabs_catalog()
         except Exception as exc:  # noqa: BLE001
@@ -1179,7 +1217,9 @@ class MainWindow(FramelessWindow):
             return
         if self.toast_manager:
             level = "success" if result.imported_count else "info"
-            self.toast_manager.notify(result.message, level, sub_message=result.archive_path)
+            self.toast_manager.notify(
+                result.message, level, sub_message=result.archive_path
+            )
 
     def _show_edmund_download_help(self, error_text: str) -> None:
         """Show a guided fallback dialog when Edmund blocks auto-download."""
@@ -1246,7 +1286,8 @@ class MainWindow(FramelessWindow):
         dialog.setText("Automatic download was not available from Thorlabs.")
         dialog.setInformativeText(
             "Open the official Thorlabs Zemax page in your browser, download the "
-            "catalog package manually, and then import the downloaded ZIP, ZMX, or ZMF file."
+            "catalog package manually, and then import the downloaded ZIP, ZMX, "
+            "or ZMF file."
         )
         dialog.setDetailedText(error_text)
         open_button = dialog.addButton(
@@ -1410,9 +1451,7 @@ class MainWindow(FramelessWindow):
 
         self._save_layout_to_slot(target_slot, layout_name)
 
-    def _layout_slot_display_name(
-        self, slot: int, include_slot: bool = True
-    ) -> str:
+    def _layout_slot_display_name(self, slot: int, include_slot: bool = True) -> str:
         """Return the user-facing label for a saved layout slot."""
         name = self.settings.value(f"Layouts/Config{slot}Name", "", type=str).strip()
         if not name:
@@ -1436,7 +1475,8 @@ class MainWindow(FramelessWindow):
         self.settings.setValue("Layouts/NextSaveSlot", self.next_save_slot_index)
         self._update_layout_slot_actions()
         logger.debug(
-            "Layout saved to slot %d as '%s'. Next save dialog will default to slot %d.",
+            "Layout saved to slot %d as '%s'. "
+            "Next save dialog will default to slot %d.",
             target_slot,
             layout_name,
             self.next_save_slot_index,
@@ -1482,13 +1522,15 @@ class MainWindow(FramelessWindow):
             else:
                 if self.toast_manager:
                     self.toast_manager.notify(
-                        f"Invalid layout data in {self._layout_slot_display_name(slot_number)}.",
+                        "Invalid layout data in "
+                        f"{self._layout_slot_display_name(slot_number)}.",
                         "warning",
                     )
         else:
             if self.toast_manager:
                 self.toast_manager.notify(
-                    f"No layout saved in {self._layout_slot_display_name(slot_number)}.",
+                    "No layout saved in "
+                    f"{self._layout_slot_display_name(slot_number)}.",
                     "info",
                 )
 
@@ -1519,7 +1561,9 @@ class MainWindow(FramelessWindow):
     def closeEvent(self, event: QEvent) -> None:
         """Shut down the Jupyter kernel and accept the close event."""
         logger.debug("Closing application.")
-        if not self._maybe_save_changes_before_destructive_action("closing the application"):
+        if not self._maybe_save_changes_before_destructive_action(
+            "closing the application"
+        ):
             event.ignore()
             return
         self._save_window_placement()

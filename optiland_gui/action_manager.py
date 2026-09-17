@@ -213,15 +213,16 @@ class ActionManager:
 
     def _create_theme_actions(self) -> None:
         """Create mutually exclusive theme actions."""
-        group = QActionGroup(self.main_window)
+        main_window = self.main_window
+        group = QActionGroup(main_window)
         group.setExclusive(True)
         for theme in THEMES:
             action = self._create_action(
                 f"theme_{theme.theme_id}",
                 theme.label,
                 checkable=True,
-                triggered=lambda checked=False, theme_id=theme.theme_id: self.main_window.switch_theme(
-                    theme_id
+                triggered=lambda checked=False, tid=theme.theme_id: (
+                    main_window.switch_theme(tid)
                 ),
             )
             group.addAction(action)
