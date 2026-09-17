@@ -45,3 +45,44 @@ class CompoundComponent(ABC):
     @abstractmethod
     def coordinate_system(self) -> CoordinateSystem:
         """Primary coordinate system (front vertex for lenses, surface for mirrors)."""
+
+
+class SingleSurfaceCompound(CompoundComponent):
+    """A compound made of exactly one raw surface.
+
+    This is what :meth:`~optiland.nonsequential.scene.NSQScene.add_component`
+    wraps a bare ``RefractiveComponent``/``ReflectiveComponent``/
+    ``AbsorbingComponent`` in -- a beam-splitter plate, a fold mirror, a
+    baffle -- so the registry, the serializer and the viewers can treat it
+    like any other compound.
+
+    Args:
+        name: Registry name.
+        component: The wrapped surface.
+    """
+
+    def __init__(self, name: str, component: BaseComponent) -> None:
+        self._name = name
+        self._component = component
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def component(self) -> BaseComponent:
+        """The wrapped surface."""
+        return self._component
+
+    @property
+    def surfaces(self) -> list[BaseComponent]:
+        return [self._component]
+
+    @property
+    def coordinate_system(self) -> CoordinateSystem:
+        return self._component.cs
+
+    def __repr__(self) -> str:
+        return (
+            f"SingleSurfaceCompound(name={self._name!r}, component={self._component!r})"
+        )

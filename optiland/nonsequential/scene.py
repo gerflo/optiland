@@ -165,27 +165,10 @@ class NSQScene:
             component: Pre-built BaseComponent to register.
         """
         from optiland.nonsequential.components.compound import (  # noqa: PLC0415
-            CompoundComponent,
+            SingleSurfaceCompound,
         )
 
-        class _SingleSurface(CompoundComponent):
-            def __init__(self_, n: str, c: BaseComponent) -> None:
-                self_._name = n
-                self_._component = c
-
-            @property
-            def name(self_) -> str:
-                return self_._name
-
-            @property
-            def surfaces(self_) -> list[BaseComponent]:
-                return [self_._component]
-
-            @property
-            def coordinate_system(self_):
-                return self_._component.cs
-
-        self.component_registry.add(name, _SingleSurface(name, component))
+        self.component_registry.add(name, SingleSurfaceCompound(name, component))
 
     def add_source(
         self,

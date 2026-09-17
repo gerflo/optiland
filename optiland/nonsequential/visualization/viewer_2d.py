@@ -46,6 +46,9 @@ class NSQViewer2D(BaseViewer2D):
 
     def _register_default_renderers(self) -> None:
         """Register the built-in renderers for Lens and Mirror."""
+        from optiland.nonsequential.components.compound import (  # noqa: PLC0415
+            SingleSurfaceCompound,
+        )
         from optiland.nonsequential.components.doublet import Doublet  # noqa: PLC0415
         from optiland.nonsequential.components.lens import Lens  # noqa: PLC0415
         from optiland.nonsequential.components.mirror import Mirror  # noqa: PLC0415
@@ -56,10 +59,14 @@ class NSQViewer2D(BaseViewer2D):
         from optiland.nonsequential.visualization.renderers.mirror import (  # noqa: PLC0415
             MirrorRenderer2D,
         )
+        from optiland.nonsequential.visualization.renderers.surface import (  # noqa: PLC0415
+            SurfaceRenderer2D,
+        )
 
         self._renderer_registry[Lens] = LensRenderer2D()
         self._renderer_registry[Doublet] = DoubletRenderer2D()
         self._renderer_registry[Mirror] = MirrorRenderer2D()
+        self._renderer_registry[SingleSurfaceCompound] = SurfaceRenderer2D()
 
     def register_renderer(self, component_type: type, renderer) -> None:
         """Register a custom 2D renderer for a compound-component type.
@@ -129,6 +136,17 @@ class NSQViewer2D(BaseViewer2D):
         det_renderer = DetectorRenderer2D()
         for det in self.scene.detectors:
             det_renderer.render(det, ax, theme=theme, projection=projection)
+
+        # Render sources (marker + emission arrow)
+        from optiland.nonsequential.visualization.renderers.source import (  # noqa: PLC0415
+            SourceRenderer2D,
+        )
+
+        src_renderer = SourceRenderer2D()
+        for source in self.scene.sources:
+            src_renderer.render(
+                source, ax, scene=self.scene, theme=theme, projection=projection
+            )
 
         if num_rays > 0:
             from optiland.nonsequential.visualization.rays import (

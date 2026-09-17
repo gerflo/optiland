@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from .absorbing import AbsorbingComponent
 from .base import BaseComponent
-from .compound import CompoundComponent
+from .compound import CompoundComponent, SingleSurfaceCompound
 from .configs import (
     DoubletConfig,
     InteractionType,
@@ -35,6 +35,7 @@ __all__ = [
     "NonWatertightVolumeError",
     "RefractiveComponent",
     "ReflectiveComponent",
+    "SingleSurfaceCompound",
     "SurfaceConfig",
     "Volume",
 ]

@@ -248,6 +248,343 @@ def _deserialize_material(d: Any) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Raw surface (SingleSurfaceCompound) serialization
+# ---------------------------------------------------------------------------
+
+
+def _serialize_geometry(geometry: Any) -> dict:
+    """Serialize an analytic geometry of a raw surface.
+
+    Args:
+        geometry: A ``PlaneGeometry``, ``FinitePlaneGeometry``,
+            ``ConicGeometry`` or ``SphereGeometry``.
+
+    Returns:
+        A dict with a ``"kind"`` key and the geometry's parameters.
+
+    Raises:
+        TypeError: For any other geometry.
+    """
+    from optiland.nonsequential.components.geometry.analytic.conic import (  # noqa: PLC0415
+        ConicGeometry,
+    )
+    from optiland.nonsequential.components.geometry.analytic.plane import (  # noqa: PLC0415
+        FinitePlaneGeometry,
+        PlaneGeometry,
+    )
+    from optiland.nonsequential.components.geometry.analytic.sphere import (  # noqa: PLC0415
+        SphereGeometry,
+    )
+
+    if isinstance(geometry, FinitePlaneGeometry):
+        return {
+            "kind": "finite_plane",
+            "width": _to_float(geometry.width),
+            "height": _to_float(geometry.height),
+            "aperture_radius": (
+                _to_float(geometry.aperture_radius)
+                if geometry.aperture_radius is not None
+                else None
+            ),
+        }
+    if isinstance(geometry, PlaneGeometry):
+        return {"kind": "plane"}
+    if isinstance(geometry, ConicGeometry):
+        return {
+            "kind": "conic",
+            "radius": _to_float(geometry.radius),
+            "conic": _to_float(geometry.conic),
+            "aperture_radius": _to_float(geometry.aperture_radius),
+        }
+    if isinstance(geometry, SphereGeometry):
+        return {
+            "kind": "sphere",
+            "radius": _to_float(geometry.radius),
+            "aperture_radius": (
+                _to_float(geometry.aperture_radius)
+                if geometry.aperture_radius is not None
+                else None
+            ),
+        }
+    raise TypeError(
+        f"Cannot serialize geometry of type '{type(geometry).__name__}'. Only "
+        "PlaneGeometry, FinitePlaneGeometry, ConicGeometry and SphereGeometry "
+        "round-trip for raw surfaces."
+    )
+
+
+def _deserialize_geometry(d: dict) -> Any:
+    """Inverse of :func:`_serialize_geometry`."""
+    from optiland.nonsequential.components.geometry.analytic.conic import (  # noqa: PLC0415
+        ConicGeometry,
+    )
+    from optiland.nonsequential.components.geometry.analytic.plane import (  # noqa: PLC0415
+        FinitePlaneGeometry,
+        PlaneGeometry,
+    )
+    from optiland.nonsequential.components.geometry.analytic.sphere import (  # noqa: PLC0415
+        SphereGeometry,
+    )
+
+    kind = d["kind"]
+    if kind == "finite_plane":
+        return FinitePlaneGeometry(
+            width=d.get("width", 10.0),
+            height=d.get("height", 10.0),
+            aperture_radius=d.get("aperture_radius"),
+        )
+    if kind == "plane":
+        return PlaneGeometry()
+    if kind == "conic":
+        return ConicGeometry(
+            radius=d["radius"],
+            conic=d.get("conic", 0.0),
+            aperture_radius=d["aperture_radius"],
+        )
+    if kind == "sphere":
+        return SphereGeometry(
+            radius=d["radius"], aperture_radius=d.get("aperture_radius")
+        )
+    raise ValueError(f"Unknown geometry kind {kind!r} in NSQ JSON.")
+
+
+def _serialize_simple_coating(coating: Any, *, owner: str) -> dict | None:
+    """Serialize an unpolarized constant-R/T coating (``SimpleCoating``)."""
+    if coating is None:
+        return None
+    reflectance = getattr(coating, "reflectance", None)
+    transmittance = getattr(coating, "transmittance", None)
+    if (
+        reflectance is None
+        or transmittance is None
+        or callable(reflectance)
+        or callable(transmittance)
+    ):
+        raise TypeError(
+            f"Cannot serialize the coating of '{owner}' "
+            f"({type(coating).__name__}): only constant reflectance/"
+            "transmittance coatings such as SimpleCoating round-trip."
+        )
+    return {
+        "reflectance": _to_float(reflectance),
+        "transmittance": _to_float(transmittance),
+    }
+
+
+def _deserialize_simple_coating(d: dict | None) -> Any:
+    if d is None:
+        return None
+    from optiland.coatings import SimpleCoating  # noqa: PLC0415
+
+    return SimpleCoating(transmittance=d["transmittance"], reflectance=d["reflectance"])
+
+
+def _serialize_nsq_material(material: Any, *, owner: str) -> Any:
+    """Serialize a raw surface's ``NSQMaterial`` (vacuum or catalog glass)."""
+    try:
+        return _serialize_material(material)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"Cannot serialize a material of '{owner}': {exc} Raw surfaces "
+            "round-trip vacuum and catalog glasses only."
+        ) from exc
+
+
+def _deserialize_nsq_material(d: Any) -> Any:
+    from optiland.nonsequential.materials.nsq_material import (  # noqa: PLC0415
+        VACUUM,
+        NSQMaterial,
+    )
+
+    name = _deserialize_material(d)
+    if name is None:
+        return VACUUM
+    return NSQMaterial.from_glass(name)
+
+
+def _serialize_surface_config(cfg: Any, *, owner: str) -> dict | None:
+    """Serialize a compound's per-surface ``SurfaceConfig`` overrides.
+
+    Coatings (``SimpleCoating``), aperture overrides, forced interaction
+    types, constant/coating reflectances and the scatter fraction round
+    trip. A BSDF or a callable reflectance does not, and raises rather
+    than being dropped on the floor: a lens whose faces were made lossless
+    by a coating must trace the same after reloading.
+
+    Args:
+        cfg: The ``SurfaceConfig`` or ``None``.
+        owner: Component name for error messages.
+
+    Returns:
+        A JSON-safe dict, or ``None`` when ``cfg`` is ``None``.
+    """
+    if cfg is None:
+        return None
+    if getattr(cfg, "bsdf", None) is not None:
+        raise TypeError(
+            f"Cannot serialize component '{owner}': a per-surface BSDF does "
+            "not round-trip through JSON; re-attach it after loading."
+        )
+    reflectance = getattr(cfg, "reflectance", None)
+    if reflectance is None:
+        reflectance_d = None
+    elif hasattr(reflectance, "transmittance"):
+        reflectance_d = _serialize_simple_coating(reflectance, owner=owner)
+    elif callable(reflectance):
+        raise TypeError(
+            f"Cannot serialize component '{owner}': a callable reflectance "
+            "does not round-trip through JSON."
+        )
+    else:
+        reflectance_d = _to_float(reflectance)
+    interaction = getattr(cfg, "interaction", None)
+    return {
+        "coating": _serialize_simple_coating(
+            getattr(cfg, "coating", None), owner=owner
+        ),
+        "aperture_radius": (
+            _to_float(cfg.aperture_radius) if cfg.aperture_radius is not None else None
+        ),
+        "interaction": interaction.value if interaction is not None else None,
+        "reflectance": reflectance_d,
+        "scatter_fraction": _to_float(getattr(cfg, "scatter_fraction", 1.0)),
+    }
+
+
+def _deserialize_surface_config(d: dict | None) -> Any:
+    """Inverse of :func:`_serialize_surface_config`."""
+    if d is None:
+        return None
+    from optiland.nonsequential.components.configs import (  # noqa: PLC0415
+        InteractionType,
+        SurfaceConfig,
+    )
+
+    reflectance = d.get("reflectance")
+    if isinstance(reflectance, dict):
+        reflectance = _deserialize_simple_coating(reflectance)
+    interaction = d.get("interaction")
+    return SurfaceConfig(
+        coating=_deserialize_simple_coating(d.get("coating")),
+        aperture_radius=d.get("aperture_radius"),
+        interaction=InteractionType(interaction) if interaction else None,
+        reflectance=reflectance,
+        scatter_fraction=d.get("scatter_fraction", 1.0),
+    )
+
+
+def _serialize_single_surface(name: str, compound: Any) -> dict:
+    """Serialize a :class:`SingleSurfaceCompound` to a JSON-safe dict."""
+    from optiland.nonsequential.components.absorbing import (  # noqa: PLC0415
+        AbsorbingComponent,
+    )
+    from optiland.nonsequential.components.reflective import (  # noqa: PLC0415
+        ReflectiveComponent,
+    )
+    from optiland.nonsequential.components.refractive import (  # noqa: PLC0415
+        RefractiveComponent,
+    )
+
+    surface = compound.component
+    if getattr(surface, "bsdf", None) is not None:
+        raise TypeError(
+            f"Cannot serialize component '{name}': a BSDF on a raw surface "
+            "does not round-trip through JSON; re-attach it after loading."
+        )
+    data = {
+        "type": "surface",
+        "name": name,
+        "cs": _serialize_cs(surface.cs),
+        "geometry": _serialize_geometry(surface.geometry),
+        "surface_name": surface.name,
+    }
+    if isinstance(surface, RefractiveComponent):
+        data["kind"] = "refractive"
+        data["material_front"] = _serialize_nsq_material(
+            surface.material_front, owner=name
+        )
+        data["material_back"] = _serialize_nsq_material(
+            surface.material_back, owner=name
+        )
+        data["coating"] = _serialize_simple_coating(surface.coating, owner=name)
+    elif isinstance(surface, ReflectiveComponent):
+        data["kind"] = "reflective"
+        data["material_front"] = _serialize_nsq_material(
+            surface.material_front, owner=name
+        )
+        reflectance = surface.reflectance
+        if hasattr(reflectance, "transmittance"):
+            data["reflectance"] = _serialize_simple_coating(reflectance, owner=name)
+        elif callable(reflectance):
+            raise TypeError(
+                f"Cannot serialize component '{name}': a callable reflectance "
+                "does not round-trip through JSON."
+            )
+        else:
+            data["reflectance"] = _to_float(reflectance)
+    elif isinstance(surface, AbsorbingComponent):
+        data["kind"] = "absorbing"
+        data["material_front"] = _serialize_nsq_material(
+            surface.material_front, owner=name
+        )
+    else:
+        raise TypeError(
+            f"Cannot serialize component '{name}' wrapping a "
+            f"'{type(surface).__name__}'."
+        )
+    return data
+
+
+def _deserialize_single_surface(d: dict, scene: NSQScene) -> None:
+    """Rebuild a raw surface from :func:`_serialize_single_surface` output."""
+    from optiland.nonsequential.components.absorbing import (  # noqa: PLC0415
+        AbsorbingComponent,
+    )
+    from optiland.nonsequential.components.reflective import (  # noqa: PLC0415
+        ReflectiveComponent,
+    )
+    from optiland.nonsequential.components.refractive import (  # noqa: PLC0415
+        RefractiveComponent,
+    )
+
+    name = d["name"]
+    cs = _deserialize_cs(d["cs"])
+    geometry = _deserialize_geometry(d["geometry"])
+    surface_name = d.get("surface_name", name)
+    kind = d["kind"]
+    if kind == "refractive":
+        surface = RefractiveComponent(
+            cs=cs,
+            geometry=geometry,
+            material_front=_deserialize_nsq_material(d.get("material_front")),
+            material_back=_deserialize_nsq_material(d.get("material_back")),
+            coating=_deserialize_simple_coating(d.get("coating")),
+            name=surface_name,
+        )
+    elif kind == "reflective":
+        reflectance = d["reflectance"]
+        if isinstance(reflectance, dict):
+            reflectance = _deserialize_simple_coating(reflectance)
+        surface = ReflectiveComponent(
+            cs=cs,
+            geometry=geometry,
+            reflectance=reflectance,
+            material_front=_deserialize_nsq_material(d.get("material_front")),
+            name=surface_name,
+        )
+    elif kind == "absorbing":
+        surface = AbsorbingComponent(
+            cs=cs,
+            geometry=geometry,
+            material_front=_deserialize_nsq_material(d.get("material_front")),
+            name=surface_name,
+        )
+    else:
+        raise ValueError(f"Unknown raw surface kind {kind!r} in NSQ JSON.")
+    scene.add_component(name, surface)
+
+
+# ---------------------------------------------------------------------------
 # Component serialization
 # ---------------------------------------------------------------------------
 
@@ -270,9 +607,15 @@ def _serialize_component(name: str, compound: Any) -> dict:
     Raises:
         TypeError: If the component type cannot be serialized.
     """
+    from optiland.nonsequential.components.compound import (  # noqa: PLC0415
+        SingleSurfaceCompound,
+    )
     from optiland.nonsequential.components.doublet import Doublet  # noqa: PLC0415
     from optiland.nonsequential.components.lens import Lens  # noqa: PLC0415
     from optiland.nonsequential.components.mirror import Mirror  # noqa: PLC0415
+
+    if isinstance(compound, SingleSurfaceCompound):
+        return _serialize_single_surface(name, compound)
 
     cs = compound._cs
     config = compound._config
@@ -295,6 +638,10 @@ def _serialize_component(name: str, compound: Any) -> dict:
                 ),
                 "conic1": _to_float(config.conic1),
                 "conic2": _to_float(config.conic2),
+                "front": _serialize_surface_config(config.front, owner=name),
+                "back": _serialize_surface_config(config.back, owner=name),
+                "edge": _serialize_surface_config(config.edge, owner=name),
+                "rim": _serialize_surface_config(config.rim, owner=name),
             },
         }
 
@@ -318,6 +665,7 @@ def _serialize_component(name: str, compound: Any) -> dict:
                 "reflectance": _to_float(config.reflectance),
                 "conic": _to_float(config.conic),
                 "aperture_radius": _to_float(config.aperture_radius),
+                "surface": _serialize_surface_config(config.surface, owner=name),
             },
         }
 
@@ -338,13 +686,18 @@ def _serialize_component(name: str, compound: Any) -> dict:
                 "conic1": _to_float(config.conic1),
                 "conic2": _to_float(config.conic2),
                 "conic3": _to_float(config.conic3),
+                "front": _serialize_surface_config(config.front, owner=name),
+                "cemented": _serialize_surface_config(config.cemented, owner=name),
+                "back": _serialize_surface_config(config.back, owner=name),
+                "edge": _serialize_surface_config(config.edge, owner=name),
             },
         }
 
     raise TypeError(
         f"Cannot serialize component '{name}' of type "
-        f"'{type(compound).__name__}'. Only Lens, Mirror, and Doublet are "
-        "supported for round-trip serialization."
+        f"'{type(compound).__name__}'. Only Lens, Mirror, Doublet and raw "
+        "surfaces added via NSQScene.add_component are supported for "
+        "round-trip serialization."
     )
 
 
@@ -365,6 +718,10 @@ def _deserialize_component(d: dict, scene: NSQScene) -> None:
     )
 
     ctype = d["type"]
+    if ctype == "surface":
+        _deserialize_single_surface(d, scene)
+        return
+
     name = d["name"]
     cs = _deserialize_cs(d["cs"])
     cfg_d = d["config"]
@@ -379,6 +736,10 @@ def _deserialize_component(d: dict, scene: NSQScene) -> None:
             back_aperture_radius=cfg_d.get("back_aperture_radius"),
             conic1=cfg_d.get("conic1", 0.0),
             conic2=cfg_d.get("conic2", 0.0),
+            front=_deserialize_surface_config(cfg_d.get("front")),
+            back=_deserialize_surface_config(cfg_d.get("back")),
+            edge=_deserialize_surface_config(cfg_d.get("edge")),
+            rim=_deserialize_surface_config(cfg_d.get("rim")),
         )
         scene.add_lens(name, cs, config)
 
@@ -388,6 +749,7 @@ def _deserialize_component(d: dict, scene: NSQScene) -> None:
             reflectance=cfg_d["reflectance"],
             conic=cfg_d.get("conic", 0.0),
             aperture_radius=cfg_d["aperture_radius"],
+            surface=_deserialize_surface_config(cfg_d.get("surface")),
         )
         scene.add_mirror(name, cs, config)
 
@@ -404,13 +766,17 @@ def _deserialize_component(d: dict, scene: NSQScene) -> None:
             conic1=cfg_d.get("conic1", 0.0),
             conic2=cfg_d.get("conic2", 0.0),
             conic3=cfg_d.get("conic3", 0.0),
+            front=_deserialize_surface_config(cfg_d.get("front")),
+            cemented=_deserialize_surface_config(cfg_d.get("cemented")),
+            back=_deserialize_surface_config(cfg_d.get("back")),
+            edge=_deserialize_surface_config(cfg_d.get("edge")),
         )
         scene.add_doublet(name, cs, config)
 
     else:
         raise ValueError(
             f"Unknown component type '{ctype}' in NSQ JSON. "
-            "Expected 'lens', 'mirror', or 'doublet'."
+            "Expected 'lens', 'mirror', 'doublet' or 'surface'."
         )
 
 

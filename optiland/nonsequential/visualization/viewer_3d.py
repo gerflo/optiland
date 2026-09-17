@@ -43,6 +43,9 @@ class NSQViewer3D(BaseViewer3D):
 
     def _register_default_renderers(self) -> None:
         """Register the built-in 3D renderers."""
+        from optiland.nonsequential.components.compound import (  # noqa: PLC0415
+            SingleSurfaceCompound,
+        )
         from optiland.nonsequential.components.doublet import Doublet  # noqa: PLC0415
         from optiland.nonsequential.components.lens import Lens  # noqa: PLC0415
         from optiland.nonsequential.components.mirror import Mirror  # noqa: PLC0415
@@ -53,10 +56,14 @@ class NSQViewer3D(BaseViewer3D):
         from optiland.nonsequential.visualization.renderers.mirror import (  # noqa: PLC0415
             MirrorRenderer3D,
         )
+        from optiland.nonsequential.visualization.renderers.surface import (  # noqa: PLC0415
+            SurfaceRenderer3D,
+        )
 
         self._renderer_registry[Lens] = LensRenderer3D()
         self._renderer_registry[Doublet] = DoubletRenderer3D()
         self._renderer_registry[Mirror] = MirrorRenderer3D()
+        self._renderer_registry[SingleSurfaceCompound] = SurfaceRenderer3D()
 
     def register_renderer(self, component_type: type, renderer) -> None:
         """Register a custom 3D renderer for a compound-component type.
@@ -119,6 +126,15 @@ class NSQViewer3D(BaseViewer3D):
         det_r = DetectorRenderer3D()
         for det in self.scene.detectors:
             det_r.render(det, renderer)
+
+        # Sources
+        from optiland.nonsequential.visualization.renderers.source import (  # noqa: PLC0415
+            SourceRenderer3D,
+        )
+
+        src_r = SourceRenderer3D()
+        for source in self.scene.sources:
+            src_r.render(source, renderer, scene=self.scene)
 
         if num_rays > 0:
             from optiland.nonsequential.visualization.rays import (
