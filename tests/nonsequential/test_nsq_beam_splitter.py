@@ -175,6 +175,9 @@ class TestBeamSplitterReferenceScene:
         assert result.num_rays_escaped == 0
         assert result.num_rays_depth_killed == 0
         assert result.num_rays_flux_killed == 0
+        # A vacuum | vacuum splitter is not a volume boundary: transmitted
+        # rays must not be reported as leaving a medium they never entered.
+        assert result.diagnostics.medium_stack_underflows == 0
 
     def test_roulette_arm_powers_are_a_fair_split(self, backend_precision):
         scene = beam_splitter_scene()

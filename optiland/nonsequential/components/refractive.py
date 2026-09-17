@@ -364,9 +364,15 @@ class RefractiveComponent(BaseComponent):
             entering_back_np = to_numpy(entering_back).astype(bool)
             front_id = medium_stack_id(self.material_front)
             back_id = medium_stack_id(self.material_back)
+            mat1_np = np.where(entering_back_np, front_id, back_id)
             mat2_np = np.where(entering_back_np, back_id, front_id)
 
-            rows = np.where(transmit_np)[0]
+            # A transmit between identical media (a beam-splitter plate or
+            # partial reflector modelled as vacuum | vacuum) changes nothing
+            # about the medium the ray is in, so it neither pushes nor pops
+            # -- counting it as an exit from a volume the ray never entered
+            # would report a spurious underflow on every transmitted ray.
+            rows = np.where(transmit_np & (mat1_np != mat2_np))[0]
             mat2_rows = mat2_np[rows]
             ambient_mask = mat2_rows == 0
 
