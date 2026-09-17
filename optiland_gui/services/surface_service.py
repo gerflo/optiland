@@ -25,11 +25,11 @@ from optiland.materials import IdealMaterial
 from optiland.materials import Material as OptilandMaterial
 from optiland.physical_apertures import DifferenceAperture, RadialAperture
 from optiland.physical_apertures.radial import configure_aperture
-from optiland.surfaces.standard_surface import Surface
 from optiland.surfaces.factories.geometry_factory import (
     GeometryFactory,
     config_registry,
 )
+from optiland.surfaces.standard_surface import Surface
 
 logger = logging.getLogger(__name__)
 
@@ -398,11 +398,13 @@ class SurfaceService:
             value: Material name or value string.
         """
         new_material_name = str(value).strip().lower()
+        # The ray trace reads the flag from the interaction model; a bare
+        # ``surface.is_reflective`` attribute is never consulted.
         if new_material_name == "mirror":
-            surface.is_reflective = True
+            surface.interaction_model.is_reflective = True
             surface.material_post = surface.material_pre or IdealMaterial(n=1.0)
         else:
-            surface.is_reflective = False
+            surface.interaction_model.is_reflective = False
             if new_material_name == "air":
                 surface.material_post = IdealMaterial(n=1.0)
             else:
@@ -448,7 +450,9 @@ class SurfaceService:
             return {"type": "none"}
         if isinstance(aperture, RadialAperture):
             return {
-                "type": "ring_aperture" if float(aperture.r_min) > 0 else "circular_aperture",
+                "type": "ring_aperture"
+                if float(aperture.r_min) > 0
+                else "circular_aperture",
                 "outer_radius": float(aperture.r_max),
                 "inner_radius": float(aperture.r_min),
                 "clear_radius": float(aperture.r_max),
@@ -489,7 +493,9 @@ class SurfaceService:
 
         outer_radius = float(config.get("outer_radius", 0.0) or 0.0)
         inner_radius = float(config.get("inner_radius", 0.0) or 0.0)
-        clear_radius = float(config.get("clear_radius", outer_radius) or outer_radius or 0.0)
+        clear_radius = float(
+            config.get("clear_radius", outer_radius) or outer_radius or 0.0
+        )
 
         if outer_radius <= 0:
             raise ValueError("Aperture outer radius must be greater than zero.")
@@ -500,7 +506,9 @@ class SurfaceService:
         if clear_radius <= 0:
             raise ValueError("Aperture clear radius must be greater than zero.")
         if clear_radius < outer_radius:
-            raise ValueError("Aperture clear radius must be greater than or equal to outer radius.")
+            raise ValueError(
+                "Aperture clear radius must be greater than or equal to outer radius."
+            )
 
         if aperture_type == "circular_aperture":
             surface.aperture = RadialAperture(r_max=outer_radius, r_min=0.0)
@@ -701,7 +709,9 @@ class SurfaceService:
             n = 1.0
         return preceding_mat if n > 1.0 else "Air"
 
-    def _do_insert(self, insert_idx: int, material, thickness: float, old_state) -> None:
+    def _do_insert(
+        self, insert_idx: int, material, thickness: float, old_state
+    ) -> None:
         """Low-level helper: insert one surface and emit change signals."""
         self._connector._optic.surfaces.add(
             surface_type="standard",
@@ -905,11 +915,11 @@ class SurfaceService:
                     if key
                     not in {
                         "surface_type",
-                            "thickness",
-                            "material",
-                            "material_reference",
-                            "comment",
-                            "semi_diameter",
+                        "thickness",
+                        "material",
+                        "material_reference",
+                        "comment",
+                        "semi_diameter",
                     }
                 }
 
@@ -967,8 +977,7 @@ class SurfaceService:
             return [self._normalize_insert_value(item) for item in value]
         if isinstance(value, dict):
             return {
-                key: self._normalize_insert_value(item)
-                for key, item in value.items()
+                key: self._normalize_insert_value(item) for key, item in value.items()
             }
         return value
 
@@ -1008,7 +1017,9 @@ class SurfaceService:
         """Return all LDE rows belonging to the same surface group as *row*."""
         if not (0 < row < self.get_surface_count() - 1):
             return []
-        group_id = getattr(self._connector._optic.surfaces.surfaces[row], "group_id", None)
+        group_id = getattr(
+            self._connector._optic.surfaces.surfaces[row], "group_id", None
+        )
         if not group_id:
             return []
         return [
@@ -1071,7 +1082,7 @@ class SurfaceService:
         semi_diameters = [
             spec["semi_diameter"]
             for spec in surfaces
-            if isinstance(spec["semi_diameter"], (int, float))
+            if isinstance(spec["semi_diameter"], int | float)
         ]
         glass_materials = list(
             dict.fromkeys(
@@ -1200,11 +1211,7 @@ class SurfaceService:
     ) -> str | None:
         """Assign a new logical element group to contiguous surface rows."""
         cleaned_rows = sorted(
-            {
-                int(row)
-                for row in rows
-                if 0 < int(row) < self.get_surface_count() - 1
-            }
+            {int(row) for row in rows if 0 < int(row) < self.get_surface_count() - 1}
         )
         if len(cleaned_rows) < 2:
             return None
@@ -1213,7 +1220,11 @@ class SurfaceService:
         existing_group_ids = {
             str(group_id)
             for row in cleaned_rows
-            if (group_id := getattr(self._connector._optic.surfaces.surfaces[row], "group_id", None))
+            if (
+                group_id := getattr(
+                    self._connector._optic.surfaces.surfaces[row], "group_id", None
+                )
+            )
         }
         if existing_group_ids:
             raise ValueError(
@@ -1246,7 +1257,9 @@ class SurfaceService:
         try:
             clean_name = group_name.strip()
             for group_row in rows:
-                self._connector._optic.surfaces.surfaces[group_row].group_name = clean_name
+                self._connector._optic.surfaces.surfaces[
+                    group_row
+                ].group_name = clean_name
             self._connector._undo_redo_manager.add_state(old_state)
             self._connector.set_modified(True)
             self._connector.opticChanged.emit()
@@ -1333,7 +1346,9 @@ class SurfaceService:
 
         block_start = rows[0]
         block_end = rows[-1]
-        insert_idx = min(max(int(target_index), 1), max(self.get_surface_count() - 1, 1))
+        insert_idx = min(
+            max(int(target_index), 1), max(self.get_surface_count() - 1, 1)
+        )
         if block_start <= insert_idx <= block_end + 1:
             return rows
 
@@ -1380,17 +1395,26 @@ class SurfaceService:
 
         old_state = self._connector._capture_optic_state()
         surfaces = self._connector._optic.surfaces
-        original_block = [copy.deepcopy(surfaces.surfaces[group_row].to_dict()) for group_row in rows]
+        original_block = [
+            copy.deepcopy(surfaces.surfaces[group_row].to_dict()) for group_row in rows
+        ]
         stop_offset = next(
-            (offset for offset, surface_data in enumerate(original_block) if surface_data.get("is_stop")),
+            (
+                offset
+                for offset, surface_data in enumerate(original_block)
+                if surface_data.get("is_stop")
+            ),
             None,
         )
-        original_thicknesses = [surface_data.get("thickness", 0.0) for surface_data in original_block]
+        original_thicknesses = [
+            surface_data.get("thickness", 0.0) for surface_data in original_block
+        ]
         reversed_internal_thicknesses = list(reversed(original_thicknesses[:-1]))
         flipped_thicknesses = reversed_internal_thicknesses + [original_thicknesses[-1]]
 
         original_material_posts = [
-            copy.deepcopy(surface_data["material_post"]) for surface_data in original_block
+            copy.deepcopy(surface_data["material_post"])
+            for surface_data in original_block
         ]
         flipped_material_posts = list(reversed(original_material_posts[:-1])) + [
             copy.deepcopy(original_material_posts[-1])
@@ -1442,19 +1466,28 @@ class SurfaceService:
             return
 
         if geometry_type == "StandardGeometry":
-            geometry_data["radius"] = self._negate_finite_value(geometry_data.get("radius"))
+            geometry_data["radius"] = self._negate_finite_value(
+                geometry_data.get("radius")
+            )
             return
 
         if geometry_type == "EvenAsphere":
-            geometry_data["radius"] = self._negate_finite_value(geometry_data.get("radius"))
+            geometry_data["radius"] = self._negate_finite_value(
+                geometry_data.get("radius")
+            )
             geometry_data["coefficients"] = [
-                -float(coefficient) for coefficient in geometry_data.get("coefficients", [])
+                -float(coefficient)
+                for coefficient in geometry_data.get("coefficients", [])
             ]
             return
 
         if geometry_type == "BiconicGeometry":
-            geometry_data["radius_x"] = self._negate_finite_value(geometry_data.get("radius_x"))
-            geometry_data["radius_y"] = self._negate_finite_value(geometry_data.get("radius_y"))
+            geometry_data["radius_x"] = self._negate_finite_value(
+                geometry_data.get("radius_x")
+            )
+            geometry_data["radius_y"] = self._negate_finite_value(
+                geometry_data.get("radius_y")
+            )
             return
 
         raise NotImplementedError(
@@ -1497,7 +1530,7 @@ class SurfaceService:
         Scalar values continue to use the active backend array/scalar type.
         """
         if attr_name in {"coefficients", "coeffs_poly_y"}:
-            return list(value) if isinstance(value, (list, tuple)) else [value]
+            return list(value) if isinstance(value, list | tuple) else [value]
         return be.array(value)
 
     def _update_biconic_geometry(self, surface: object, params_dict: dict) -> None:

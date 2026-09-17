@@ -152,3 +152,41 @@ class TestParaxialSurfaceEdits:
         service.set_surface_type(1, "standard")
         surface = optic.surfaces.surfaces[1]
         assert isinstance(surface.interaction_model, RefractiveReflectiveModel)
+
+
+class TestMirrorMaterialEdit:
+    """Regression: typing "Mirror" in the material column set a dead
+    ``surface.is_reflective`` attribute; the trace kept refracting."""
+
+    def test_mirror_sets_the_interaction_model_flag(self, qapp) -> None:
+        optic = _make_singlet()
+        service = SurfaceService(_make_connector(optic))
+
+        service.set_surface_data(2, COL_MATERIAL, "Mirror")
+
+        model = optic.surfaces.surfaces[2].interaction_model
+        assert isinstance(model, RefractiveReflectiveModel)
+        assert model.is_reflective is True
+        assert service.get_surface_data(2, COL_MATERIAL) == "Mirror"
+
+    def test_mirror_reverses_the_traced_rays(self, qapp) -> None:
+        optic = _make_singlet()
+        service = SurfaceService(_make_connector(optic))
+        service.set_surface_data(2, COL_MATERIAL, "Mirror")
+
+        rays = optic.trace(
+            Hx=0, Hy=0, wavelength=0.55, num_rays=3, distribution="line_y"
+        )
+
+        # After reflecting off surface 2 the rays travel towards -z.
+        assert float(be.to_numpy(rays.N).max()) < 0.0
+
+    def test_air_after_mirror_clears_the_flag(self, qapp) -> None:
+        optic = _make_singlet()
+        service = SurfaceService(_make_connector(optic))
+        service.set_surface_data(2, COL_MATERIAL, "Mirror")
+
+        service.set_surface_data(2, COL_MATERIAL, "Air")
+
+        assert optic.surfaces.surfaces[2].interaction_model.is_reflective is False
+        assert service.get_surface_data(2, COL_MATERIAL) == "Air"
