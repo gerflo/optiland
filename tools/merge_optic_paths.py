@@ -55,6 +55,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--out", required=True, help="Multi-axis system file to write (.olsys)."
     )
+    parser.add_argument(
+        "--imaging-name",
+        default=None,
+        help="Name of the imaging path (default: the file's system name).",
+    )
+    parser.add_argument(
+        "--illumination-name",
+        default=None,
+        help="Name of the illumination path (default: the file's system name).",
+    )
     parser.add_argument("--angle", type=float, default=45.0, help="Mirror tilt [deg].")
     parser.add_argument(
         "--hole",
@@ -111,12 +121,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--report", default=None, help="Markdown report to write.")
     parser.add_argument("--plots", default=None, help="Directory for PNG plots.")
     return parser.parse_args()
-
-
-def _lossless_policy(choice: str):
-    from optiland.nonsequential.surface_conversion import glass_surfaces_lossless
-
-    return {"glass": glass_surfaces_lossless, "all": True, "none": False}[choice]
 
 
 def _centroid_and_rms(detector) -> tuple[float, float, float]:
@@ -256,35 +260,39 @@ def main() -> int:
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     import optiland.backend as be
     from optiland.fileio import load_optiland_file
-    from optiland.nonsequential.fold import fold_paths
     from optiland.nonsequential.serialization import SCENE_FILE_EXTENSION
+    from optiland.nonsequential.system import fold_system
 
     be.set_backend("numpy")
     imaging = load_optiland_file(args.imaging)
     illumination = load_optiland_file(args.illumination)
-    scene, report = fold_paths(
+    system, report = fold_system(
         imaging,
         illumination,
         args.fold_imaging,
         args.fold_illumination,
+        imaging_name=args.imaging_name,
+        illumination_name=args.illumination_name,
         angle_deg=args.angle,
         hole=args.hole,
         tail_from=args.tail_from,
         mirror_reflectance=args.mirror_reflectance,
-        lossless=_lossless_policy(args.lossless),
+        lossless=args.lossless,
         illumination_flux=args.illumination_flux,
         object_flux=args.object_flux,
         illumination_half_angle_deg=args.illumination_half_angle,
         sample_size=args.sample_size,
         camera_pixels=(args.camera_pixels, args.camera_pixels),
     )
+    scene = system.scene
     out_path = Path(args.out)
     if not out_path.suffix:
         out_path = out_path.with_suffix(SCENE_FILE_EXTENSION)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    scene.to_json(out_path)
+    system.to_json(out_path)
     print(report.summary())
-    print(f"scene written to {out_path}")
+    print(f"paths: {', '.join(system.path_names)}")
+    print(f"system written to {out_path}")
 
     text = _trace_and_report(scene, report, args, out_path)
     if args.trace > 0:
