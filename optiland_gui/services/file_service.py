@@ -19,7 +19,59 @@ from optiland.fileio import (
     save_codev_file,
     save_zemax_file,
 )
+from optiland.nonsequential.serialization import SCENE_FILE_EXTENSION
 from optiland.optic import Optic
+
+#: Extension of a multi-axis (non-sequential) system file.
+OLSYS_EXTENSION = SCENE_FILE_EXTENSION
+
+
+def with_scene_extension(filepath: str) -> str:
+    """Give a scene path the ``.olsys`` extension unless it already has one.
+
+    A ``.json`` path is kept as typed (the legacy extension), so a user who
+    explicitly asks for it still gets it.
+
+    Args:
+        filepath: Path chosen in a save dialog.
+
+    Returns:
+        The path with ``.olsys`` appended when it had no extension or an
+        unrelated one.
+    """
+    lowered = filepath.lower()
+    if lowered.endswith((OLSYS_EXTENSION, ".json")):
+        return filepath
+    return filepath + OLSYS_EXTENSION
+
+
+def is_nsq_scene_file(filepath: str) -> bool:
+    """Whether *filepath* is a multi-axis system written by ``NSQScene.to_json``.
+
+    Such files (``.olsys``, or ``.json`` from before that extension existed)
+    carry a top-level ``"nsq_schema_version"`` key; an optical system file
+    does not. Anything unreadable counts as "not a scene" so the regular
+    loader reports the real problem.
+
+    Args:
+        filepath: Path to a file.
+
+    Returns:
+        True for a non-sequential scene file.
+    """
+    lowered = str(filepath).lower()
+    if not lowered.endswith((OLSYS_EXTENSION, ".json")):
+        return False
+    try:
+        with open(filepath, encoding="utf-8") as f:
+            head = f.read(4096)
+        if "nsq_schema_version" not in head:
+            return False
+        with open(filepath, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and "nsq_schema_version" in data
 
 
 class SpecialFloatEncoder(json.JSONEncoder):
@@ -150,11 +202,21 @@ class FileService:
         Supports Optiland JSON (``.json``) and Zemax (``.zmx``) files.
         On success, the undo/redo stack is cleared and ``opticLoaded`` is
         emitted. On failure a message box is shown and the system is reset
-        to a new default.
+        to a new default. A non-sequential scene file is refused with a
+        hint towards the Non-Sequential panel and leaves the current
+        system untouched.
 
         Args:
             filepath: Absolute path to the file to load.
         """
+        if is_nsq_scene_file(filepath):
+            self._toast(
+                "This is a multi-axis (non-sequential) system, not an optical "
+                "system. Open it from the Non-Sequential panel (Open...).",
+                "error",
+                sub=filepath,
+            )
+            return
         try:
             _name, extension = os.path.splitext(filepath)
             if extension.lower() == ".zmx":

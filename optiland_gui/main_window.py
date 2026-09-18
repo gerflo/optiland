@@ -69,6 +69,7 @@ from .config import (
 from .optiland_connector import OptilandConnector
 from .panel_manager import PanelManager
 from .services.catalog_service import EDMUND_ZEMAX_PAGE_URL, THORLABS_ZEMAX_PAGE_URL
+from .services.file_service import is_nsq_scene_file
 from .theme_manager import (
     DEFAULT_THEME_ID,
     THEMES,
@@ -574,7 +575,15 @@ class MainWindow(FramelessWindow):
         self._open_system_from_path(filepath)
 
     def _open_system_from_path(self, filepath: str) -> None:
-        """Load a system file and update related UI state."""
+        """Load a system file and update related UI state.
+
+        A non-sequential scene file (``NSQScene.to_json``) is routed to the
+        Non-Sequential panel instead of the optical-system loader; the
+        current optical system stays as it is.
+        """
+        if is_nsq_scene_file(filepath):
+            self._open_nsq_scene_from_path(filepath)
+            return
         if not self._maybe_save_changes_before_destructive_action(
             f"opening '{os.path.basename(filepath)}'"
         ):
@@ -584,6 +593,24 @@ class MainWindow(FramelessWindow):
         self.connector.load_optic_from_file(filepath)
         self._update_project_name_in_title_bar()
         logger.debug("Open System action triggered: %s", filepath)
+
+    def _open_nsq_scene_from_path(self, filepath: str) -> None:
+        """Load a multi-axis system (``.olsys``) into the Non-Sequential panel."""
+        self._remember_dialog_path("Paths/LastOpenDir", filepath)
+        self._remember_recent_file(filepath)
+        try:
+            self.panel_manager.nsq_panel.service.load_file(filepath)
+        except Exception as exc:  # noqa: BLE001 -- report, keep the GUI alive
+            self.toast_manager.notify(
+                f"Load failed: {exc}", "error", sub_message=filepath
+            )
+            return
+        self.focus_dock_widget(self.panel_manager.nsq_dock)
+        self.toast_manager.notify(
+            f"Opened non-sequential scene — {os.path.basename(filepath)}",
+            "info",
+        )
+        logger.debug("Open non-sequential scene: %s", filepath)
 
     def _populate_quick_actions_toolbar(self, toolbar: QToolBar):
         """Populates the quick actions toolbar with common actions.
@@ -1070,7 +1097,8 @@ class MainWindow(FramelessWindow):
             self,
             "Open Optiland System",
             self._get_dialog_start_dir("Paths/LastOpenDir", "Paths/LastSaveDir"),
-            "Optiland JSON Files (*.json);;Zemax Files (*.zmx);;All Files (*)",
+            "Optiland Systems (*.json *.olsys);;Optiland JSON Files (*.json);;"
+            "Multi-Axis Systems (*.olsys);;Zemax Files (*.zmx);;All Files (*)",
         )
         if filepath:
             self._open_system_from_path(filepath)

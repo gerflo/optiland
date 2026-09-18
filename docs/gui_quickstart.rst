@@ -76,7 +76,7 @@ When you first open the Optiland GUI, you'll see a main window containing severa
        :align: center
        :width: 600px
 
-*   **Non-Sequential Panel**: Builds, opens and saves non-sequential scenes (beam splitters, multi-path illumination) and traces them on a background thread. It shows the scene layout with recorded ray paths, one irradiance map per detector and the energy balance with the trace diagnostics. Two sample scenes are bundled: a 50:50 beam splitter and a side illumination that shares one splitter with a transmission imaging path.
+*   **Non-Sequential Panel**: Builds, opens and saves non-sequential scenes (beam splitters, multi-path illumination) and traces them on a background thread. It shows the scene layout with recorded ray paths, one irradiance map per detector and the energy balance with the trace diagnostics. Two sample scenes are bundled: a 50:50 beam splitter and a side illumination that shares one splitter with a transmission imaging path. Systems with several optical axes are saved as ``*.olsys`` files (written by ``NSQScene.to_json``, the panel's *Save...* or ``tools/merge_optic_paths.py``); such a file opened through *File → Open* or the recent-files list is routed to this panel, and the current optical system stays open.
 
 *   **System Properties Panel**: Manage system-wide settings that are not tied to individual surfaces. This includes:
 

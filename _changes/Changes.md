@@ -200,6 +200,6 @@ Effect:
 - the grouped converter keeps a singlet's asphere coefficients
 
 How to use it:
-- `python tools/merge_optic_paths.py --imaging A.json --illumination B.json --fold-imaging 7 --fold-illumination 12 --out merged.nsq.json --trace 60000 --report report.md --plots plots/`
-- open `merged.nsq.json` in the GUI's Non-Sequential panel (Open JSON), projection XZ
+- `python tools/merge_optic_paths.py --imaging A.json --illumination B.json --fold-imaging 7 --fold-illumination 12 --out merged.olsys --trace 60000 --report report.md --plots plots/`
+- open `merged.olsys` via File -> Open (routed to the Non-Sequential panel), projection XZ
 - `from optiland.nonsequential.fold import fold_paths, trace_per_source`

@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from . import gui_plot_utils
 from .analysis_panel import CustomMatplotlibToolbar
+from .services.file_service import with_scene_extension
 from .services.nsq_service import NSQService
 from .worker import BusyOverlay
 
@@ -102,12 +103,12 @@ class NSQPanel(QWidget):
         self.scene_combo.activated.connect(self._on_sample_selected)
         scene_row.addWidget(self.scene_combo, 1)
 
-        self.open_button = QPushButton("Open JSON...")
+        self.open_button = QPushButton("Open...")
         self.open_button.setObjectName("NSQOpenButton")
         self.open_button.clicked.connect(self._on_open_clicked)
         scene_row.addWidget(self.open_button)
 
-        self.save_button = QPushButton("Save JSON...")
+        self.save_button = QPushButton("Save...")
         self.save_button.setObjectName("NSQSaveButton")
         self.save_button.clicked.connect(self._on_save_clicked)
         scene_row.addWidget(self.save_button)
@@ -242,7 +243,10 @@ class NSQPanel(QWidget):
     @Slot()
     def _on_open_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open non-sequential scene", "", "NSQ scene (*.json)"
+            self,
+            "Open multi-axis system",
+            "",
+            "Multi-axis system (*.olsys);;NSQ scene JSON (*.json);;All files (*)",
         )
         if not path:
             return
@@ -254,12 +258,15 @@ class NSQPanel(QWidget):
     @Slot()
     def _on_save_clicked(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save non-sequential scene", "", "NSQ scene (*.json)"
+            self,
+            "Save multi-axis system",
+            "",
+            "Multi-axis system (*.olsys);;NSQ scene JSON (*.json)",
         )
         if not path:
             return
         try:
-            self.service.save_file(path)
+            self.service.save_file(with_scene_extension(path))
         except Exception as exc:  # noqa: BLE001 -- surfaced to the user
             self._notify(f"Could not save scene: {exc}", "error")
 

@@ -11,6 +11,8 @@ Branch: `feat/fold-optic-paths` (stacked on `feat/beam-splitter-paths`)
 - `ExtendedSource(inner_radius=..., lambertian_cone=True)`: ring emitters and cosine-weighted emission restricted to a cone
 - serialization / IR: `{"type": "ideal", "index", "absorp"}` media, `annulus` and `even_asphere` geometry kinds, the new source fields
 - `tools/merge_optic_paths.py`: command line with per-source trace, Markdown report and plots
+- `.olsys` is the file extension of a multi-axis (non-sequential) system: the panel's Open/Save dialogs, `tools/merge_optic_paths.py` and *File → Open* use it (`.json` scene files still load)
+- GUI: *File → Open* (and the recent-files list) recognises a multi-axis system file and routes it to the Non-Sequential panel; the optical-system loader refuses such a file with a hint instead of resetting the workspace; the panel's default max depth is 48
 
 ## What it does for the user
 

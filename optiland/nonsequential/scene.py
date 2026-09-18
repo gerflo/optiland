@@ -329,7 +329,9 @@ class NSQScene:
         ``torch.tensor(..., requires_grad=True)`` after loading.
 
         Args:
-            path: Destination file path (created or overwritten).
+            path: Destination file path (created or overwritten). The
+                conventional extension is ``.olsys`` (a multi-axis system);
+                the GUI and ``tools/merge_optic_paths.py`` use it.
 
         Raises:
             TypeError: If a component/source/detector type is not serializable.

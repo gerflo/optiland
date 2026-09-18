@@ -2,9 +2,9 @@
 
 Both paths are given as unfolded sequential Optiland files that share a
 tail and meet at a perforated fold mirror (a fundus camera, a coaxial
-illuminator). The result is an NSQ JSON scene the GUI's Non-Sequential
-panel opens, plus an optional per-source trace with a Markdown report and
-PNG plots.
+illuminator). The result is a multi-axis system file (``.olsys``) the GUI
+opens in its Non-Sequential panel, plus an optional per-source trace with a
+Markdown report and PNG plots.
 
 Examples::
 
@@ -12,10 +12,13 @@ Examples::
     # observation file, surface 12 in the illumination file):
     python tools/merge_optic_paths.py \\
         --imaging "RCR-03 Beobachtung.json" --illumination "RCR-03 Beleuchtung.json" \\
-        --fold-imaging 7 --fold-illumination 12 --out merged.nsq.json
+        --fold-imaging 7 --fold-illumination 12 --out merged.olsys
 
     # ... and trace 200 000 rays per source, writing a report and plots:
     python tools/merge_optic_paths.py ... --trace 200000 --report report.md --plots out/
+
+The scene is written as a multi-axis system file (``.olsys``, appended when
+``--out`` has no extension); the GUI opens it via File -> Open.
 
 See :mod:`optiland.nonsequential.fold` for what the merge does and assumes.
 """
@@ -49,7 +52,9 @@ def _parse_args() -> argparse.Namespace:
         required=True,
         help="Ring surface index (illumination).",
     )
-    parser.add_argument("--out", required=True, help="NSQ JSON scene to write.")
+    parser.add_argument(
+        "--out", required=True, help="Multi-axis system file to write (.olsys)."
+    )
     parser.add_argument("--angle", type=float, default=45.0, help="Mirror tilt [deg].")
     parser.add_argument(
         "--hole",
@@ -252,6 +257,7 @@ def main() -> int:
     import optiland.backend as be
     from optiland.fileio import load_optiland_file
     from optiland.nonsequential.fold import fold_paths
+    from optiland.nonsequential.serialization import SCENE_FILE_EXTENSION
 
     be.set_backend("numpy")
     imaging = load_optiland_file(args.imaging)
@@ -273,6 +279,8 @@ def main() -> int:
         camera_pixels=(args.camera_pixels, args.camera_pixels),
     )
     out_path = Path(args.out)
+    if not out_path.suffix:
+        out_path = out_path.with_suffix(SCENE_FILE_EXTENSION)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     scene.to_json(out_path)
     print(report.summary())

@@ -64,6 +64,11 @@ if TYPE_CHECKING:
 
 NSQ_SCHEMA_VERSION = 1
 
+#: Conventional file extension of a scene (a multi-axis system) on disk.
+#: The content is the JSON of :func:`scene_to_dict`; ``.json`` files from
+#: before this convention load the same way.
+SCENE_FILE_EXTENSION = ".olsys"
+
 
 # ---------------------------------------------------------------------------
 # Helpers

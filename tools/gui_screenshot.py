@@ -43,7 +43,7 @@ def _parse_args() -> argparse.Namespace:
         "--scene",
         default=None,
         help="Non-sequential sample scene key (beam_splitter, side_illumination) "
-        "or a path to an NSQ JSON file.",
+        "or a path to a scene file (.olsys or NSQ JSON).",
     )
     parser.add_argument(
         "--trace", action="store_true", help="Run a non-sequential trace first."
