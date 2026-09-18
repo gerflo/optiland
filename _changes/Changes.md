@@ -187,3 +187,19 @@ How to use it:
 - `from optiland.samples.nonsequential import beam_splitter_scene, side_illumination_transmission_scene`
 - open the `Non-Seq` sidebar entry, choose a scene, press `Trace`
 - `python tools/gui_screenshot.py --panel nonsequential --trace --all-tabs out/nsq.png`
+
+## 17. Folded Illumination and Imaging Paths
+File: [fold-optic-paths.md](./fold-optic-paths.md)
+Commits: on `feat/fold-optic-paths` (stacked on `feat/beam-splitter-paths`)
+
+Effect:
+- two sequential design files (imaging through a mirror hole, illumination reflected by its ring) merge into one folded non-sequential scene
+- surface-wise conversion handles eye models (constant-index media), even aspheres, stops and obscurations, in any frame
+- annular Lambertian ring sources restricted to a cone; elliptical holes in annular mirrors
+- constant-index media, annuli and aspheres round-trip through NSQ JSON and the scene IR
+- the grouped converter keeps a singlet's asphere coefficients
+
+How to use it:
+- `python tools/merge_optic_paths.py --imaging A.json --illumination B.json --fold-imaging 7 --fold-illumination 12 --out merged.nsq.json --trace 60000 --report report.md --plots plots/`
+- open `merged.nsq.json` in the GUI's Non-Sequential panel (Open JSON), projection XZ
+- `from optiland.nonsequential.fold import fold_paths, trace_per_source`

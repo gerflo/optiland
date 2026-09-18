@@ -77,6 +77,12 @@ Physics coverage, as of this page:
        self-intersection guard scales with float precision, so Torch
        float32 traces no longer re-hit the surface they just left
        (:ref:`nsq_beam_splitters`).
+   * - Folded / coaxial illumination systems
+     - ``optiland.nonsequential.fold.fold_paths`` merges an imaging and an
+       illumination sequential file at a perforated mirror; surface-wise
+       conversion carries eye models (constant-index media), even
+       aspheres and every aperture as absorbing baffles
+       (:ref:`nsq_folded_paths`).
    * - Rare-path sampling
      - Importance biasing (both backends), bounded splitting (NumPy only),
        unbiased Russian roulette. Split children carry a ``"split"`` event

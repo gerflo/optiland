@@ -191,6 +191,72 @@ available under the Torch backend. Two reference scenes live in
   ``SurfaceConfig`` overrides. A BSDF or a callable reflectance raises at
   save time instead of being dropped.
 
+.. _nsq_folded_paths:
+
+4b. Surface-wise conversion and folded illumination paths
+----------------------------------------------------------
+
+:func:`~optiland.nonsequential.convert.sequential_to_nonsequential` groups
+glass surfaces into ``Lens``/``Doublet`` compounds and expects an on-axis
+object-to-image system. :mod:`optiland.nonsequential.surface_conversion`
+places any range of a sequential optic's surfaces into a scene one surface
+at a time, in any frame:
+
+- ``add_optic_surfaces(scene, optic, frame=..., start=..., stop=...,
+  lossless=...)`` turns each refractive surface into a
+  ``RefractiveComponent`` with the media the sequential chain gives it --
+  catalog glasses and constant-index ``IdealMaterial`` media alike, so an
+  eye model converts and round-trips through JSON (``{"type": "ideal",
+  "index": n, "absorp": k}``) and the scene IR (``n_model`` ``constant``).
+  Mirrors become ``ReflectiveComponent`` surfaces; an air-to-air surface
+  (a stop, a hole) contributes only its aperture. Every aperture is
+  enforced by an absorbing rim annulus at the surface edge, and an
+  obscuration (``r_min > 0``) by an absorbing disk, because a
+  non-sequential ray that misses a surface would otherwise fly on
+  undisturbed. ``Plane``, ``StandardGeometry`` and ``EvenAsphere`` are
+  supported; the asphere becomes an
+  :class:`~optiland.nonsequential.components.geometry.analytic.asphere.EvenAsphereGeometry`
+  (Newton-refined intersection from the base conic's roots, same
+  coefficient convention as the sequential class, ``coefficients[0]`` for
+  ``r^2``). ``LensConfig.coefficients1/2`` build aspheric ``Lens`` faces,
+  and the grouped converter now carries a singlet's coefficients instead
+  of silently tracing the base conic.
+- ``add_field_point_sources`` puts one aimed ``PointSource`` on the object
+  surface per object-height field (on the surface's sag, so a curved
+  retina is honoured), pointing along the chief ray -- towards the
+  paraxial entrance pupil, or away from it when the pupil is virtual and
+  lies behind the object -- with a cone that just covers the pupil.
+  ``add_image_detector`` uses the image surface's rectangular or radial
+  aperture as the detector size.
+- The default ``lossless`` policy, :func:`glass_surfaces_lossless`, gives
+  catalog-glass surfaces a lossless ``SimpleCoating`` (what the sequential
+  engine assumes) and leaves constant-index media with Fresnel
+  reflection, so a corneal reflex stays visible.
+
+:mod:`optiland.nonsequential.fold` builds a *folded* system from two such
+files that share a tail and meet at a perforated fold mirror (a fundus
+camera, a coaxial illuminator): ``fold_paths(imaging, illumination,
+fold_imaging, fold_illumination)`` keeps the imaging file's frame, makes
+the mirror an ``AnnularPlaneGeometry`` tilted about y whose hole is the
+imaging fold aperture and whose rim is the illumination fold aperture,
+lays the illumination surfaces before its fold along ``-x`` (travelling
+``+x`` into the mirror so the reflection continues towards ``-z`` into the
+shared tail), and compares the two copies of the tail surface by surface
+(``compare_tails``) -- drift between the two designs is reported in
+``FoldReport.tail_differences``, never absorbed. The hole is elliptical in
+the mirror plane by default (``hole="projected"``: it appears as the
+imaging file's circular aperture along the axis) or a circle of that
+diameter (``hole="physical"``). ``AnnularPlaneGeometry(inner_radius_y=...)``
+provides the elliptical hole. The illumination object becomes an annular
+``ExtendedSource`` (``inner_radius``) emitting a Lambertian distribution
+restricted to a cone (``lambertian_cone=True``; ``total_flux`` is then
+the flux inside the cone, ``sin^2`` of the half angle times the full
+Lambertian flux), so the relay's acceptance cone is sampled instead of the
+whole hemisphere. ``trace_per_source`` traces the scene once per source so
+each detector's flux is attributed to its arm.
+``tools/merge_optic_paths.py`` wraps all of this in a command line with an
+optional per-source trace, Markdown report and plots.
+
 .. _nsq_rng:
 
 5. Reproducibility — PCG32
