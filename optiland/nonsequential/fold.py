@@ -95,6 +95,9 @@ class FoldReport:
         sources: Registry names of the sources.
         detectors: Registry names of the detectors.
         notes: Free-text remarks.
+        arms: Per-path conversions of an *unfolded* system (see
+            :meth:`~optiland.nonsequential.system.MultiAxisSystem.rebuild`),
+            keyed by path name; empty for a fold.
     """
 
     fold_z: float
@@ -109,25 +112,48 @@ class FoldReport:
     sources: list[str] = field(default_factory=list)
     detectors: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    arms: dict[str, ArmReport] = field(default_factory=dict)
+
+    @classmethod
+    def unfolded(cls) -> FoldReport:
+        """A report for a system that was converted path by path, not folded."""
+        return cls(
+            fold_z=math.nan,
+            angle_deg=0.0,
+            hole_semi_axes=(0.0, 0.0),
+            rim_radius=0.0,
+            tail_from="",
+        )
+
+    @property
+    def is_fold(self) -> bool:
+        """Whether the report describes a fold (as opposed to path conversions)."""
+        return not math.isnan(self.fold_z)
 
     def summary(self) -> str:
         """Multi-line summary for logs and reports."""
-        lines = [
-            f"fold mirror at z = {self.fold_z:.4f} mm, tilt {self.angle_deg:g} deg, "
-            f"hole {2 * self.hole_semi_axes[0]:.3f} x {2 * self.hole_semi_axes[1]:.3f}"
-            f" mm, rim diameter {2 * self.rim_radius:.3f} mm",
-            f"shared tail from the {self.tail_from} file",
-        ]
-        if self.tail_differences:
-            lines.append("tail differences between the two files:")
-            lines.extend(f"  - {d}" for d in self.tail_differences)
+        if self.is_fold:
+            lines = [
+                f"fold mirror at z = {self.fold_z:.4f} mm, tilt {self.angle_deg:g} "
+                f"deg, hole {2 * self.hole_semi_axes[0]:.3f} x "
+                f"{2 * self.hole_semi_axes[1]:.3f} mm, rim diameter "
+                f"{2 * self.rim_radius:.3f} mm",
+                f"shared tail from the {self.tail_from} file",
+            ]
+            if self.tail_differences:
+                lines.append("tail differences between the two files:")
+                lines.extend(f"  - {d}" for d in self.tail_differences)
+            else:
+                lines.append("both files agree on the shared tail")
+            arms = [
+                ("tail", self.tail),
+                ("imaging arm", self.imaging_arm),
+                ("illumination arm", self.illumination_arm),
+            ]
         else:
-            lines.append("both files agree on the shared tail")
-        for label, arm in (
-            ("tail", self.tail),
-            ("imaging arm", self.imaging_arm),
-            ("illumination arm", self.illumination_arm),
-        ):
+            lines = [f"unfolded system: {len(self.arms)} path(s) converted in place"]
+            arms = list(self.arms.items())
+        for label, arm in arms:
             lines.append(
                 f"{label}: {len(arm.components)} surfaces, {len(arm.baffles)} "
                 f"baffles, {len(arm.aperture_only)} aperture-only, "

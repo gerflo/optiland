@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import MagicMock
 
 from PySide6.QtWidgets import QMessageBox
@@ -20,7 +20,9 @@ def _patch_connector_side_services(monkeypatch) -> None:  # noqa: ANN001
     )
 
 
-def test_connector_returns_to_clean_state_after_reverting_new_system_change(monkeypatch) -> None:
+def test_connector_returns_to_clean_state_after_reverting_new_system_change(
+    monkeypatch,
+) -> None:
     _patch_connector_side_services(monkeypatch)
     connector = OptilandConnector()
 
@@ -47,12 +49,45 @@ def test_connector_imported_state_requires_save_even_without_further_edits(
     assert connector.is_modified() is True
 
 
-def test_main_window_save_prompt_uses_save_discard_cancel(monkeypatch) -> None:
+def _prompt_window(*, system_dirty: bool = False) -> SimpleNamespace:
+    """A stand-in main window for the unsaved-changes prompt.
+
+    The document is the multi-axis system: the prompt asks when the
+    connector (active path) or the system service reports changes.
+    """
     window = SimpleNamespace()
     window.connector = MagicMock()
-    window.connector.has_unsaved_changes.side_effect = [True, False]
-    window.connector.get_current_filepath.return_value = r"C:\temp\demo.json"
+    service = SimpleNamespace(document_name="demo.olsys", is_dirty=system_dirty)
+    window.panel_manager = SimpleNamespace(nsq_panel=SimpleNamespace(service=service))
+    window._document_has_unsaved_changes = MethodType(
+        MainWindow._document_has_unsaved_changes, window
+    )
     window.save_system_action = MagicMock()
+    return window
+
+
+def test_main_window_prompts_for_system_changes_too(monkeypatch) -> None:
+    """A renamed path dirties the system although the connector is clean."""
+    window = _prompt_window(system_dirty=True)
+    window.connector.has_unsaved_changes.return_value = False
+    asked = []
+    monkeypatch.setattr(
+        "optiland_gui.main_window.QMessageBox.warning",
+        lambda *args, **kwargs: asked.append(args[2])
+        or QMessageBox.StandardButton.Discard,
+    )
+
+    allowed = MainWindow._maybe_save_changes_before_destructive_action(
+        window, "closing the application"
+    )
+
+    assert allowed is True
+    assert asked == ["Save changes to 'demo.olsys' before closing the application?"]
+
+
+def test_main_window_save_prompt_uses_save_discard_cancel(monkeypatch) -> None:
+    window = _prompt_window()
+    window.connector.has_unsaved_changes.side_effect = [True, False]
 
     monkeypatch.setattr(
         "optiland_gui.main_window.QMessageBox.warning",
@@ -70,11 +105,8 @@ def test_main_window_save_prompt_uses_save_discard_cancel(monkeypatch) -> None:
 def test_main_window_save_prompt_cancels_when_save_did_not_clear_unsaved_changes(
     monkeypatch,
 ) -> None:
-    window = SimpleNamespace()
-    window.connector = MagicMock()
+    window = _prompt_window()
     window.connector.has_unsaved_changes.side_effect = [True, True]
-    window.connector.get_current_filepath.return_value = None
-    window.save_system_action = MagicMock()
 
     monkeypatch.setattr(
         "optiland_gui.main_window.QMessageBox.warning",
@@ -89,12 +121,11 @@ def test_main_window_save_prompt_cancels_when_save_did_not_clear_unsaved_changes
     window.save_system_action.assert_called_once()
 
 
-def test_main_window_discard_prompt_allows_replacing_current_system(monkeypatch) -> None:
-    window = SimpleNamespace()
-    window.connector = MagicMock()
+def test_main_window_discard_prompt_allows_replacing_current_system(
+    monkeypatch,
+) -> None:
+    window = _prompt_window()
     window.connector.has_unsaved_changes.return_value = True
-    window.connector.get_current_filepath.return_value = None
-    window.save_system_action = MagicMock()
 
     monkeypatch.setattr(
         "optiland_gui.main_window.QMessageBox.warning",

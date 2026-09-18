@@ -198,8 +198,11 @@ Effect:
 - annular Lambertian ring sources restricted to a cone; elliptical holes in annular mirrors
 - constant-index media, annuli and aspheres round-trip through NSQ JSON and the scene IR
 - the grouped converter keeps a singlet's asphere coefficients
+- the multi-axis system is the GUI document: File -> Save writes all paths to `.olsys`, File -> Export -> To Optiland JSON writes one chosen path, a `.json` opened via File -> Open becomes path 1 (or fills a path of a folded system)
+- `.olsys` files record the file-format version and the application version that saved them; Optiland GUI 0.3.0
 
 How to use it:
 - `python tools/merge_optic_paths.py --imaging A.json --illumination B.json --fold-imaging 7 --fold-illumination 12 --out merged.olsys --trace 60000 --report report.md --plots plots/`
 - open `merged.olsys` via File -> Open (routed to the System view), projection XZ; pick a path in the *Path* pull-down or click an element to edit it in the Lens Data Editor
+- File -> Save stores the whole system as `.olsys`; File -> Export -> To Optiland JSON exports one path; File -> Open of a `.json` fills path 1 (a dialog offers the other paths of a folded system)
 - `from optiland.nonsequential.fold import fold_paths, trace_per_source`

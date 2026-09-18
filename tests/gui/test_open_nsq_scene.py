@@ -103,7 +103,8 @@ def test_main_window_routes_a_scene_to_the_nsq_panel(qapp, tmp_path) -> None:
     assert service.scene_path == path
     assert set(service.scene.detector_names) == {"transmitted", "reflected"}
     window.connector.load_optic_from_file.assert_not_called()
-    window._maybe_save_changes_before_destructive_action.assert_not_called()
+    # The system is the document: replacing it asks about unsaved changes.
+    window._maybe_save_changes_before_destructive_action.assert_called_once()
     window.focus_dock_widget.assert_called_once_with(window.panel_manager.nsq_dock)
     window._remember_recent_file.assert_called_once_with(path)
     message, severity = window.toast_manager.notify.call_args.args[:2]

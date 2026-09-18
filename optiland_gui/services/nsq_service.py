@@ -1,24 +1,32 @@
-"""Non-sequential (NSQ) document service for the Optiland GUI.
+"""System document service for the Optiland GUI.
 
-The sequential ``OptilandConnector`` and its undo snapshots work on an
-``Optic``. A non-sequential scene is a different document: it has sources,
-components and detectors instead of a surface list, its own JSON format
-(``nsq_schema_version``) and Monte Carlo results instead of ray records.
-:class:`NSQService` owns that document for the GUI: it loads sample scenes
-or scene files, saves them, and runs traces on a worker thread so a long
-Monte Carlo run never blocks the UI.
+The sequential ``OptilandConnector`` and its undo snapshots work on one
+``Optic``. The GUI's *document* is a
+:class:`~optiland.nonsequential.system.MultiAxisSystem`: a non-sequential
+scene plus the named sequential optical paths it is built from. Exactly
+one of those paths can be *active*: its design is loaded into the
+connector, so the lens data editor, the 2D layout and every sequential
+analysis work on it, and edits flow back into the system.
+
+:class:`NSQService` owns that document: it starts one from a plain
+sequential design (a ``.json`` opened in the GUI becomes path 1), loads
+and saves ``.olsys`` files, tracks whether the document has unsaved
+changes, and runs Monte Carlo traces on a worker thread so a long run never
+blocks the UI.
 
 Author: Optiland contributors, 2026
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from optiland_gui.services.file_service import SpecialFloatEncoder
 from optiland_gui.worker import _Worker
 
 if TYPE_CHECKING:
@@ -29,12 +37,44 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Extension of the document file.
+DOCUMENT_EXTENSION = ".olsys"
+#: Name shown for a document that was never saved and has no source file.
+UNTITLED_DOCUMENT = "Untitled" + DOCUMENT_EXTENSION
+#: Optic names that do not deserve to name a path.
+_PLACEHOLDER_OPTIC_NAMES = {"", "new untitled system", "default system", "optic"}
+
+
+def _fingerprint(data: dict[str, Any]) -> str:
+    """A comparable rendering of a design dict (arrays and NaN included)."""
+    return json.dumps(data, sort_keys=True, cls=SpecialFloatEncoder)
+
+
+def default_path_name(optic_name: str | None, source_path: str | None) -> str:
+    """The name a new single path gets.
+
+    The stem of the file the design came from wins; otherwise the optic's
+    own name, unless it is a placeholder; otherwise ``"Path 1"``.
+    """
+    if source_path:
+        stem = os.path.splitext(os.path.basename(str(source_path)))[0].strip()
+        if stem:
+            return stem
+    name = (optic_name or "").strip()
+    if name.lower() not in _PLACEHOLDER_OPTIC_NAMES:
+        return name
+    return "Path 1"
+
 
 class NSQService(QObject):
-    """Owns the current non-sequential scene and its latest trace result.
+    """Owns the current system document and its latest trace result.
 
     Signals:
-        sceneChanged: The scene was replaced (sample built, file loaded).
+        sceneChanged: The scene was replaced or rebuilt (sample built, file
+            loaded or saved, path edited).
+        pathsChanged: The list of path names changed.
+        activePathChanged (object): Another path (or ``None``) became the
+            one loaded into the sequential tools.
         traceStarted: A background trace began.
         traceFinished (object): A trace completed; carries the
             :class:`~optiland.nonsequential.tracer.SimulationResult`.
@@ -54,6 +94,8 @@ class NSQService(QObject):
         self._scene: NSQScene | None = None
         self._scene_path: str | None = None
         self._scene_label: str = ""
+        self._suggested_stem: str | None = None
+        self._dirty = False
         self._result: SimulationResult | None = None
         self._active_path: str | None = None
         self._activating = False
@@ -76,13 +118,40 @@ class NSQService(QObject):
 
     @property
     def scene_path(self) -> str | None:
-        """File the current scene was loaded from or saved to, if any."""
+        """File the document was loaded from or saved to (``.olsys``), if any."""
         return self._scene_path
 
     @property
     def scene_label(self) -> str:
         """Human-readable label of the current scene."""
         return self._scene_label
+
+    @property
+    def document_name(self) -> str:
+        """File name the document has, or would get when saved.
+
+        The saved file's name; else the stem of the design file the
+        document was started from plus ``.olsys``; else ``Untitled.olsys``.
+        """
+        if self._scene_path:
+            return os.path.basename(self._scene_path)
+        if self._suggested_stem:
+            return self._suggested_stem + DOCUMENT_EXTENSION
+        return UNTITLED_DOCUMENT
+
+    @property
+    def is_dirty(self) -> bool:
+        """Whether the system changed since it was loaded or saved.
+
+        Edits of the active path are tracked by the connector, not here;
+        this flag covers what only the system knows: renamed paths, a path
+        filled from a file, a rebuilt scene.
+        """
+        return self._dirty
+
+    def mark_clean(self) -> None:
+        """Forget system-level changes (after saving elsewhere)."""
+        self._dirty = False
 
     @property
     def is_tracing(self) -> bool:
@@ -135,11 +204,60 @@ class NSQService(QObject):
         self._scene = system.scene
         self._scene_label = label
         self._scene_path = path
+        self._suggested_stem = None
+        self._dirty = False
         self._result = None
         self._active_path = None
         self.pathsChanged.emit()
         self.activePathChanged.emit(None)
         self.sceneChanged.emit()
+
+    def adopt_optic(
+        self,
+        optic: Optic | dict[str, Any],
+        name: str,
+        *,
+        source: str | None = None,
+    ) -> str | None:
+        """Start a new document: a single path holding ``optic``, active.
+
+        The connector already holds this design (it was just created,
+        opened or imported there), so it is not loaded again.
+
+        Args:
+            optic: The design, as an ``Optic`` or its state dict.
+            name: Name of the single path.
+            source: File the design came from (names the document until it
+                is saved); ``None`` for a new or sample design.
+
+        Returns:
+            ``None`` when the path was converted into the scene, else the
+            conversion error (the document still exists, with an empty
+            scene).
+        """
+        from optiland.nonsequential.system import MultiAxisSystem  # noqa: PLC0415
+
+        system = MultiAxisSystem.from_optic(optic, name, rebuild=False)
+        error: str | None = None
+        try:
+            system.rebuild()
+        except Exception as exc:  # noqa: BLE001 -- the document must still open
+            logger.warning("Path %r not converted for the System view: %s", name, exc)
+            error = str(exc)
+        self._system = system
+        self._scene = system.scene
+        self._scene_label = name
+        self._scene_path = None
+        self._suggested_stem = (
+            os.path.splitext(os.path.basename(source))[0] if source else None
+        )
+        self._dirty = False
+        self._result = None
+        self._active_path = name
+        self.pathsChanged.emit()
+        self.activePathChanged.emit(name)
+        self.sceneChanged.emit()
+        return error
 
     # ------------------------------------------------------------------
     # Optical paths
@@ -173,10 +291,14 @@ class NSQService(QObject):
                 self._active_path = None
                 self.activePathChanged.emit(None)
             return
-        optic = self.path(name).build_optic()
+        path = self.path(name)
+        optic = path.build_optic()
         self._activating = True
         try:
             connector.load_optic_from_object(optic)
+            restore = getattr(connector, "restore_gui_state", None)
+            if restore is not None:
+                restore(path.optic)
             # The loaded design is a copy of the saved path: nothing to save
             # yet, so closing the window must not ask about it.
             mark_clean = getattr(connector, "mark_current_state_clean", None)
@@ -194,32 +316,65 @@ class NSQService(QObject):
         self._system.rename_path(old, new)
         if self._active_path == old:
             self._active_path = new.strip()
+        self._dirty = True
         self.pathsChanged.emit()
         self.activePathChanged.emit(self._active_path)
 
-    def sync_active_path(self, optic: Optic) -> None:
-        """Take the edited sequential design of the active path and rebuild.
+    def sync_active_path(self, optic: Optic | dict[str, Any]) -> None:
+        """Store the edited design of the active path and rebuild the scene.
+
+        The edited design is kept in the path even when the scene cannot be
+        rebuilt from it, so saving never loses an edit; the previous scene
+        stays on screen in that case.
 
         Args:
-            optic: The connector's current optic.
+            optic: The connector's current optic, or its state dict.
 
         Raises:
-            RuntimeError: If no path is active or the system cannot be
-                rebuilt (no fold settings).
-            Exception: Whatever the fold raises for an inconsistent edit;
-                the previous scene is kept in that case.
+            RuntimeError: If no path is active.
+            Exception: Whatever the rebuild raises for an inconsistent
+                edit.
         """
         if self._system is None or self._active_path is None:
             raise RuntimeError("No active optical path.")
-        previous = self._system.path(self._active_path).optic
-        self._system.set_path_optic(self._active_path, optic)
+        data = optic if isinstance(optic, dict) else optic.to_dict()
+        path = self._system.path(self._active_path)
+        if _fingerprint(data) == _fingerprint(path.optic):
+            # A refresh signal without an edit (panels re-emitting
+            # opticChanged at start-up): nothing changed, nothing to rebuild.
+            return
+        self._system.set_path_optic(self._active_path, data)
+        self._dirty = True
+        self._system.rebuild()
+        self._scene = self._system.scene
+        self._result = None
+        self.sceneChanged.emit()
+
+    def fill_path(self, name: str, optic: Optic | dict[str, Any], connector) -> None:
+        """Replace the design of path ``name`` from a file and activate it.
+
+        Args:
+            name: Path to fill.
+            optic: The new design (``Optic`` or state dict).
+            connector: The GUI connector the path is activated in.
+
+        Raises:
+            Exception: If the system cannot be rebuilt with the new design;
+                the path then keeps its previous design.
+        """
+        if self._system is None:
+            raise RuntimeError("No system loaded.")
+        previous = self.path(name).optic
+        self._system.set_path_optic(name, optic)
         try:
             self._system.rebuild()
         except Exception:
-            self._system.set_path_optic(self._active_path, previous)
+            self._system.set_path_optic(name, previous)
             raise
         self._scene = self._system.scene
         self._result = None
+        self._dirty = True
+        self.activate_path(name, connector)
         self.sceneChanged.emit()
 
     def paths_for_component(self, component_name: str) -> list[str]:
@@ -241,32 +396,41 @@ class NSQService(QObject):
 
         self.set_scene(build_sample_scene(key), SAMPLE_SCENES[key])
 
-    def load_file(self, path: str) -> None:
+    def load_file(self, path: str, connector=None) -> None:
         """Load a multi-axis system (``.olsys``) or a plain scene file.
 
         Args:
             path: Path to a file written by ``MultiAxisSystem.to_json`` or
                 ``NSQScene.to_json``.
+            connector: When given, the first path (if any) is activated in
+                it, so the sequential tools show that design right away.
         """
         from optiland.nonsequential.system import MultiAxisSystem  # noqa: PLC0415
 
         system = MultiAxisSystem.from_json(path)
         self.set_system(system, os.path.basename(path), path)
+        if connector is not None and system.paths:
+            self.activate_path(system.paths[0].name, connector)
 
-    def save_file(self, path: str) -> None:
-        """Write the current scene to an NSQ JSON file.
+    def save_file(
+        self, path: str, *, application: tuple[str, str] | None = None
+    ) -> None:
+        """Write the document (scene, paths and fold settings) to ``path``.
 
         Args:
             path: Destination path.
+            application: ``(name, version)`` recorded in the file as the
+                program that saved it.
 
         Raises:
-            RuntimeError: If no scene is loaded.
+            RuntimeError: If no system is loaded.
         """
         if self._system is None:
-            raise RuntimeError("No non-sequential scene to save.")
-        self._system.to_json(path)
+            raise RuntimeError("No system to save.")
+        self._system.to_json(path, application=application)
         self._scene_path = path
         self._scene_label = os.path.basename(path)
+        self._dirty = False
         self.sceneChanged.emit()
 
     def set_sampling(self, split_depth: int) -> None:

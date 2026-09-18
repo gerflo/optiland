@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import json
 import logging
 import os
 from collections import defaultdict
@@ -57,7 +58,7 @@ from PySide6.QtWidgets import (
 import optiland.samples
 from optiland.optic import Optic
 
-from . import gui_plot_utils
+from . import __version__, gui_plot_utils
 from .action_manager import ActionManager
 from .config import (
     APPLICATION_NAME,
@@ -69,7 +70,12 @@ from .config import (
 from .optiland_connector import OptilandConnector
 from .panel_manager import PanelManager
 from .services.catalog_service import EDMUND_ZEMAX_PAGE_URL, THORLABS_ZEMAX_PAGE_URL
-from .services.file_service import is_nsq_scene_file
+from .services.file_service import (
+    SpecialFloatEncoder,
+    is_nsq_scene_file,
+    json_inf_nan_hook,
+    with_scene_extension,
+)
 from .theme_manager import (
     DEFAULT_THEME_ID,
     THEMES,
@@ -85,6 +91,7 @@ from .widgets.command_palette import (
 )
 from .widgets.custom_title_bar import CustomTitleBar
 from .widgets.frameless_window import FramelessWindow
+from .widgets.path_choice_dialog import PathChoiceDialog
 from .widgets.sidebar import (
     SIDEBAR_MAX_WIDTH,
     SIDEBAR_MIN_WIDTH,
@@ -323,6 +330,14 @@ class MainWindow(FramelessWindow):
         self.connector.modifiedStateChanged.connect(
             self._update_project_name_in_title_bar
         )
+        # The document is the multi-axis system: its name and dirty state
+        # belong in the title bar as much as the connector's.
+        system_service = self.panel_manager.nsq_panel.service
+        system_service.sceneChanged.connect(self._update_project_name_in_title_bar)
+        system_service.pathsChanged.connect(self._update_project_name_in_title_bar)
+        system_service.activePathChanged.connect(
+            lambda _name: self._update_project_name_in_title_bar()
+        )
 
         # Toast manager — must be created after the window exists
         self.toast_manager = ToastManager(self)
@@ -461,7 +476,12 @@ class MainWindow(FramelessWindow):
         )
         export_menu = file_menu.addMenu("&Export")
         export_menu.addActions(
-            am.get_actions("export_zemax", "export_zemax_2003", "export_codev")
+            am.get_actions(
+                "export_optiland_json",
+                "export_zemax",
+                "export_zemax_2003",
+                "export_codev",
+            )
         )
         file_menu.addSeparator()
         file_menu.addAction(am.get_action("exit"))
@@ -575,15 +595,26 @@ class MainWindow(FramelessWindow):
         self._open_system_from_path(filepath)
 
     def _open_system_from_path(self, filepath: str) -> None:
-        """Load a system file and update related UI state.
+        """Open a file as the document, or into one of its optical paths.
 
-        A non-sequential scene file (``NSQScene.to_json``) is routed to the
-        System view instead of the optical-system loader; the
-        current optical system stays as it is.
+        A multi-axis system (``.olsys``) replaces the document; its first
+        path is activated. A sequential design (``.json``, ``.zmx``)
+        becomes path 1 of a new document -- unless the document already has
+        several paths: then a ``.json`` fills one of them (the first by
+        default, chosen in a dialog) and the system is built again.
         """
         if is_nsq_scene_file(filepath):
             self._open_nsq_scene_from_path(filepath)
             return
+        service = self.panel_manager.nsq_panel.service
+        names = list(service.path_names)
+        if len(names) >= 2 and filepath.lower().endswith(".json"):
+            target, new_document = self._choose_open_target(filepath, names)
+            if target is not None:
+                self._open_optic_into_path(filepath, target)
+                return
+            if not new_document:
+                return
         if not self._maybe_save_changes_before_destructive_action(
             f"opening '{os.path.basename(filepath)}'"
         ):
@@ -594,12 +625,62 @@ class MainWindow(FramelessWindow):
         self._update_project_name_in_title_bar()
         logger.debug("Open System action triggered: %s", filepath)
 
+    def _choose_open_target(
+        self, filepath: str, names: list[str]
+    ) -> tuple[str | None, bool]:
+        """Ask which path a design file fills.
+
+        Returns:
+            ``(path name, False)`` to fill that path, ``(None, True)`` to
+            start a new document from the file, ``(None, False)`` when
+            cancelled. The first path is preselected.
+        """
+        service = self.panel_manager.nsq_panel.service
+        return PathChoiceDialog.choose(
+            self,
+            names,
+            names[0],
+            title="Open into optical path",
+            prompt=(
+                f"'{os.path.basename(filepath)}' is a sequential design. Fill "
+                f"which optical path of '{service.document_name}' with it? The "
+                "other paths are kept and the system is built again."
+            ),
+            accept_text="Fill path",
+            extra_text="New system",
+        )
+
+    def _open_optic_into_path(self, filepath: str, target: str) -> None:
+        """Replace the design of path ``target`` with the file and activate it."""
+        service = self.panel_manager.nsq_panel.service
+        try:
+            with open(filepath, encoding="utf-8") as f:
+                data = json.load(f, object_hook=json_inf_nan_hook)
+            data, _fixes_applied = self._handle_design_validation(data, filepath)
+            service.fill_path(target, data, self.connector)
+        except Exception as exc:  # noqa: BLE001 -- report, keep the GUI alive
+            self.toast_manager.notify(
+                f"Load failed: {exc}", "error", sub_message=filepath
+            )
+            return
+        self._remember_dialog_path("Paths/LastOpenDir", filepath)
+        self._remember_recent_file(filepath)
+        self.toast_manager.notify(
+            f"Opened {os.path.basename(filepath)} into path '{target}'", "info"
+        )
+        self._update_project_name_in_title_bar()
+        logger.debug("Opened %s into path %r", filepath, target)
+
     def _open_nsq_scene_from_path(self, filepath: str) -> None:
-        """Load a multi-axis system (``.olsys``) into the System view."""
+        """Load a multi-axis system (``.olsys``) as the document."""
+        if not self._maybe_save_changes_before_destructive_action(
+            f"opening '{os.path.basename(filepath)}'"
+        ):
+            return
         self._remember_dialog_path("Paths/LastOpenDir", filepath)
         self._remember_recent_file(filepath)
         try:
-            self.panel_manager.nsq_panel.service.load_file(filepath)
+            self.panel_manager.nsq_panel.service.load_file(filepath, self.connector)
         except Exception as exc:  # noqa: BLE001 -- report, keep the GUI alive
             self.toast_manager.notify(
                 f"Load failed: {exc}", "error", sub_message=filepath
@@ -610,6 +691,7 @@ class MainWindow(FramelessWindow):
             f"Opened multi-axis system — {os.path.basename(filepath)}",
             "info",
         )
+        self._update_project_name_in_title_bar()
         logger.debug("Open non-sequential scene: %s", filepath)
 
     def _populate_quick_actions_toolbar(self, toolbar: QToolBar):
@@ -819,16 +901,28 @@ class MainWindow(FramelessWindow):
             if action:
                 action.setChecked(theme.theme_id == self.current_theme_id)
 
+    def _document_has_unsaved_changes(self) -> bool:
+        """Whether saving now would write something not yet on disk.
+
+        The active path's edits are tracked by the connector; renamed or
+        filled paths and rebuilt scenes by the system service.
+        """
+        if self.connector.has_unsaved_changes():
+            return True
+        manager = getattr(self, "panel_manager", None)
+        service = getattr(getattr(manager, "nsq_panel", None), "service", None)
+        return service is not None and service.is_dirty is True
+
     def _update_project_name_in_title_bar(self) -> None:
         """Update the project name in the custom title bar and native window title."""
-        display_name = "UnnamedProject.json"
-        current_file = self.connector.get_current_filepath()
-        is_modified = self.connector.has_unsaved_changes()
+        display_name = "Untitled.olsys"
+        manager = getattr(self, "panel_manager", None)
+        service = getattr(getattr(manager, "nsq_panel", None), "service", None)
+        document_name = getattr(service, "document_name", None)
+        if isinstance(document_name, str) and document_name:
+            display_name = document_name
 
-        if current_file:
-            display_name = os.path.basename(current_file)
-
-        if is_modified:
+        if self._document_has_unsaved_changes():
             display_name += "*"
 
         if hasattr(self, "custom_title_bar_widget") and self.custom_title_bar_widget:
@@ -1105,44 +1199,68 @@ class MainWindow(FramelessWindow):
 
     @Slot()
     def save_system_action(self) -> None:
-        """Slot for the *Save System* action — saves to the current file path."""
-        current_path = self.connector.get_current_filepath()
-        if current_path:
-            self.connector.save_optic_to_file(current_path)
-            self._remember_dialog_path("Paths/LastSaveDir", current_path)
-            self._update_project_name_in_title_bar()
+        """Save the document -- every optical path and the system -- as ``.olsys``.
+
+        Saves to the file the document came from, or asks for one.
+        """
+        current_path = self.panel_manager.nsq_panel.service.scene_path
+        if isinstance(current_path, str) and current_path:
+            self._save_document(current_path)
             logger.debug("Save System action triggered: %s", current_path)
         else:
             self.save_system_as_action()
 
     @Slot()
     def save_system_as_action(self) -> None:
-        """Slot for *Save System As* — prompts for a file path."""
-        filepath, selected_filter = QFileDialog.getSaveFileName(
+        """Ask for a ``.olsys`` file and save the whole document there."""
+        service = self.panel_manager.nsq_panel.service
+        start_dir = self._get_dialog_start_dir("Paths/LastSaveDir", "Paths/LastOpenDir")
+        suggested = os.path.join(start_dir, service.document_name)
+        filepath, _selected_filter = QFileDialog.getSaveFileName(
             self,
             "Save Optiland System As...",
-            self._get_dialog_start_dir("Paths/LastSaveDir", "Paths/LastOpenDir"),
-            "Optiland JSON Files (*.json);;All Files (*)",
+            suggested,
+            "Optiland Systems (*.olsys);;All Files (*)",
         )
         if filepath:
-            if (
-                not filepath.lower().endswith(".json")
-                and "(*.json)" in selected_filter.split(";;")[0]
-            ):
-                filepath += ".json"
-            self.connector.save_optic_to_file(filepath)
-            self._remember_dialog_path("Paths/LastSaveDir", filepath)
-            self._update_project_name_in_title_bar()
+            self._save_document(with_scene_extension(filepath))
             logger.debug("Save System As action triggered: %s", filepath)
 
+    def _save_document(self, filepath: str) -> bool:
+        """Write the document to ``filepath`` (``.olsys``).
+
+        Pending edits of the active path are committed to its path first,
+        so the file holds every design as it is in the editors.
+
+        Returns:
+            ``True`` when the file was written.
+        """
+        panel = self.panel_manager.nsq_panel
+        service = panel.service
+        try:
+            # Let panels (e.g. System Properties) commit pending edits first.
+            self.connector.aboutToSave.emit()
+            panel.flush_pending_rebuild()
+            service.save_file(filepath, application=("Optiland GUI", __version__))
+        except Exception as exc:  # noqa: BLE001 -- report, keep the GUI alive
+            self.toast_manager.notify(
+                f"Save failed: {exc}", "error", sub_message=filepath
+            )
+            return False
+        if service.active_path is not None:
+            # The active path is in the file now; only later edits count.
+            self.connector.mark_current_state_clean()
+        self._remember_dialog_path("Paths/LastSaveDir", filepath)
+        self._remember_recent_file(filepath)
+        self._update_project_name_in_title_bar()
+        self.toast_manager.notify(f"Saved — {os.path.basename(filepath)}", "success")
+        return True
+
     def _maybe_save_changes_before_destructive_action(self, action_label: str) -> bool:
-        """Offer Save/Discard/Cancel before replacing or closing the current system."""
-        if not self.connector.has_unsaved_changes():
+        """Offer Save/Discard/Cancel before replacing or closing the document."""
+        if not self._document_has_unsaved_changes():
             return True
-        current_path = self.connector.get_current_filepath()
-        display_name = (
-            os.path.basename(current_path) if current_path else "Untitled system"
-        )
+        display_name = self.panel_manager.nsq_panel.service.document_name
         reply = QMessageBox.warning(
             self,
             "Unsaved Changes",
@@ -1154,7 +1272,7 @@ class MainWindow(FramelessWindow):
         )
         if reply == QMessageBox.StandardButton.Save:
             self.save_system_action()
-            return not self.connector.has_unsaved_changes()
+            return not self._document_has_unsaved_changes()
         return reply == QMessageBox.StandardButton.Discard
 
     @Slot()
@@ -1380,6 +1498,76 @@ class MainWindow(FramelessWindow):
         """Show a file dialog and export the current system for ZEMAX 2003."""
         self._export_zemax("Export to ZEMAX 2003", "zemax2003")
 
+    @Slot()
+    def export_optiland_json_action(self) -> None:
+        """Export one optical path as a sequential Optiland JSON file.
+
+        A dialog offers the paths of the document (the active one
+        preselected); a document without paths exports the connector's
+        design.
+        """
+        service = self.panel_manager.nsq_panel.service
+        names = list(service.path_names)
+        name: str | None = None
+        if names:
+            active = service.active_path
+            default = active if active in names else names[0]
+            name, _extra = PathChoiceDialog.choose(
+                self,
+                names,
+                default,
+                title="Export Optiland JSON",
+                prompt="Export which optical path as a sequential Optiland JSON file?",
+                accept_text="Export...",
+            )
+            if name is None:
+                return
+        stem = name or os.path.splitext(service.document_name)[0]
+        start_dir = self._get_dialog_start_dir("Paths/LastSaveDir", "Paths/LastOpenDir")
+        filepath, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Optiland JSON",
+            os.path.join(start_dir, f"{stem}.json"),
+            "Optiland JSON Files (*.json);;All Files (*)",
+        )
+        if not filepath:
+            return
+        if not filepath.lower().endswith(".json"):
+            filepath += ".json"
+        self._export_path_json(name, filepath)
+
+    def _export_path_json(self, name: str | None, filepath: str) -> bool:
+        """Write path ``name`` (``None``: the connector's design) as Optiland JSON.
+
+        The file has the format File -> Save used for sequential designs
+        before multi-axis documents, so it opens in any Optiland.
+
+        Returns:
+            ``True`` when the file was written.
+        """
+        panel = self.panel_manager.nsq_panel
+        service = panel.service
+        try:
+            self.connector.aboutToSave.emit()
+            panel.flush_pending_rebuild()
+            if name is None or name == service.active_path:
+                data = self.connector.capture_optic_state()
+            else:
+                data = service.path(name).optic
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4, cls=SpecialFloatEncoder)
+        except Exception as exc:  # noqa: BLE001 -- report, keep the GUI alive
+            self.toast_manager.notify(
+                f"Export failed: {exc}", "error", sub_message=filepath
+            )
+            return False
+        self._remember_dialog_path("Paths/LastSaveDir", filepath)
+        what = f"path '{name}'" if name else "design"
+        self.toast_manager.notify(
+            f"Exported {what} — {os.path.basename(filepath)}", "success"
+        )
+        return True
+
     def _export_zemax(self, title: str, dialect: str) -> None:
         filepath, _ = QFileDialog.getSaveFileName(
             self,
@@ -1417,7 +1605,7 @@ class MainWindow(FramelessWindow):
             about_text = QLabel(
                 "<p><b>Optiland GUI</b></p>"
                 "<p>A modern interface for the Optiland optical simulation package.</p>"
-                "<p>Version: 0.2.1 (Frameless Layout Refined)</p>"
+                f"<p>Version: {__version__}</p>"
                 "<p>Built with PySide6.</p>"
                 "<hr>"
                 "<p><b>Icon Copyright Notice:</b></p>"

@@ -129,6 +129,10 @@ class TestService:
         assert service.scene.component_names == names_before
         message, severity = connector.toast_manager.notify.call_args.args[:2]
         assert severity == "error" and "not rebuilt" in message
+        # The edit itself is kept, so saving never loses it.
+        surfaces = service.system.path("Camera path").optic["surface_group"]
+        assert len(surfaces["surfaces"]) == 6
+        assert service.is_dirty
 
     def test_rename_keeps_the_active_path(self, qapp, monkeypatch, tmp_path):
         panel, connector, service = _loaded_panel(monkeypatch, tmp_path)

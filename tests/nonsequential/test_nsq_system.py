@@ -17,10 +17,12 @@ import optiland.backend as be
 from optiland.nonsequential import NSQScene
 from optiland.nonsequential.fold import CAMERA, MIRROR, SAMPLE
 from optiland.nonsequential.system import (
+    OLSYS_FORMAT_VERSION,
     FoldSettings,
     MultiAxisSystem,
     OpticalPath,
     fold_system,
+    optiland_version,
 )
 from tests.nonsequential.test_nsq_fold_paths import (
     _FOLD_ILLUMINATION,
@@ -126,9 +128,9 @@ class TestPathsEditing:
         assert report.tail_differences == []
         assert system.last_report is report
 
-    def test_rebuild_without_fold_settings_raises(self):
+    def test_rebuild_without_paths_raises(self):
         plain = MultiAxisSystem(NSQScene())
-        with pytest.raises(RuntimeError, match="not folded"):
+        with pytest.raises(RuntimeError, match="no optical paths"):
             plain.rebuild()
         assert plain.path_names == []
         assert plain.paths_for_component("x") == []
@@ -185,3 +187,121 @@ class TestSerialization:
         fold = FoldSettings("a", "b", 1, 1, lossless="shiny")
         with pytest.raises(ValueError, match="lossless"):
             fold.fold_kwargs()
+
+
+class TestUnfoldedSystems:
+    def test_from_optic_converts_a_single_path_in_place(self):
+        system = MultiAxisSystem.from_optic(imaging_optic(), "Camera")
+        assert system.fold is None and system.path_names == ["Camera"]
+        path = system.path("Camera")
+        assert path.role == ""
+        assert {"S1", "S1.rim"} <= set(path.components)
+        assert path.sources == ["field_0", "field_1"]  # object-height fields
+        assert path.detectors == ["image"]
+        assert set(path.sources) == set(system.scene.source_names)
+        assert system.scene.detector_names == ["image"]
+        assert system.paths_for_component("S1") == ["Camera"]
+        report = system.last_report
+        assert not report.is_fold
+        assert "unfolded system: 1 path(s)" in report.summary()
+        assert list(report.arms) == ["Camera"]
+
+    def test_angle_fields_become_collimated_beams_that_reach_the_image(self):
+        from optiland.samples.objectives import CookeTriplet
+
+        system = MultiAxisSystem.from_optic(CookeTriplet().to_dict(), "Cooke")
+        assert system.path("Cooke").sources == ["field_0", "field_1", "field_2"]
+        result = system.scene.trace(num_rays=3000, max_depth=24, seed=1)
+        assert result.total_flux_in == pytest.approx(3.0)
+        assert result.detectors["image"].total_flux_float > 1.5
+
+    def test_the_path_name_defaults_to_the_optic_name(self):
+        optic = imaging_optic()
+        optic.name = "Beobachtung"
+        assert MultiAxisSystem.from_optic(optic, rebuild=False).path_names == [
+            "Beobachtung"
+        ]
+        optic.name = ""
+        assert MultiAxisSystem.from_optic(optic, rebuild=False).path_names == ["Path 1"]
+
+    def test_several_unfolded_paths_get_prefixes(self):
+        system = MultiAxisSystem(
+            NSQScene(),
+            [
+                OpticalPath("A", imaging_optic().to_dict()),
+                OpticalPath("B", illumination_optic().to_dict()),
+            ],
+        )
+        report = system.rebuild()
+        assert "A.S1" in system.path("A").components
+        # Surface 1 of the illumination design is air-to-air: only its rim.
+        assert {"B.S2", "B.S1.rim"} <= set(system.path("B").components)
+        assert system.path("A").sources == ["A.field_0", "A.field_1"]
+        assert system.path("B").detectors == ["B.image"]
+        assert system.paths_for_component("B.image") == ["B"]
+        assert set(report.arms) == {"A", "B"}
+
+    def test_rebuild_without_paths_is_refused(self):
+        with pytest.raises(RuntimeError, match="no optical paths"):
+            MultiAxisSystem(NSQScene()).rebuild()
+
+    def test_a_failed_conversion_leaves_the_scene_alone(self):
+        from optiland.nonsequential.convert import ConversionError
+        from optiland.samples.objectives import CookeTriplet
+
+        system = MultiAxisSystem.from_optic(imaging_optic(), "A")
+        names = system.scene.component_names
+        members = list(system.path("A").components)
+        bad = CookeTriplet()
+        bad.set_field_type(field_type="object_height")  # but object at infinity
+        system.set_path_optic("A", bad)
+        with pytest.raises(ConversionError, match="infinity"):
+            system.rebuild()
+        assert system.scene.component_names == names
+        assert system.path("A").components == members
+
+
+class TestFileVersions:
+    def test_the_file_records_format_and_application_versions(self, tmp_path):
+        system, _ = _system()
+        path = tmp_path / "v.olsys"
+        system.to_json(path, application=("Optiland GUI", "0.3.0"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert list(data)[:3] == [
+            "olsys_format_version",
+            "application",
+            "optiland_version",
+        ]
+        assert data["olsys_format_version"] == OLSYS_FORMAT_VERSION == 1
+        assert data["application"] == {"name": "Optiland GUI", "version": "0.3.0"}
+        assert data["optiland_version"] == optiland_version()
+        back = MultiAxisSystem.from_json(path)
+        assert back.application == {"name": "Optiland GUI", "version": "0.3.0"}
+        assert back.path_names == system.path_names
+        assert system.application is None  # never read from a file
+
+    def test_the_library_is_the_default_application(self):
+        data = _system()[0].to_dict()
+        assert data["application"] == {
+            "name": "optiland",
+            "version": optiland_version(),
+        }
+
+    def test_files_from_before_the_version_keys_still_load(self):
+        data = _system()[0].to_dict()
+        for key in ("olsys_format_version", "application", "optiland_version"):
+            del data[key]
+        back = MultiAxisSystem.from_dict(data)
+        assert back.application is None
+        assert back.path_names == ["Camera path", "Ring illumination"]
+
+    def test_a_newer_format_version_is_refused(self):
+        data = _system()[0].to_dict()
+        data["olsys_format_version"] = OLSYS_FORMAT_VERSION + 1
+        data["application"] = {"name": "Optiland GUI", "version": "9.0.0"}
+        with pytest.raises(ValueError, match=r"written by Optiland GUI 9.0.0"):
+            MultiAxisSystem.from_dict(data)
+        for bad in ("1", 0, True, 1.0):
+            data["olsys_format_version"] = bad
+            with pytest.raises(ValueError, match="olsys_format_version"):
+                MultiAxisSystem.from_dict(data)

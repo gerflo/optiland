@@ -42,10 +42,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import gui_plot_utils
+from optiland.optic import Optic
+
+from . import __version__, gui_plot_utils
 from .analysis_panel import CustomMatplotlibToolbar
 from .services.file_service import with_scene_extension
-from .services.nsq_service import NSQService
+from .services.nsq_service import NSQService, default_path_name
 from .widgets.plot_navigation import PlotNavigation
 from .worker import BusyOverlay
 
@@ -100,11 +102,22 @@ class NSQPanel(QWidget):
         optic_changed = getattr(self.connector, "opticChanged", None)
         if optic_changed is not None:
             optic_changed.connect(self._on_optic_changed)
-        if self.service.scene is None:
-            self.service.load_sample(self.scene_combo.currentData())
-        else:
+        # Undo and redo restore a design with opticLoaded only; the path
+        # must follow them as it follows an edit.
+        optic_loaded = getattr(self.connector, "opticLoaded", None)
+        if optic_loaded is not None:
+            optic_loaded.connect(self._on_optic_changed)
+        new_document = getattr(self.connector, "newDocument", None)
+        if new_document is not None:
+            new_document.connect(self._on_new_document)
+        if self.service.scene is not None:
             self._on_paths_changed()
             self._on_scene_changed()
+        elif not self.adopt_connector_optic():
+            # No sequential design to start from (a bare connector): show the
+            # first sample scene rather than nothing. (With a placeholder
+            # text the combo starts without a current item.)
+            self.service.load_sample(self.scene_combo.itemData(0))
 
     # ------------------------------------------------------------------
     # UI construction
@@ -122,6 +135,7 @@ class NSQPanel(QWidget):
         scene_row.addWidget(QLabel("System:"))
         self.scene_combo = QComboBox()
         self.scene_combo.setObjectName("NSQSceneCombo")
+        self.scene_combo.setPlaceholderText("Sample scenes...")
         for key, label in SAMPLE_SCENES.items():
             self.scene_combo.addItem(label, key)
         self.scene_combo.activated.connect(self._on_sample_selected)
@@ -228,7 +242,10 @@ class NSQPanel(QWidget):
         layout_tab = QWidget()
         layout_box = QVBoxLayout(layout_tab)
         layout_box.setContentsMargins(0, 0, 0, 0)
-        self.layout_figure = Figure(figsize=(8, 5))
+        # Constrained layout is recomputed on every draw, so the title and
+        # tick labels stay inside the figure after the dock is resized
+        # (tight_layout would fix the margins at the first draw's size).
+        self.layout_figure = Figure(figsize=(8, 5), layout="constrained")
         self.layout_canvas = FigureCanvas(self.layout_figure)
         self.layout_toolbar = CustomMatplotlibToolbar(self.layout_canvas, layout_tab)
         self.layout_toolbar.on_view_limits_changed = self._on_toolbar_view_changed
@@ -295,8 +312,28 @@ class NSQPanel(QWidget):
         if key:
             self.service.load_sample(key)
 
+    def _main_window_action(self, name: str):
+        """The main window's slot ``name``, if this panel lives in one.
+
+        A floating dock is its own top-level window, so the parent chain is
+        walked instead of asking ``self.window()``.
+        """
+        widget = self.parent()
+        while widget is not None:
+            action = getattr(widget, name, None)
+            if callable(action):
+                return action
+            widget = widget.parent()
+        return None
+
     @Slot()
     def _on_open_clicked(self) -> None:
+        # Inside the main window, go through its File -> Open path so the
+        # unsaved-changes prompt and the recent-files list apply.
+        opener = self._main_window_action("open_system_action")
+        if opener is not None:
+            opener()
+            return
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Open multi-axis system",
@@ -306,12 +343,16 @@ class NSQPanel(QWidget):
         if not path:
             return
         try:
-            self.service.load_file(path)
+            self.service.load_file(path, self.connector)
         except Exception as exc:  # noqa: BLE001 -- surfaced to the user
             self._notify(f"Could not load system: {exc}", "error")
 
     @Slot()
     def _on_save_clicked(self) -> None:
+        saver = self._main_window_action("save_system_as_action")
+        if saver is not None:
+            saver()
+            return
         path, _ = QFileDialog.getSaveFileName(
             self,
             "Save multi-axis system",
@@ -320,10 +361,53 @@ class NSQPanel(QWidget):
         )
         if not path:
             return
+        self.flush_pending_rebuild()
         try:
-            self.service.save_file(with_scene_extension(path))
+            self.service.save_file(
+                with_scene_extension(path), application=("Optiland GUI", __version__)
+            )
         except Exception as exc:  # noqa: BLE001 -- surfaced to the user
             self._notify(f"Could not save system: {exc}", "error")
+
+    # -- documents ---------------------------------------------------------
+
+    @Slot()
+    def _on_new_document(self) -> None:
+        """The connector got a new design: it becomes path 1 of a new system."""
+        if self.service.is_activating:
+            return
+        self._rebuild_timer.stop()
+        self.adopt_connector_optic()
+
+    def adopt_connector_optic(self) -> bool:
+        """Start a new document from the connector's current design.
+
+        Returns:
+            ``False`` when the connector holds no ``Optic`` (a stand-in in
+            tests); the document is then left alone.
+        """
+        optic = self.connector.get_optic()
+        if not isinstance(optic, Optic):
+            return False
+        source = self.connector.get_current_filepath()
+        if not isinstance(source, str):
+            source = None
+        name = default_path_name(getattr(optic, "name", ""), source)
+        error = self.service.adopt_optic(self._active_optic_data(), name, source=source)
+        if error:
+            self._notify(
+                f"Path '{name}' is not shown in the System view: {error}", "warning"
+            )
+        return True
+
+    def _active_optic_data(self):
+        """The connector's design as stored in a path (with GUI state)."""
+        capture = getattr(self.connector, "capture_optic_state", None)
+        if callable(capture):
+            data = capture()
+            if isinstance(data, dict):
+                return data
+        return self.connector.get_optic()
 
     # -- optical paths ---------------------------------------------------
 
@@ -399,15 +483,20 @@ class NSQPanel(QWidget):
         if self.service.active_path is None:
             return
         try:
-            self.service.sync_active_path(self.connector.get_optic())
+            self.service.sync_active_path(self._active_optic_data())
         except Exception as exc:  # noqa: BLE001 -- surfaced to the user
             logger.exception("Rebuilding the system from the active path failed")
             self._notify(f"System not rebuilt: {exc}", "error")
 
     def flush_pending_rebuild(self) -> None:
-        """Run a pending debounced rebuild now (tests, scripts)."""
-        if self._rebuild_timer.isActive():
-            self._rebuild_timer.stop()
+        """Commit the active path's design to the system now.
+
+        Called before saving and exporting (and by tests): the debounce
+        timer is cancelled and the design is synced; an unchanged design
+        is a no-op, so this is cheap.
+        """
+        self._rebuild_timer.stop()
+        if self.service.active_path is not None and not self.service.is_activating:
             self._rebuild_from_active_path()
 
     def _on_layout_pick(self, event) -> None:
@@ -454,6 +543,13 @@ class NSQPanel(QWidget):
     @Slot()
     def _on_scene_changed(self) -> None:
         self.scene_label.setText(self.service.scene_label)
+        # The pull-down lists the samples; a document that is not one of
+        # them shows the placeholder instead of a stale sample name.
+        self.scene_combo.blockSignals(True)
+        self.scene_combo.setCurrentIndex(
+            self.scene_combo.findText(self.service.scene_label)
+        )
+        self.scene_combo.blockSignals(False)
         key = (self.service.scene_label, self.service.scene_path)
         # A different system starts with the full view; a rebuilt or
         # re-traced one keeps the user's zoom.
@@ -538,7 +634,6 @@ class NSQPanel(QWidget):
         # limits instead so the plot keeps the whole canvas.
         ax.set_aspect("equal", adjustable="datalim")
         gui_plot_utils.apply_theme_to_existing_figure(self.layout_figure)
-        self.layout_figure.tight_layout()
         if preserve_view and self.navigation.user_changed_view:
             self.navigation.restore_view(ax)
         self.layout_canvas.draw_idle()

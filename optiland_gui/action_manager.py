@@ -134,6 +134,11 @@ class ActionManager:
             triggered=self.main_window.import_thorlabs_catalog_action,
         )
         self._create_action(
+            "export_optiland_json",
+            "To &Optiland JSON (.json)...",
+            triggered=self.main_window.export_optiland_json_action,
+        )
+        self._create_action(
             "export_zemax",
             "To &Zemax (.zmx)...",
             triggered=self.main_window.export_zemax_action,

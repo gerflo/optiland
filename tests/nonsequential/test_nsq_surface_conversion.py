@@ -287,3 +287,48 @@ class TestObjectAndImage:
         detector = scene.detector_registry.get("camera")
         translation, _ = _get_transform(detector.cs)
         assert translation[2] == pytest.approx(float(optic.image_surface.geometry.cs.z))
+
+
+class TestCollimatedFieldSources:
+    def test_beams_have_the_pupil_diameter_and_pass_through_its_centre(self):
+        from optiland.nonsequential.surface_conversion import (
+            add_collimated_field_sources,
+            entrance_pupil,
+        )
+        from optiland.samples.objectives import CookeTriplet
+
+        optic = CookeTriplet()  # angle fields 0, 14 and 20 deg, object at infinity
+        scene = NSQScene()
+        names = add_collimated_field_sources(scene, optic, total_flux=2.0)
+        assert names == ["field_0", "field_1", "field_2"]
+        z_pupil, epd = entrance_pupil(optic)
+        for name, field in zip(names, optic.fields.fields, strict=True):
+            source = scene.source_registry.get(name)
+            translation, rot = _get_transform(source.cs)
+            axis = rot @ np.array([0.0, 0.0, 1.0])
+            assert axis[1] / axis[2] == pytest.approx(
+                math.tan(math.radians(float(field.y))), abs=1e-9
+            )
+            distance = (z_pupil - translation[2]) / axis[2]
+            hit = translation + distance * axis
+            assert hit[:2] == pytest.approx((0.0, 0.0), abs=1e-9)
+            assert translation[2] < 0.0  # starts before the first surface
+            assert _f(source.aperture_radius) == pytest.approx(abs(epd) / 2.0)
+            assert _f(source.total_flux) == pytest.approx(2.0)
+
+    def test_add_field_sources_dispatches_on_the_field_type(self):
+        from optiland.nonsequential.surface_conversion import (
+            add_collimated_field_sources,
+            add_field_sources,
+        )
+        from optiland.samples.objectives import CookeTriplet
+
+        eye = _eye_and_lens_optic()
+        assert add_field_sources(NSQScene(), eye) == ["field_0", "field_1"]
+        assert add_field_sources(NSQScene(), CookeTriplet(), prefix="beam") == [
+            "beam_0",
+            "beam_1",
+            "beam_2",
+        ]
+        with pytest.raises(ConversionError, match="angle fields"):
+            add_collimated_field_sources(NSQScene(), eye)

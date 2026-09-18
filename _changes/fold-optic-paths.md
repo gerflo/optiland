@@ -15,6 +15,12 @@ Branch: `feat/fold-optic-paths` (stacked on `feat/beam-splitter-paths`)
 - GUI: the Non-Sequential panel is now the **System view** (sidebar "System"); a *Path* pull-down and clicks on drawn elements activate an optical path in the Lens Data Editor, 2D layout and analyses; edits there rebuild the system (debounced); paths can be renamed; the layout has wheel zoom, drag pan, *Fit* and view memory (`optiland_gui/widgets/plot_navigation.py`)
 - `.olsys` is the file extension of a multi-axis (non-sequential) system: the panel's Open/Save dialogs, `tools/merge_optic_paths.py` and *File → Open* use it (`.json` scene files still load)
 - GUI: *File → Open* (and the recent-files list) recognises a multi-axis system file and routes it to the System view; the optical-system loader refuses such a file with a hint instead of resetting the workspace; the panel's default max depth is 48
+- GUI: the multi-axis system is the document. *File → Save / Save As* write every path and the scene to `.olsys` (title bar and unsaved-changes prompt follow the system); *File → Export → To Optiland JSON* writes one path chosen in a dialog (`optiland_gui/widgets/path_choice_dialog.py`) as a sequential design file; a sequential `.json` opened via *File → Open* becomes path 1 of a new system, or -- when the document has several paths -- fills one of them (first preselected) and rebuilds; opening a `.olsys` activates its first path; a new/sample/imported design starts a fresh single-path document (`OptilandConnector.newDocument`)
+- `MultiAxisSystem` without fold settings converts each path in place (`from_optic`, `add_field_sources`: aimed point sources for object-height fields, collimated beams through the entrance pupil for angle fields); `FoldReport.unfolded()`
+- `.olsys` files carry `olsys_format_version` (`OLSYS_FORMAT_VERSION = 1`), `application` (`{name, version}` of the saving program) and `optiland_version`; readers refuse newer format versions. Rule: raise the format version only when older Optiland apps can no longer read the file, and raise the GUI version with it
+- Optiland GUI version 0.3.0 (`optiland_gui.__version__`, About dialog)
+- `tools/gui_screenshot.py` dismisses any modal dialog (and prints its title) so an unattended run never blocks, re-docks a floating target dock and no longer persists the window layout at close
+- System view: the layout figure uses constrained layout (the title stayed clipped after the dock got shorter); the sample pull-down shows a placeholder for documents that are not samples
 
 ## What it does for the user
 
@@ -29,3 +35,5 @@ Branch: `feat/fold-optic-paths` (stacked on `feat/beam-splitter-paths`)
 - `tests/nonsequential/test_nsq_surface_conversion.py` -- aimed frames, every surface kind, shared media, lossless policy, rims, ranges/frames, strict IR, sources, detector
 - `tests/nonsequential/test_nsq_fold_paths.py` -- tail comparison, mirror/arm placement, hole shapes, tail from either file, arm separation, JSON round trip
 - `tests/nonsequential/test_nsq_serialization_media_geometries.py`, `test_nsq_convert_aspheres.py`, updated `test_nsq_scene_ir.py`
+- `tests/nonsequential/test_nsq_system.py` -- unfolded single/multi-path conversion, version keys, newer-format refusal; `test_nsq_surface_conversion.py` -- collimated field beams through the pupil
+- `tests/gui/test_system_document.py` -- start-up document, `.json` as path 1, fill a path of a folded system (default first), new system, save with versions, pending edits flushed, export of a chosen path, path-choice dialog

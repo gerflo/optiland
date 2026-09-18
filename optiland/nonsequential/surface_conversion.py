@@ -588,6 +588,147 @@ def add_field_point_sources(
     return names
 
 
+def add_collimated_field_sources(
+    scene: NSQScene,
+    optic: Optic,
+    *,
+    frame: CoordinateSystem | None = None,
+    prefix: str = "field",
+    total_flux: float = 1.0,
+    standoff: float | None = None,
+) -> list[str]:
+    """Add one collimated beam per angle field, aimed through the entrance pupil.
+
+    Each beam has the diameter of the paraxial entrance pupil and travels
+    along the field's chief-ray direction (slopes ``tan`` of the field
+    angles, as in the paraxial model). It starts ``standoff`` mm before the
+    first surface, or before the pupil when that lies further in front, on
+    the line through the pupil centre; the rim baffles downstream decide
+    what gets through.
+
+    Args:
+        scene: Target scene.
+        optic: The sequential optic (angle fields, object at infinity).
+        frame: Frame of the optic's coordinates.
+        prefix: Registry names are ``f"{prefix}_{k}"`` with ``k`` the field
+            index.
+        total_flux: Flux per source [W].
+        standoff: Distance from the beam start plane to the first surface
+            [mm]; defaults to the larger of the pupil diameter and 10 mm.
+
+    Returns:
+        The registry names of the sources, in field order.
+
+    Raises:
+        ConversionError: If the fields are not angles, the optic has no
+            surface after the object, or the pupil diameter is zero.
+    """
+    from optiland.fields.field_types import AngleField  # noqa: PLC0415
+    from optiland.nonsequential.sources.configs import (  # noqa: PLC0415
+        CollimatedSourceConfig,
+    )
+
+    if not isinstance(optic.fields.field_definition, AngleField):
+        raise ConversionError(
+            "Collimated sources need angle fields; this optic uses "
+            f"{type(optic.fields.field_definition).__name__}."
+        )
+    surfaces = optic.surfaces.surfaces
+    if len(surfaces) < 2:
+        raise ConversionError("The optic has no surface after the object.")
+    spectrum = _build_spectrum(optic)
+    z_pupil, epd = entrance_pupil(optic)
+    radius = abs(epd) / 2.0
+    if not radius > 0.0:
+        raise ConversionError("The entrance pupil diameter is zero.")
+    z_first = _scalar(surfaces[1].geometry.cs.position_in_gcs[2])
+    if standoff is None:
+        standoff = max(abs(epd), 10.0)
+    z_start = min(z_first, z_pupil) - standoff
+    names = []
+    for k, f in enumerate(optic.fields.fields):
+        direction = np.array(
+            [
+                math.tan(math.radians(float(f.x))),
+                math.tan(math.radians(float(f.y))),
+                1.0,
+            ]
+        )
+        # The beam axis passes through the pupil centre; walk back from
+        # there to the start plane.
+        distance = (z_pupil - z_start) / direction[2]
+        position = tuple((-distance * direction + [0.0, 0.0, z_pupil]).tolist())
+        cs = aim_coordinate_system(position, (0.0, 0.0, z_pupil), frame)
+        name = f"{prefix}_{k}"
+        scene.add_source(
+            name,
+            cs,
+            CollimatedSourceConfig(
+                spectrum=spectrum,
+                total_flux=total_flux,
+                aperture_radius=radius,
+            ),
+        )
+        names.append(name)
+    return names
+
+
+def add_field_sources(
+    scene: NSQScene,
+    optic: Optic,
+    *,
+    frame: CoordinateSystem | None = None,
+    prefix: str = "field",
+    total_flux: float = 1.0,
+    half_angle_deg: float | None = None,
+) -> list[str]:
+    """Add one source per field, whatever the field type.
+
+    Object-height fields become aimed point sources
+    (:func:`add_field_point_sources`); angle fields become collimated beams
+    through the entrance pupil (:func:`add_collimated_field_sources`).
+
+    Args:
+        scene: Target scene.
+        optic: The sequential optic.
+        frame: Frame of the optic's coordinates.
+        prefix: Registry-name prefix (``f"{prefix}_{k}"``).
+        total_flux: Flux per source [W].
+        half_angle_deg: Fixed cone half angle for point sources (``None`` =
+            from the entrance pupil); ignored for collimated beams.
+
+    Returns:
+        The registry names of the sources, in field order.
+
+    Raises:
+        ConversionError: For field types that have no source model
+            (image-height fields).
+    """
+    from optiland.fields.field_types import (  # noqa: PLC0415
+        AngleField,
+        ObjectHeightField,
+    )
+
+    definition = optic.fields.field_definition
+    if isinstance(definition, ObjectHeightField):
+        return add_field_point_sources(
+            scene,
+            optic,
+            frame=frame,
+            prefix=prefix,
+            total_flux=total_flux,
+            half_angle_deg=half_angle_deg,
+        )
+    if isinstance(definition, AngleField):
+        return add_collimated_field_sources(
+            scene, optic, frame=frame, prefix=prefix, total_flux=total_flux
+        )
+    raise ConversionError(
+        f"Fields of type {type(definition).__name__} have no source model; "
+        "use angle or object-height fields."
+    )
+
+
 def image_detector_config(
     optic: Optic,
     *,

@@ -15,14 +15,23 @@ right. :class:`MultiAxisSystem` keeps both views together:
 
 The file format (``.olsys``) is the scene JSON of
 :func:`~optiland.nonsequential.serialization.scene_to_dict` plus the
-top-level keys ``"paths"`` and ``"fold"``; ``NSQScene.from_json`` ignores
-the extra keys, so a system file is also a plain scene file.
+top-level keys ``"paths"`` and ``"fold"``, and three version keys:
+``"olsys_format_version"`` (see :data:`OLSYS_FORMAT_VERSION`),
+``"application"`` (name and version of the program that last saved the
+file) and ``"optiland_version"`` (the library). ``NSQScene.from_json``
+ignores the extra keys, so a system file is also a plain scene file.
+
+A system without fold settings is converted path by path instead: every
+path becomes its own unfolded copy in the scene (surfaces with rim
+baffles, one source per field, an image detector). That is what a plain
+sequential design opened in the GUI turns into.
 
 Kramer Harrison, 2026
 """
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -37,7 +46,12 @@ from optiland.nonsequential.fold import (
     fold_paths,
 )
 from optiland.nonsequential.serialization import scene_from_dict, scene_to_dict
-from optiland.nonsequential.surface_conversion import glass_surfaces_lossless
+from optiland.nonsequential.surface_conversion import (
+    add_field_sources,
+    add_image_detector,
+    add_optic_surfaces,
+    glass_surfaces_lossless,
+)
 
 if TYPE_CHECKING:
     import os
@@ -45,12 +59,32 @@ if TYPE_CHECKING:
     from optiland.nonsequential.scene import NSQScene
     from optiland.optic import Optic
 
+#: Version of the ``.olsys`` file format written by :meth:`MultiAxisSystem.to_dict`.
+#:
+#: Rule: increment it as soon as a file written by this code can no longer
+#: be opened by an older Optiland application, and release that change
+#: under a new Optiland (GUI) version. Additions that older readers ignore
+#: (new optional keys) keep the number. Readers refuse files with a higher
+#: number than they know.
+OLSYS_FORMAT_VERSION = 1
+
+#: Name used in the ``"application"`` key when no application is given.
+LIBRARY_APPLICATION = "optiland"
+
 #: Lossless-coating policies by name (what the CLI and the file store).
 LOSSLESS_POLICIES: dict[str, object] = {
     "glass": glass_surfaces_lossless,
     "all": True,
     "none": False,
 }
+
+
+def optiland_version() -> str:
+    """The installed optiland library version (``"unknown"`` outside a package)."""
+    try:
+        return importlib.metadata.version("optiland")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 @dataclass
@@ -149,6 +183,11 @@ class MultiAxisSystem:
         scene: The non-sequential scene.
         paths: The optical paths (may be empty for a hand-built scene).
         fold: Fold parameters when the scene was folded from two paths.
+
+    Attributes:
+        application: ``{"name": ..., "version": ...}`` of the program that
+            last saved the file this system was read from (``None`` for a
+            system that was never saved).
     """
 
     def __init__(
@@ -161,9 +200,42 @@ class MultiAxisSystem:
         self.paths: list[OpticalPath] = list(paths or [])
         self.fold = fold
         self.last_report: FoldReport | None = None
+        self.application: dict[str, str] | None = None
         names = [p.name for p in self.paths]
         if len(set(names)) != len(names):
             raise ValueError(f"Path names must be unique, got {names}.")
+
+    @classmethod
+    def from_optic(
+        cls,
+        optic: Optic | dict[str, Any],
+        name: str | None = None,
+        *,
+        rebuild: bool = True,
+    ) -> MultiAxisSystem:
+        """A system with a single, unfolded path holding ``optic``.
+
+        Args:
+            optic: The sequential design (an ``Optic`` or its ``to_dict()``
+                data).
+            name: Path name; defaults to the optic's name or ``"Path 1"``.
+            rebuild: Convert the path into the scene right away.
+
+        Returns:
+            The new system (its scene is empty when ``rebuild`` is false).
+        """
+        from optiland.nonsequential.scene import NSQScene  # noqa: PLC0415
+
+        if isinstance(optic, dict):
+            data = optic
+            fallback = str(data.get("name") or "").strip() or "Path 1"
+        else:
+            data = optic.to_dict()
+            fallback = _default_name(optic, "Path 1")
+        system = cls(NSQScene(), [OpticalPath(name=name or fallback, optic=data)])
+        if rebuild:
+            system.rebuild()
+        return system
 
     # -- paths -------------------------------------------------------------
 
@@ -226,18 +298,25 @@ class MultiAxisSystem:
     # -- rebuild -------------------------------------------------------------
 
     def rebuild(self) -> FoldReport:
-        """Fold the scene again from the current path optics.
+        """Build the scene again from the current path optics.
+
+        With fold settings the two paths are folded
+        (:func:`~optiland.nonsequential.fold.fold_paths`); without, every
+        path is converted in place, each in its own frame: surfaces with
+        rim baffles, one source per field and an image detector. A single
+        path keeps plain registry names (``S1``, ``field_0``, ``image``);
+        several unfolded paths get ``"<path name>."`` as prefix.
 
         Returns:
-            The fold report of the rebuilt scene.
+            The report of the rebuilt scene.
 
         Raises:
-            RuntimeError: If the system has no fold settings.
+            RuntimeError: If the system has no paths.
+            ConversionError: If a path cannot be converted (the scene is
+                then left as it was).
         """
         if self.fold is None:
-            raise RuntimeError(
-                "This system was not folded from paths; nothing to rebuild."
-            )
+            return self._rebuild_unfolded()
         imaging = self.path(self.fold.imaging).build_optic()
         illumination = self.path(self.fold.illumination).build_optic()
         scene, report = fold_paths(
@@ -253,34 +332,124 @@ class MultiAxisSystem:
         self.last_report = report
         return report
 
+    def _rebuild_unfolded(self) -> FoldReport:
+        if not self.paths:
+            raise RuntimeError("This system has no optical paths; nothing to rebuild.")
+        from optiland.nonsequential.scene import NSQScene  # noqa: PLC0415
+
+        scene = NSQScene()
+        report = FoldReport.unfolded()
+        single = len(self.paths) == 1
+        members: list[tuple[OpticalPath, list[str], list[str], list[str]]] = []
+        for p in self.paths:
+            prefix = "" if single else f"{p.name}."
+            optic = p.build_optic()
+            arm = add_optic_surfaces(
+                scene, optic, prefix=prefix, lossless=glass_surfaces_lossless
+            )
+            sources = add_field_sources(scene, optic, prefix=f"{prefix}field")
+            detector = f"{prefix}image"
+            add_image_detector(scene, optic, detector)
+            report.arms[p.name] = arm
+            report.sources.extend(sources)
+            report.detectors.append(detector)
+            members.append((p, arm.components + arm.baffles, sources, [detector]))
+        # Only a complete conversion replaces the scene and the memberships.
+        for p, components, sources, detectors in members:
+            p.components = components
+            p.sources = sources
+            p.detectors = detectors
+            p.role = ""
+        self.scene = scene
+        self.last_report = report
+        return report
+
     # -- serialization ---------------------------------------------------------
 
-    def to_dict(self) -> dict[str, Any]:
-        """Scene JSON data plus ``"paths"`` and ``"fold"``."""
-        data = scene_to_dict(self.scene)
+    def to_dict(self, *, application: tuple[str, str] | None = None) -> dict[str, Any]:
+        """Scene JSON data plus versions, ``"paths"`` and ``"fold"``.
+
+        Args:
+            application: ``(name, version)`` of the program saving the file;
+                defaults to the optiland library and its version.
+        """
+        name, version = application or (LIBRARY_APPLICATION, optiland_version())
+        data: dict[str, Any] = {
+            "olsys_format_version": OLSYS_FORMAT_VERSION,
+            "application": {"name": str(name), "version": str(version)},
+            "optiland_version": optiland_version(),
+        }
+        data.update(scene_to_dict(self.scene))
         data["paths"] = [asdict(p) for p in self.paths]
         data["fold"] = None if self.fold is None else _fold_to_dict(self.fold)
         return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MultiAxisSystem:
-        """Inverse of :meth:`to_dict`; a plain scene dict gives no paths."""
+        """Inverse of :meth:`to_dict`; a plain scene dict gives no paths.
+
+        Raises:
+            ValueError: If the file's ``"olsys_format_version"`` is newer
+                than :data:`OLSYS_FORMAT_VERSION` (or not a positive
+                integer). Files from before the key existed count as
+                version 1.
+        """
+        _check_format_version(data)
         scene = scene_from_dict(data)
         paths = [OpticalPath(**p) for p in data.get("paths", []) or []]
         fold_d = data.get("fold")
         fold = _fold_from_dict(fold_d) if fold_d else None
-        return cls(scene, paths, fold)
+        system = cls(scene, paths, fold)
+        application = data.get("application")
+        if isinstance(application, dict):
+            system.application = {
+                "name": str(application.get("name", "")),
+                "version": str(application.get("version", "")),
+            }
+        return system
 
-    def to_json(self, path: str | os.PathLike) -> None:
-        """Write the system file (``.olsys``)."""
+    def to_json(
+        self,
+        path: str | os.PathLike,
+        *,
+        application: tuple[str, str] | None = None,
+    ) -> None:
+        """Write the system file (``.olsys``).
+
+        Args:
+            path: Destination.
+            application: ``(name, version)`` of the saving program (see
+                :meth:`to_dict`).
+        """
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(self.to_dict(), f, indent=2)
+            json.dump(self.to_dict(application=application), f, indent=2)
 
     @classmethod
     def from_json(cls, path: str | os.PathLike) -> MultiAxisSystem:
         """Read a system file, or a plain scene file (then without paths)."""
         with open(path, encoding="utf-8") as f:
             return cls.from_dict(json.load(f))
+
+
+def _check_format_version(data: dict[str, Any]) -> None:
+    version = data.get("olsys_format_version", 1)
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise ValueError(
+            f"Invalid olsys_format_version {version!r}; expected a positive integer."
+        )
+    if version > OLSYS_FORMAT_VERSION:
+        application = data.get("application") or {}
+        written_by = ""
+        if isinstance(application, dict) and application.get("name"):
+            label = " ".join(
+                str(application.get(key, "")) for key in ("name", "version")
+            ).strip()
+            written_by = f" (written by {label})"
+        raise ValueError(
+            f"This file uses .olsys format version {version}{written_by}; this "
+            f"Optiland reads versions up to {OLSYS_FORMAT_VERSION}. Update "
+            "Optiland to open it."
+        )
 
 
 def _fold_to_dict(fold: FoldSettings) -> dict[str, Any]:

@@ -264,12 +264,33 @@ and detectors it traverses) and the ``FoldSettings`` that produced it.
 ``fold_system()`` builds one from two optics; ``rebuild()`` folds again
 after ``set_path_optic()``; ``rename_path()`` keeps the fold settings
 consistent; ``paths_for_component()`` answers a click on a drawn element.
+A system *without* fold settings is converted path by path instead
+(``MultiAxisSystem.from_optic()`` wraps a single sequential design):
+surfaces with rim baffles, one source per field -- aimed point sources for
+object-height fields, collimated beams through the entrance pupil for
+angle fields (``add_field_sources``) -- and an image detector.
+
 The ``.olsys`` file is the scene JSON plus the top-level ``"paths"`` and
-``"fold"`` keys, so ``NSQScene.from_json`` still reads it as a plain scene.
-The GUI's System view (``optiland_gui.nsq_panel``) activates a path by
-handing its optic to the connector and folds the system again on every
-``opticChanged`` (debounced), so the lens data editor and the sequential
-analyses edit the path in place.
+``"fold"`` keys, so ``NSQScene.from_json`` still reads it as a plain scene,
+and three version keys: ``"olsys_format_version"``
+(:data:`~optiland.nonsequential.system.OLSYS_FORMAT_VERSION`),
+``"application"`` (``{"name", "version"}`` of the program that last saved
+the file; the GUI writes ``optiland_gui.__version__``) and
+``"optiland_version"`` (the library). The format version is raised only
+when an older Optiland application can no longer open the new files, and
+such a change ships under a new GUI version; readers refuse files with a
+higher format version than they know. Additive keys keep the number.
+
+In the GUI the multi-axis system *is* the document (``optiland_gui.
+services.nsq_service.NSQService``): a sequential ``.json`` opened through
+*File → Open* becomes path 1 of a new system (or, when the document
+already has several paths, fills one of them -- the first by default),
+*File → Save* writes every path and the scene to ``.olsys``, and
+*File → Export → Optiland JSON* writes one chosen path as a sequential
+design file. The System view (``optiland_gui.nsq_panel``) activates a
+path by handing its optic to the connector and rebuilds the system on
+every ``opticChanged`` (debounced), so the lens data editor and the
+sequential analyses edit the path in place.
 
 .. _nsq_rng:
 

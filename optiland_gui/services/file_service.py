@@ -194,6 +194,7 @@ class FileService:
         self._current_filepath = None
         self._connector.mark_current_state_clean()
         self._connector.opticLoaded.emit()
+        self._connector.newDocument.emit()
         self._connector.opticChanged.emit()
 
     def load(self, filepath: str) -> None:
@@ -246,6 +247,7 @@ class FileService:
             else:
                 self._connector.mark_current_state_clean()
             self._connector.opticLoaded.emit()
+            self._connector.newDocument.emit()
             self._toast(f"Opened \u2014 {os.path.basename(filepath)}", "info")
         except Exception as e:
             self._toast(f"Load failed: {e}", "error", sub=filepath)
@@ -310,6 +312,7 @@ class FileService:
             self._connector._initialize_optic_structure(self._connector._optic)
             self._connector.mark_current_state_requires_save_as()
             self._connector.opticLoaded.emit()
+            self._connector.newDocument.emit()
             self._connector.opticChanged.emit()
         except Exception as e:
             self._toast(f"Failed to load system from sample object: {e}", "error")
@@ -334,6 +337,7 @@ class FileService:
             )
             self._connector.mark_current_state_requires_save_as()
             self._connector.opticLoaded.emit()
+            self._connector.newDocument.emit()
             self._connector.opticChanged.emit()
         except Exception as e:
             self._toast(f"Failed to import Zemax file from {filepath}: {e}", "error")
@@ -357,6 +361,7 @@ class FileService:
             )
             self._connector.mark_current_state_requires_save_as()
             self._connector.opticLoaded.emit()
+            self._connector.newDocument.emit()
             self._connector.opticChanged.emit()
         except Exception as e:
             self._toast(f"Failed to import CODE V file from {filepath}: {e}", "error")

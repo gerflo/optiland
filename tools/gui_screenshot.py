@@ -106,6 +106,34 @@ def _grab(widget, path: Path) -> None:
     print(f"wrote {path}")
 
 
+def _install_dialog_watchdog(app, window) -> None:
+    """Reject any modal dialog that pops up, and say which one it was.
+
+    Nobody is at the keyboard: a design-validation prompt, a path-choice
+    dialog or a save prompt would block the run forever. Rejecting is the
+    "Cancel" a user would press; the printed title tells what appeared.
+    """
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    def _dismiss() -> None:
+        modal = app.activeModalWidget()
+        if modal is None or modal is window:
+            return
+        title = modal.windowTitle() or type(modal).__name__
+        print(f"dismissed dialog: {title}")
+        if isinstance(modal, QMessageBox | QDialog):
+            modal.reject()
+        else:
+            modal.close()
+
+    timer = QTimer(window)
+    timer.setInterval(250)
+    timer.timeout.connect(_dismiss)
+    timer.start()
+    window._screenshot_dialog_watchdog = timer
+
+
 def _raise_dock(app, window, dock, settle_ms: int) -> None:
     """Bring *dock* to the front again.
 
@@ -114,6 +142,10 @@ def _raise_dock(app, window, dock, settle_ms: int) -> None:
     """
     if dock is None:
         return
+    if dock.isFloating():
+        # A floating dock is its own window and never part of a grab of
+        # the main window; put it back for the picture.
+        dock.setFloating(False)
     window.focus_dock_widget(dock)
     _settle(app, settle_ms)
 
@@ -133,6 +165,13 @@ def main() -> int:
     width, height = (int(v) for v in args.size.lower().split("x"))
     window.resize(width, height)
     window.show()
+    # Loading a design must not stop at the correction dialog either.
+    window.connector.design_validation_handler = None
+    _install_dialog_watchdog(app, window)
+    # An unattended run must not overwrite the user's window placement and
+    # dock layout when it closes.
+    window._save_window_placement = lambda: None
+    window._save_current_layout_state = lambda: None
     _settle(app, args.settle_ms)
 
     if args.theme:
@@ -192,6 +231,7 @@ def main() -> int:
 
     # Never block on the "save changes?" prompt: nothing here is worth saving.
     window.connector.mark_current_state_clean()
+    nsq_panel.service.mark_clean()
     window.close()
     return 0
 

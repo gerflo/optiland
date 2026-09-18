@@ -173,7 +173,6 @@ class TestNSQPanel:
         panel.rays_spin.setValue(500)
         panel.run_trace_sync()
         panel.layout_figure.set_size_inches(12, 5)
-        panel.layout_figure.tight_layout()
         panel.layout_canvas.draw()
 
         ax = panel.layout_figure.axes[0]
@@ -182,6 +181,23 @@ class TestNSQPanel:
         assert box.width == pytest.approx(full.width, rel=0.02)
         assert box.height == pytest.approx(full.height, rel=0.02)
         assert ax.get_aspect() == 1.0
+
+    def test_title_stays_inside_after_the_canvas_shrinks(self, panel):
+        """A dock made shorter after the first draw must not clip the title."""
+        panel.layout_figure.set_size_inches(8, 6)
+        panel.layout_canvas.draw()
+        panel.layout_figure.set_size_inches(8, 2.2)
+        panel.layout_canvas.draw()
+
+        ax = panel.layout_figure.axes[0]
+        assert ax.get_title()
+        renderer = panel.layout_canvas.get_renderer()
+        title_top = ax.title.get_window_extent(renderer).y1
+        assert title_top <= panel.layout_figure.bbox.height + 0.5
+        tick_bottom = min(
+            label.get_window_extent(renderer).y0 for label in ax.get_xticklabels()
+        )
+        assert tick_bottom >= -0.5
 
     def test_projection_change_redraws_the_layout(self, panel):
         before = panel.layout_figure.axes[0].get_xlabel()

@@ -60,6 +60,10 @@ class OptilandConnector(QObject):
     # Signals
     # ------------------------------------------------------------------
     opticLoaded = Signal()
+    #: The optic was replaced by a *new document* (new system, opened or
+    #: imported file, sample) -- as opposed to an edit, an undo step or a
+    #: path activation. The System view starts a new single-path system.
+    newDocument = Signal()
     opticChanged = Signal()
     #: Emitted synchronously right before the optic state is serialized for
     #: saving, so panels can commit pending (not yet applied) edits.
@@ -416,6 +420,17 @@ class OptilandConnector(QObject):
             self._ensure_valid_optic_structure(optic_instance)
             self.prune_disabled_state()
         optic_instance.updater.update()
+
+    def capture_optic_state(self) -> dict:
+        """Serialise the current optic plus GUI-only state.
+
+        This is what a saved Optiland JSON file contains and what an
+        optical path of a multi-axis system stores.
+
+        Returns:
+            ``Optic.to_dict()`` data with a ``"gui"`` key.
+        """
+        return self._capture_optic_state()
 
     def _capture_optic_state(self) -> dict:
         """Serialise the current optic state for undo/redo.
