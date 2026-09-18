@@ -129,7 +129,9 @@ class NSQPanel(QWidget):
         self.rays_spin = _spin("Rays:", 100, 20_000_000, 20_000, "NSQRaysSpin")
         self.rays_spin.setSingleStep(1000)
         self.seed_spin = _spin("Seed:", 0, 2_000_000_000, 7, "NSQSeedSpin")
-        self.depth_spin = _spin("Max depth:", 1, 256, 16, "NSQDepthSpin")
+        # 48 hits cover a folded system (a fundus camera's ring illumination
+        # meets ~18 surfaces before the retina, ~27 when it returns).
+        self.depth_spin = _spin("Max depth:", 1, 256, 48, "NSQDepthSpin")
         self.split_spin = _spin("Split depth:", 0, 8, 0, "NSQSplitSpin")
         self.split_spin.setToolTip(
             "0: one branch per hit, chosen by roulette.\n"
