@@ -88,7 +88,10 @@ class _MediumRegistry:
             glass_name = getattr(underlying, "name", None) or getattr(
                 underlying, "_name", None
             )
-            if glass_name is None:
+            ideal = _ideal_index(underlying)
+            if glass_name is None and ideal is not None:
+                key = ("ideal",) + ideal
+            elif glass_name is None:
                 if strict:
                     raise ValueError(
                         f"Cannot lower material {underlying!r} to the scene IR: "
@@ -116,6 +119,13 @@ class _MediumRegistry:
                     n_model={"kind": "opaque"},
                     k_model={"kind": "opaque"},
                 )
+            elif key[0] == "ideal":
+                medium = MediumIR(
+                    id=idx,
+                    name=f"ideal_n{key[1]:g}",
+                    n_model={"kind": "constant", "n": key[1]},
+                    k_model={"kind": "constant", "k": key[2]},
+                )
             else:
                 medium = MediumIR(
                     id=idx,
@@ -126,6 +136,32 @@ class _MediumRegistry:
             self.media.append(medium)
             self._index[key] = idx
         return self._index[key]
+
+
+def _ideal_index(material: object) -> tuple[float, float] | None:
+    """``(n, k)`` of an ``optiland.materials.IdealMaterial``, else ``None``.
+
+    Args:
+        material: The underlying optiland material of an ``NSQMaterial``.
+
+    Returns:
+        The constant index and extinction as floats, or ``None`` when the
+        material is not an ideal (constant-index) material.
+    """
+    from optiland.materials.ideal import IdealMaterial  # noqa: PLC0415
+
+    if not isinstance(material, IdealMaterial):
+        return None
+    n = float(np.ravel(np.asarray(_detached(material.index)))[0])
+    k = float(np.ravel(np.asarray(_detached(material.absorp)))[0])
+    return n, k
+
+
+def _detached(value: object) -> object:
+    """Plain NumPy view of a backend scalar/array (for bookkeeping only)."""
+    from optiland.backend.utils import to_numpy  # noqa: PLC0415
+
+    return to_numpy(value)
 
 
 def _lower_geometry(geometry: object) -> tuple[str, dict[str, Any]]:
@@ -144,6 +180,9 @@ def _lower_geometry(geometry: object) -> tuple[str, dict[str, Any]]:
     from optiland.nonsequential.components.geometry.analytic.annulus import (  # noqa: PLC0415
         AnnularPlaneGeometry,
     )
+    from optiland.nonsequential.components.geometry.analytic.asphere import (  # noqa: PLC0415
+        EvenAsphereGeometry,
+    )
     from optiland.nonsequential.components.geometry.analytic.conic import (  # noqa: PLC0415
         ConicGeometry,
     )
@@ -161,6 +200,14 @@ def _lower_geometry(geometry: object) -> tuple[str, dict[str, Any]]:
         MeshGeometry,
     )
 
+    # EvenAsphereGeometry subclasses ConicGeometry: test it first.
+    if isinstance(geometry, EvenAsphereGeometry):
+        return "even_asphere", {
+            "radius": geometry.radius,
+            "conic": geometry.conic,
+            "aperture_radius": geometry.aperture_radius,
+            "coefficients": list(geometry.coefficients),
+        }
     # ConicGeometry check also covers ParaboloidGeometry (a subclass that
     # only fixes conic=-1 at construction time).
     if isinstance(geometry, ConicGeometry):
@@ -181,6 +228,7 @@ def _lower_geometry(geometry: object) -> tuple[str, dict[str, Any]]:
     if isinstance(geometry, AnnularPlaneGeometry):
         return "annulus", {
             "inner_radius": geometry.inner_radius,
+            "inner_radius_y": geometry.inner_radius_y,
             "outer_radius": geometry.outer_radius,
             "z_offset": geometry.z_offset,
         }
@@ -356,7 +404,9 @@ def _lower_source(
             "width": source.width,
             "height": source.height,
             "aperture_radius": source.aperture_radius,
+            "inner_radius": source.inner_radius,
             "half_angle_deg": source.half_angle_deg,
+            "lambertian_cone": source.lambertian_cone,
         }
     else:
         raise TypeError(

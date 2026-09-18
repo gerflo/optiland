@@ -70,8 +70,10 @@ class LensRenderer2D(ComponentRenderer2D):
         back_y = np.linspace(-back_r, back_r, n_pts)
 
         # Sag values in local frame
-        front_z_local = _sag_array(cfg.r1, cfg.conic1, front_y)
-        back_z_local = _sag_array(cfg.r2, cfg.conic2, back_y) + cfg.thickness
+        front_z_local = _sag_array(cfg.r1, cfg.conic1, front_y, cfg.coefficients1)
+        back_z_local = (
+            _sag_array(cfg.r2, cfg.conic2, back_y, cfg.coefficients2) + cfg.thickness
+        )
 
         # Transform to global: apply rotation + translation (row-vector form)
         def local_to_global(
@@ -291,8 +293,10 @@ class LensRenderer3D(ComponentRenderer3D):
         r_front = np.linspace(0.0, front_r, n_pts)
         r_back = np.linspace(0.0, back_r, n_pts)
 
-        z_front = _sag_array(cfg.r1, cfg.conic1, r_front)
-        z_back = _sag_array(cfg.r2, cfg.conic2, r_back) + cfg.thickness
+        z_front = _sag_array(cfg.r1, cfg.conic1, r_front, cfg.coefficients1)
+        z_back = (
+            _sag_array(cfg.r2, cfg.conic2, r_back, cfg.coefficients2) + cfg.thickness
+        )
 
         # Build contour for revolution: r along +y axis, z along optical axis
         # Contour: front face + rim + back face (reversed) + axis segment
@@ -416,24 +420,30 @@ class DoubletRenderer3D(ComponentRenderer3D):
 # ---------------------------------------------------------------------------
 
 
-def _sag_array(radius: float, conic: float, r: np.ndarray) -> np.ndarray:
-    """Compute conic sag for an array of radial positions.
+def _sag_array(
+    radius: float, conic: float, r: np.ndarray, coefficients=()
+) -> np.ndarray:
+    """Compute conic (plus even-asphere) sag for an array of radial positions.
 
     Args:
         radius: Vertex radius of curvature [mm].
         conic: Conic constant.
         r: Radial positions [mm], shape (N,).
+        coefficients: Even-asphere coefficients (``[0]`` multiplies r^2).
 
     Returns:
         Sag values [mm], shape (N,).
     """
-    if radius == 0.0:
-        return np.zeros_like(r)
     r2 = r * r
+    poly = np.zeros_like(r2)
+    for i, ci in enumerate(coefficients or ()):
+        poly = poly + float(ci) * r2 ** (i + 1)
+    if radius == 0.0 or not np.isfinite(radius):
+        return poly
     R = radius
     K = conic
     under_root = np.maximum(1.0 - (1.0 + K) * r2 / (R * R), 0.0)
-    return r2 / (R * (1.0 + np.sqrt(under_root)))
+    return r2 / (R * (1.0 + np.sqrt(under_root))) + poly
 
 
 def _projection_indices(projection: str) -> tuple[int, int]:

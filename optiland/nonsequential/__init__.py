@@ -67,8 +67,8 @@ Public API (selected)::
         LensConfig, MirrorConfig, DoubletConfig, SurfaceConfig, InteractionType,
         Volume, NonWatertightVolumeError,
         # Geometry
-        ConicGeometry, FinitePlaneGeometry, MeshGeometry, SphereGeometry,
-        ParaboloidGeometry, PlaneGeometry,
+        ConicGeometry, EvenAsphereGeometry, FinitePlaneGeometry,
+        MeshGeometry, SphereGeometry, ParaboloidGeometry, PlaneGeometry,
         CylindricalFrustumGeometry, AnnularPlaneGeometry,
         # BSDF
         SpecularBRDF, LambertianBSDF, HarveyShackBSDF, TabulatedBSDF,
@@ -253,6 +253,7 @@ from optiland.nonsequential.components import (
 # Geometry
 from optiland.nonsequential.components.geometry import (
     ConicGeometry,
+    EvenAsphereGeometry,
     FinitePlaneGeometry,
     MeshGeometry,
     ParaboloidGeometry,
@@ -360,6 +361,7 @@ __all__ = [
     "AnnularPlaneGeometry",
     "ConicGeometry",
     "CylindricalFrustumGeometry",
+    "EvenAsphereGeometry",
     "FinitePlaneGeometry",
     "MeshGeometry",
     "ParaboloidGeometry",

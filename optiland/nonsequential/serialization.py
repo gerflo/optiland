@@ -186,6 +186,8 @@ def _serialize_material(mat: str | NSQMaterial | None) -> Any:
     - ``None`` or vacuum NSQMaterial -> ``null``
     - string catalog name -> that string
     - NSQMaterial with optiland_material -> ``{"type": "catalog", "name": ...}``
+    - NSQMaterial over an ``IdealMaterial`` ->
+      ``{"type": "ideal", "index": n, "absorp": k}``
 
     Args:
         mat: Material to serialize; may be a catalog name string, an
@@ -217,6 +219,10 @@ def _serialize_material(mat: str | NSQMaterial | None) -> Any:
         glass_name = getattr(underlying, "name", None) or getattr(
             underlying, "_name", None
         )
+        ideal = _ideal_index(underlying)
+        if glass_name is None and ideal is not None:
+            n, k = ideal
+            return {"type": "ideal", "index": n, "absorp": k}
         if glass_name is None:
             raise ValueError(
                 f"Cannot serialize NSQMaterial: the underlying material "
@@ -228,7 +234,7 @@ def _serialize_material(mat: str | NSQMaterial | None) -> Any:
     raise TypeError(f"Unrecognised material type: {type(mat).__name__}")
 
 
-def _deserialize_material(d: Any) -> str | None:
+def _deserialize_material(d: Any) -> Any:
     """Reconstruct a material from a serialized value.
 
     Args:
@@ -236,7 +242,8 @@ def _deserialize_material(d: Any) -> str | None:
 
     Returns:
         String catalog name (which ``add_lens`` etc. resolve at build time),
-        or ``None`` for vacuum.
+        an ``NSQMaterial`` over an ``IdealMaterial`` for a constant-index
+        medium, or ``None`` for vacuum.
     """
     if d is None:
         return None
@@ -244,7 +251,27 @@ def _deserialize_material(d: Any) -> str | None:
         return d
     if isinstance(d, dict) and d.get("type") == "catalog":
         return d["name"]  # scene builder resolves via NSQMaterial.from_glass
+    if isinstance(d, dict) and d.get("type") == "ideal":
+        from optiland.materials.ideal import IdealMaterial  # noqa: PLC0415
+        from optiland.nonsequential.materials.nsq_material import (  # noqa: PLC0415
+            NSQMaterial,
+        )
+
+        return NSQMaterial(
+            optiland_material=IdealMaterial(
+                n=float(d["index"]), k=float(d.get("absorp", 0.0))
+            )
+        )
     raise ValueError(f"Cannot deserialize material: {d!r}")
+
+
+def _ideal_index(material: Any) -> tuple[float, float] | None:
+    """``(n, k)`` of an ``IdealMaterial``, else ``None``."""
+    from optiland.nonsequential.ir.lower import (  # noqa: PLC0415
+        _ideal_index as _lower_ideal,
+    )
+
+    return _lower_ideal(material)
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +292,12 @@ def _serialize_geometry(geometry: Any) -> dict:
     Raises:
         TypeError: For any other geometry.
     """
+    from optiland.nonsequential.components.geometry.analytic.annulus import (  # noqa: PLC0415
+        AnnularPlaneGeometry,
+    )
+    from optiland.nonsequential.components.geometry.analytic.asphere import (  # noqa: PLC0415
+        EvenAsphereGeometry,
+    )
     from optiland.nonsequential.components.geometry.analytic.conic import (  # noqa: PLC0415
         ConicGeometry,
     )
@@ -276,6 +309,26 @@ def _serialize_geometry(geometry: Any) -> dict:
         SphereGeometry,
     )
 
+    if isinstance(geometry, AnnularPlaneGeometry):
+        return {
+            "kind": "annulus",
+            "inner_radius": _to_float(geometry.inner_radius),
+            "inner_radius_y": (
+                _to_float(geometry.inner_radius_y)
+                if geometry.inner_radius_y is not None
+                else None
+            ),
+            "outer_radius": _to_float(geometry.outer_radius),
+            "z_offset": _to_float(geometry.z_offset),
+        }
+    if isinstance(geometry, EvenAsphereGeometry):
+        return {
+            "kind": "even_asphere",
+            "radius": _to_float(geometry.radius),
+            "conic": _to_float(geometry.conic),
+            "aperture_radius": _to_float(geometry.aperture_radius),
+            "coefficients": [_to_float(c) for c in geometry.coefficients],
+        }
     if isinstance(geometry, FinitePlaneGeometry):
         return {
             "kind": "finite_plane",
@@ -308,13 +361,20 @@ def _serialize_geometry(geometry: Any) -> dict:
         }
     raise TypeError(
         f"Cannot serialize geometry of type '{type(geometry).__name__}'. Only "
-        "PlaneGeometry, FinitePlaneGeometry, ConicGeometry and SphereGeometry "
-        "round-trip for raw surfaces."
+        "PlaneGeometry, FinitePlaneGeometry, AnnularPlaneGeometry, "
+        "ConicGeometry, EvenAsphereGeometry and SphereGeometry round-trip "
+        "for raw surfaces."
     )
 
 
 def _deserialize_geometry(d: dict) -> Any:
     """Inverse of :func:`_serialize_geometry`."""
+    from optiland.nonsequential.components.geometry.analytic.annulus import (  # noqa: PLC0415
+        AnnularPlaneGeometry,
+    )
+    from optiland.nonsequential.components.geometry.analytic.asphere import (  # noqa: PLC0415
+        EvenAsphereGeometry,
+    )
     from optiland.nonsequential.components.geometry.analytic.conic import (  # noqa: PLC0415
         ConicGeometry,
     )
@@ -327,6 +387,20 @@ def _deserialize_geometry(d: dict) -> Any:
     )
 
     kind = d["kind"]
+    if kind == "annulus":
+        return AnnularPlaneGeometry(
+            inner_radius=d["inner_radius"],
+            outer_radius=d["outer_radius"],
+            z_offset=d.get("z_offset", 0.0),
+            inner_radius_y=d.get("inner_radius_y"),
+        )
+    if kind == "even_asphere":
+        return EvenAsphereGeometry(
+            radius=d["radius"],
+            conic=d.get("conic", 0.0),
+            aperture_radius=d["aperture_radius"],
+            coefficients=d.get("coefficients", []),
+        )
     if kind == "finite_plane":
         return FinitePlaneGeometry(
             width=d.get("width", 10.0),
@@ -399,6 +473,8 @@ def _deserialize_nsq_material(d: Any) -> Any:
     name = _deserialize_material(d)
     if name is None:
         return VACUUM
+    if isinstance(name, NSQMaterial):
+        return name
     return NSQMaterial.from_glass(name)
 
 
@@ -638,6 +714,8 @@ def _serialize_component(name: str, compound: Any) -> dict:
                 ),
                 "conic1": _to_float(config.conic1),
                 "conic2": _to_float(config.conic2),
+                "coefficients1": [_to_float(c) for c in config.coefficients1],
+                "coefficients2": [_to_float(c) for c in config.coefficients2],
                 "front": _serialize_surface_config(config.front, owner=name),
                 "back": _serialize_surface_config(config.back, owner=name),
                 "edge": _serialize_surface_config(config.edge, owner=name),
@@ -736,6 +814,8 @@ def _deserialize_component(d: dict, scene: NSQScene) -> None:
             back_aperture_radius=cfg_d.get("back_aperture_radius"),
             conic1=cfg_d.get("conic1", 0.0),
             conic2=cfg_d.get("conic2", 0.0),
+            coefficients1=tuple(cfg_d.get("coefficients1", ())),
+            coefficients2=tuple(cfg_d.get("coefficients2", ())),
             front=_deserialize_surface_config(cfg_d.get("front")),
             back=_deserialize_surface_config(cfg_d.get("back")),
             edge=_deserialize_surface_config(cfg_d.get("edge")),
@@ -849,7 +929,13 @@ def _serialize_source(name: str, source: Any) -> dict:
                 if source.aperture_radius is not None
                 else None
             ),
+            "inner_radius": (
+                _to_float(source.inner_radius)
+                if source.inner_radius is not None
+                else None
+            ),
             "half_angle_deg": _to_float(source.half_angle_deg),
+            "lambertian_cone": bool(source.lambertian_cone),
             "medium": medium,
         }
 
@@ -909,7 +995,9 @@ def _deserialize_source(d: dict, scene: NSQScene) -> None:
             width=d.get("width", 1.0),
             height=d.get("height", 1.0),
             aperture_radius=d.get("aperture_radius"),
+            inner_radius=d.get("inner_radius"),
             half_angle_deg=d.get("half_angle_deg", 90.0),
+            lambertian_cone=d.get("lambertian_cone", False),
             medium=medium,
         )
         scene.add_source(name, cs, config)

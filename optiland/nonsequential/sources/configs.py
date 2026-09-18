@@ -79,10 +79,17 @@ class ExtendedSourceConfig:
         height: Source height [mm].
         aperture_radius: Circular aperture radius [mm]. If set, overrides
             width/height for a circular source.
+        inner_radius: Inner radius [mm] of an annular (ring) emitter; only
+            used together with ``aperture_radius``. ``None`` = full disk.
         half_angle_deg: Half-angle of the emission cone [deg]. Below 90 the
-            rays are distributed uniformly within the cone; at 90 or above
+            rays are distributed uniformly within the cone (or
+            cosine-weighted when ``lambertian_cone`` is set); at 90 or above
             they are cosine-weighted over the full hemisphere (Lambertian),
             and values above 90 behave the same as 90.
+        lambertian_cone: Emit a Lambertian (cosine-weighted) distribution
+            restricted to the cone instead of a uniform one. ``total_flux``
+            is then the flux *inside* the cone, i.e. ``sin^2(half_angle)``
+            times the flux of the full Lambertian emitter.
         medium: Medium the source is embedded in (default: vacuum).
     """
 
@@ -92,5 +99,7 @@ class ExtendedSourceConfig:
     width: float = 1.0
     height: float = 1.0
     aperture_radius: float | None = None
+    inner_radius: float | None = None
     half_angle_deg: float = 90.0
+    lambertian_cone: bool = False
     medium: NSQMaterial | None = field(default=None)

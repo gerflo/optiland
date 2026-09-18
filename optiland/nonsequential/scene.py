@@ -478,7 +478,9 @@ def _build_source(cs: CoordinateSystem, config) -> object:
             width=config.width,
             height=config.height,
             aperture_radius=config.aperture_radius,
+            inner_radius=config.inner_radius,
             half_angle_deg=config.half_angle_deg,
+            lambertian_cone=config.lambertian_cone,
             medium=getattr(config, "medium", None),
         )
     raise TypeError(

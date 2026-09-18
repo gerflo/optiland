@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from optiland.nonsequential.bsdf.base import BaseBSDF
     from optiland.nonsequential.materials.nsq_material import NSQMaterial
 
@@ -98,6 +100,11 @@ class LensConfig:
             Defaults to ``front_aperture_radius`` when ``None``.
         conic1: Conic constant of the front face (0 = sphere).
         conic2: Conic constant of the back face (0 = sphere).
+        coefficients1: Even-asphere coefficients of the front face
+            (``coefficients1[0]`` multiplies ``r^2``; see
+            :class:`~optiland.nonsequential.components.geometry.analytic.asphere.EvenAsphereGeometry`).
+            Empty = conic face.
+        coefficients2: Even-asphere coefficients of the back face.
         front: Per-surface overrides for the front face.
         back: Per-surface overrides for the back face.
         edge: Per-surface overrides for the edge (barrel) surface.
@@ -113,6 +120,8 @@ class LensConfig:
     back_aperture_radius: float | None = None
     conic1: float = 0.0
     conic2: float = 0.0
+    coefficients1: Sequence[float] = ()
+    coefficients2: Sequence[float] = ()
     front: SurfaceConfig | None = None
     back: SurfaceConfig | None = None
     edge: SurfaceConfig | None = None

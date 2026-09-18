@@ -58,6 +58,9 @@ def _component_kind(component: BaseComponent) -> str:
 
 def _local_outline(geometry) -> np.ndarray | None:
     """Closed outline of a planar geometry's clear aperture, local frame."""
+    from optiland.nonsequential.components.geometry.analytic.annulus import (  # noqa: PLC0415
+        AnnularPlaneGeometry,
+    )
     from optiland.nonsequential.components.geometry.analytic.plane import (  # noqa: PLC0415
         FinitePlaneGeometry,
         PlaneGeometry,
@@ -83,6 +86,21 @@ def _local_outline(geometry) -> np.ndarray | None:
             [[-s, -s, 0], [s, -s, 0], [s, s, 0], [-s, s, 0], [-s, -s, 0]],
             dtype=float,
         )
+    if isinstance(geometry, AnnularPlaneGeometry):
+        # Outer rim, then the hole outline, joined through a NaN break.
+        phi = np.linspace(0.0, 2.0 * np.pi, _N_OUTLINE + 1)
+        z = as_float(geometry.z_offset)
+        r_out = as_float(geometry.outer_radius)
+        a = as_float(geometry.inner_radius)
+        b = as_float(geometry.inner_radius_y) if geometry.is_elliptical else a
+        outer = np.stack(
+            [r_out * np.cos(phi), r_out * np.sin(phi), np.full_like(phi, z)], axis=1
+        )
+        hole = np.stack(
+            [a * np.cos(phi), b * np.sin(phi), np.full_like(phi, z)], axis=1
+        )
+        gap = np.full((1, 3), np.nan)
+        return np.concatenate([outer, gap, hole], axis=0)
     return None
 
 
@@ -96,6 +114,10 @@ def _local_profile(geometry, axis: int) -> np.ndarray | None:
     Returns:
         ``(N, 3)`` local points, or ``None`` for unsupported geometries.
     """
+    from optiland.nonsequential.components.geometry.analytic.asphere import (  # noqa: PLC0415
+        EvenAsphereGeometry,
+        sag_array,
+    )
     from optiland.nonsequential.components.geometry.analytic.conic import (  # noqa: PLC0415
         ConicGeometry,
     )
@@ -103,7 +125,11 @@ def _local_profile(geometry, axis: int) -> np.ndarray | None:
         SphereGeometry,
     )
 
-    if isinstance(geometry, ConicGeometry):
+    if isinstance(geometry, EvenAsphereGeometry):
+        r_ap = as_float(geometry.aperture_radius)
+        h = np.linspace(-r_ap, r_ap, _N_PROFILE)
+        z = sag_array(geometry, np.abs(h))
+    elif isinstance(geometry, ConicGeometry):
         r_ap = as_float(geometry.aperture_radius)
         h = np.linspace(-r_ap, r_ap, _N_PROFILE)
         z = _sag_array(as_float(geometry.radius), as_float(geometry.conic), h)

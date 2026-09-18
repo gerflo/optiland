@@ -133,8 +133,14 @@ def _rim_points(
     loops: list[np.ndarray] = []
 
     if isinstance(geom, ConicGeometry):
+        # Covers EvenAsphereGeometry, whose rim sag includes its polynomial.
         r = as_float(geom.aperture_radius)
-        z = _sag_at_rim(as_float(geom.radius), as_float(geom.conic), r)
+        z = _sag_at_rim(
+            as_float(geom.radius),
+            as_float(geom.conic),
+            r,
+            getattr(geom, "coefficients", ()),
+        )
         loops.append(
             np.stack(
                 [r * np.cos(theta), r * np.sin(theta), np.full(n_samples, z)], axis=1
@@ -300,6 +306,9 @@ def _detached_geometry(geometry: object) -> object:
     from optiland.nonsequential.components.geometry.analytic.annulus import (  # noqa: PLC0415
         AnnularPlaneGeometry,
     )
+    from optiland.nonsequential.components.geometry.analytic.asphere import (  # noqa: PLC0415
+        EvenAsphereGeometry,
+    )
     from optiland.nonsequential.components.geometry.analytic.conic import (  # noqa: PLC0415
         ConicGeometry,
     )
@@ -313,6 +322,16 @@ def _detached_geometry(geometry: object) -> object:
         SphereGeometry,
     )
 
+    if isinstance(geometry, EvenAsphereGeometry):
+        # Subclass of ConicGeometry: clone it first, with its polynomial, or
+        # the parity check would walk the base conic while the lens edge
+        # meets the asphere's rim.
+        return EvenAsphereGeometry(
+            as_float(geometry.radius),
+            as_float(geometry.conic),
+            as_float(geometry.aperture_radius),
+            [as_float(c) for c in geometry.coefficients],
+        )
     if isinstance(geometry, ConicGeometry):
         return ConicGeometry(
             as_float(geometry.radius),

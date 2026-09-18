@@ -37,8 +37,12 @@ class ExtendedSource(BaseNSQSource):
         height: Source height [mm] (used for rectangular aperture).
         aperture_radius: Circular aperture radius [mm]. If set, overrides
             width/height for a circular source.
+        inner_radius: Inner radius [mm] of an annular emitter (with
+            ``aperture_radius``). None = full disk.
         half_angle_deg: Half-angle of emission cone [deg].
             90 = Lambertian hemisphere.
+        lambertian_cone: Cosine-weighted emission restricted to the cone
+            (see :class:`~optiland.nonsequential.sources.configs.ExtendedSourceConfig`).
         medium: Medium the source is embedded in.
     """
 
@@ -52,6 +56,8 @@ class ExtendedSource(BaseNSQSource):
         aperture_radius: float | None = None,
         half_angle_deg: float = 90.0,
         medium=None,
+        inner_radius: float | None = None,
+        lambertian_cone: bool = False,
     ) -> None:
         """Initialize ExtendedSource.
 
@@ -65,6 +71,13 @@ class ExtendedSource(BaseNSQSource):
                 width/height if set.
             half_angle_deg: Half-angle of emission cone [deg].
             medium: Medium the source is embedded in (default: vacuum).
+            inner_radius: Inner radius [mm] of an annular emitter; needs
+                ``aperture_radius``. None = full disk.
+            lambertian_cone: Cosine-weighted emission within the cone.
+
+        Raises:
+            ValueError: If ``inner_radius`` is given without
+                ``aperture_radius`` or is not smaller than it.
         """
         super().__init__(cs, spectrum, total_flux)
         self.width = as_detached_param(width, "width", "ExtendedSource")
@@ -74,9 +87,26 @@ class ExtendedSource(BaseNSQSource):
             if aperture_radius is not None
             else None
         )
+        if inner_radius is not None:
+            if aperture_radius is None:
+                raise ValueError(
+                    "ExtendedSource: inner_radius needs aperture_radius (an "
+                    "annular emitter is a circular one with a hole)."
+                )
+            if not 0.0 <= float(inner_radius) < float(aperture_radius):
+                raise ValueError(
+                    f"ExtendedSource: inner_radius={inner_radius} must lie in "
+                    f"[0, aperture_radius={aperture_radius})."
+                )
+        self.inner_radius = (
+            as_detached_param(inner_radius, "inner_radius", "ExtendedSource")
+            if inner_radius is not None
+            else None
+        )
         self.half_angle_deg = as_detached_param(
             half_angle_deg, "half_angle_deg", "ExtendedSource"
         )
+        self.lambertian_cone = bool(lambertian_cone)
         self.medium = medium
 
     def generate(self, ray_id: np.ndarray, rng: NSQRng) -> NSQRayBundle:
@@ -95,10 +125,11 @@ class ExtendedSource(BaseNSQSource):
 
         # Sample positions on source surface (local x-y plane)
         if self.aperture_radius is not None:
-            # Circular aperture: uniform disk sampling
+            # Circular (or annular) aperture: uniform-in-area sampling
             u1 = rng.uniform(ray_id, bounce0, EventSlot.SOURCE_U1)
             u2 = rng.uniform(ray_id, bounce0, EventSlot.SOURCE_U2)
-            r = self.aperture_radius * np.sqrt(u1)
+            r_in2 = 0.0 if self.inner_radius is None else self.inner_radius**2
+            r = np.sqrt(r_in2 + (self.aperture_radius**2 - r_in2) * u1)
             phi_pos = 2.0 * np.pi * u2
             lx = r * np.cos(phi_pos)
             ly = r * np.sin(phi_pos)
@@ -119,6 +150,11 @@ class ExtendedSource(BaseNSQSource):
         if self.half_angle_deg >= 90.0:
             # Cosine-weighted hemisphere (Lambertian)
             cos_theta = np.sqrt(u1d)
+        elif self.lambertian_cone:
+            # Cosine-weighted within the cone: sin^2(theta) uniform in
+            # [0, sin^2(theta_max)] (Malley's method restricted to a cap).
+            sin2_max = 1.0 - cos_max * cos_max
+            cos_theta = np.sqrt(1.0 - u1d * sin2_max)
         else:
             cos_theta = 1.0 - u1d * (1.0 - cos_max)
 

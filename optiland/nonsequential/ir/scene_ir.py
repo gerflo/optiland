@@ -17,7 +17,9 @@ from optiland.nonsequential.ir.medium_ir import MediumIR
 # Primitive geometry kinds this revamp's lowering knows how to produce.
 # "mesh" is included for completeness but requires the optional trimesh
 # dependency to round-trip back into a live MeshGeometry.
-PrimitiveKind = Literal["conic", "plane", "annulus", "frustum", "sphere", "mesh"]
+PrimitiveKind = Literal[
+    "conic", "even_asphere", "plane", "annulus", "frustum", "sphere", "mesh"
+]
 
 # Which physical interaction a primitive's hit dispatches to, independent of
 # any BsdfIR scatter overlay. A future BSDF-lobe rework could fold

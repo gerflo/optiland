@@ -21,6 +21,9 @@ from optiland.nonsequential.components.configs import (
 from optiland.nonsequential.components.geometry.analytic.annulus import (
     AnnularPlaneGeometry,
 )
+from optiland.nonsequential.components.geometry.analytic.asphere import (
+    EvenAsphereGeometry,
+)
 from optiland.nonsequential.components.geometry.analytic.conic import ConicGeometry
 from optiland.nonsequential.components.geometry.analytic.frustum import (
     CylindricalFrustumGeometry,
@@ -119,7 +122,7 @@ class Lens(CompoundComponent):
         surfaces: list[BaseComponent] = []
 
         # 1. Front face (refractive by default)
-        front_geom = ConicGeometry(cfg.r1, cfg.conic1, front_r)
+        front_geom = _face_geometry(cfg.r1, cfg.conic1, front_r, cfg.coefficients1)
         surfaces.append(
             _make_surface(
                 cs_front,
@@ -133,7 +136,7 @@ class Lens(CompoundComponent):
         )
 
         # 2. Back face (refractive by default)
-        back_geom = ConicGeometry(cfg.r2, cfg.conic2, back_r)
+        back_geom = _face_geometry(cfg.r2, cfg.conic2, back_r, cfg.coefficients2)
         surfaces.append(
             _make_surface(
                 cs_back,
@@ -147,8 +150,8 @@ class Lens(CompoundComponent):
         )
 
         # 3. Edge (cylindrical frustum, absorbing by default)
-        sag_front = _sag_at_rim(cfg.r1, cfg.conic1, front_r)
-        sag_back = _sag_at_rim(cfg.r2, cfg.conic2, back_r)
+        sag_front = _sag_at_rim(cfg.r1, cfg.conic1, front_r, cfg.coefficients1)
+        sag_back = _sag_at_rim(cfg.r2, cfg.conic2, back_r, cfg.coefficients2)
 
         wider_r = max(as_float(front_r), as_float(back_r))
         narrower_r = min(as_float(front_r), as_float(back_r))
@@ -236,8 +239,31 @@ def _offset_cs(cs: CoordinateSystem, dz: float) -> CoordinateSystem:
     return CoordinateSystem(z=dz, reference_cs=cs)
 
 
-def _sag_at_rim(radius: float, conic: float, aperture_radius: float) -> float:
-    """Compute the sag of a conic surface at the aperture rim.
+def _face_geometry(
+    radius: float, conic: float, aperture_radius: float, coefficients=()
+) -> ConicGeometry:
+    """A conic face, or an even asphere when any coefficient is set.
+
+    Args:
+        radius: Vertex radius of curvature [mm].
+        conic: Conic constant K.
+        aperture_radius: Semi-aperture [mm].
+        coefficients: Even-asphere coefficients (``[0]`` multiplies r^2).
+
+    Returns:
+        ``ConicGeometry`` for an empty/all-zero coefficient list, else
+        ``EvenAsphereGeometry``.
+    """
+    coeffs = list(coefficients or ())
+    if any(as_float(c) != 0.0 for c in coeffs):
+        return EvenAsphereGeometry(radius, conic, aperture_radius, coeffs)
+    return ConicGeometry(radius, conic, aperture_radius)
+
+
+def _sag_at_rim(
+    radius: float, conic: float, aperture_radius: float, coefficients=()
+) -> float:
+    """Compute the sag of a conic (or even asphere) surface at the rim.
 
     The edge/rim surfaces this feeds are absorbing bookkeeping geometry, not
     part of the differentiable optical path, so the sag is evaluated from
@@ -248,6 +274,7 @@ def _sag_at_rim(radius: float, conic: float, aperture_radius: float) -> float:
         radius: Vertex radius of curvature [mm].  0 -> flat (sag = 0).
         conic: Conic constant K.
         aperture_radius: Semi-aperture radius [mm].
+        coefficients: Even-asphere coefficients (``[0]`` multiplies r^2).
 
     Returns:
         Sag value z(aperture_radius) [mm].
@@ -255,15 +282,18 @@ def _sag_at_rim(radius: float, conic: float, aperture_radius: float) -> float:
     radius = as_float(radius)
     conic = as_float(conic)
     aperture_radius = as_float(aperture_radius)
-    if radius == 0.0 or aperture_radius == 0.0:
-        return 0.0
     r2 = aperture_radius**2
+    poly = 0.0
+    for i, ci in enumerate(coefficients or ()):
+        poly += as_float(ci) * r2 ** (i + 1)
+    if radius == 0.0 or aperture_radius == 0.0:
+        return poly
     R = radius
     K = conic
     under_root = 1.0 - (1.0 + K) * r2 / (R * R)
     if under_root < 0.0:
         under_root = 0.0
-    return r2 / (R * (1.0 + math.sqrt(under_root)))
+    return r2 / (R * (1.0 + math.sqrt(under_root))) + poly
 
 
 def _approx_equal(a: float, b: float, tol: float = 1e-9) -> bool:

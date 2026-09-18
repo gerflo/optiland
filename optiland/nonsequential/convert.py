@@ -432,6 +432,31 @@ def _surface_conic(surf) -> float:
         return 0.0
 
 
+def _surface_coefficients(surf) -> tuple[float, ...]:
+    """Even-asphere coefficients of a surface (empty for conics/planes).
+
+    Trailing zeros are dropped so a conic stored as an asphere with all-zero
+    coefficients stays a conic.
+
+    Args:
+        surf: Sequential Surface object.
+
+    Returns:
+        The coefficients as floats, ``coefficients[0]`` for ``r^2``.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    import optiland.backend as be  # noqa: PLC0415
+
+    coeffs = getattr(surf.geometry, "coefficients", None)
+    if not coeffs:
+        return ()
+    values = [float(np.ravel(be.to_numpy(c))[0]) for c in coeffs]
+    while values and values[-1] == 0.0:
+        values.pop()
+    return tuple(values)
+
+
 def _surface_semi_diameter(
     surf, optic=None, idx: int | None = None
 ) -> tuple[float, bool]:
@@ -616,6 +641,8 @@ def _add_lens(
         back_aperture_radius=back_ap,
         conic1=_surface_conic(s_front),
         conic2=_surface_conic(s_back),
+        coefficients1=_surface_coefficients(s_front),
+        coefficients2=_surface_coefficients(s_back),
         front=_surface_config_with_coating(s_front, front_name, report),
         back=_surface_config_with_coating(s_back, back_name, report),
     )
@@ -665,6 +692,13 @@ def _add_doublet(
 
     s_front, s_cement, s_back = element_surfaces
     idx_front, idx_cement, idx_back = elem_indices
+    for surf, idx in zip(element_surfaces, elem_indices, strict=True):
+        if _surface_coefficients(surf):
+            raise ConversionError(
+                f"Surface {idx} is an aspheric face of a cemented doublet; the "
+                "converter's Doublet has conic faces only. Split the element "
+                "or convert it surface by surface with add_optic_surfaces()."
+            )
     z_front = _surface_z(s_front)
     z_cement = _surface_z(s_cement)
     z_back = _surface_z(s_back)

@@ -25,8 +25,14 @@ class AnnularPlaneGeometry(AnalyticGeometry):
     radial direction.  Rays that hit the z = z_offset plane inside the
     annular band register a hit; rays outside or on the inner hole do not.
 
+    The hole may be elliptical: ``inner_radius`` is its semi-axis along
+    local x and ``inner_radius_y`` (default: the same) along local y. A
+    perforated fold mirror tilted by 45 deg about y needs a hole elongated
+    along x by ``1 / cos(45 deg)`` to look circular along the optical axis.
+
     Attributes:
-        inner_radius: Inner radius of the annulus [mm].
+        inner_radius: Inner (hole) semi-axis along local x [mm].
+        inner_radius_y: Inner (hole) semi-axis along local y [mm].
         outer_radius: Outer radius of the annulus [mm].
         z_offset: Axial position of the plane in local frame [mm].
     """
@@ -36,17 +42,29 @@ class AnnularPlaneGeometry(AnalyticGeometry):
         inner_radius: float,
         outer_radius: float,
         z_offset: float = 0.0,
+        inner_radius_y: float | None = None,
     ) -> None:
         """Initialize AnnularPlaneGeometry.
 
         Args:
-            inner_radius: Inner (hole) radius [mm].
+            inner_radius: Inner (hole) radius [mm], or its semi-axis along
+                local x when ``inner_radius_y`` is given.
             outer_radius: Outer (rim) radius [mm].
             z_offset: Axial z-position of the plane [mm].
+            inner_radius_y: Semi-axis of an elliptical hole along local y
+                [mm]. ``None`` keeps the hole circular.
         """
         self.inner_radius = as_param(inner_radius)
         self.outer_radius = as_param(outer_radius)
         self.z_offset = as_param(z_offset)
+        self.inner_radius_y = (
+            as_param(inner_radius_y) if inner_radius_y is not None else None
+        )
+
+    @property
+    def is_elliptical(self) -> bool:
+        """Whether the hole is an ellipse rather than a circle."""
+        return self.inner_radius_y is not None
 
     def ray_intersect(
         self, origins: np.ndarray, directions: np.ndarray
@@ -84,9 +102,13 @@ class AnnularPlaneGeometry(AnalyticGeometry):
         hy = origins[:, 1] + t * directions[:, 1]
         r2 = hx * hx + hy * hy
 
-        hit_mask = (
-            (t > eps) & (r2 >= self.inner_radius**2) & (r2 <= self.outer_radius**2)
-        )
+        if self.inner_radius_y is None:
+            outside_hole = r2 >= self.inner_radius**2
+        else:
+            outside_hole = (
+                (hx / self.inner_radius) ** 2 + (hy / self.inner_radius_y) ** 2
+            ) >= 1.0
+        hit_mask = (t > eps) & outside_hole & (r2 <= self.outer_radius**2)
 
         t_out = be.where(hit_mask, t, inf_arr)
 

@@ -245,6 +245,39 @@ class TestLowerCorrectness:
         assert point_emitter.medium_id is None
 
     def test_unsupported_material_raises(self):
+        from optiland.materials.base import BaseMaterial  # noqa: PLC0415
+        from optiland.nonsequential.materials.nsq_material import (
+            NSQMaterial,  # noqa: PLC0415
+        )
+
+        class _Nameless(BaseMaterial):
+            """A custom material that is neither catalog nor constant-index."""
+
+            def _calculate_n(self, wavelength):
+                return 1.5 + 0.01 * wavelength
+
+            def _calculate_k(self, wavelength):
+                return 0.0 * wavelength
+
+        scene = NSQScene()
+        scene.add_lens(
+            "L",
+            CoordinateSystem(z=0),
+            LensConfig(
+                r1=50,
+                r2=-50,
+                thickness=5,
+                material=NSQMaterial(optiland_material=_Nameless()),
+                front_aperture_radius=10,
+            ),
+        )
+        with pytest.raises(ValueError, match="catalog"):
+            lower(scene)
+        # Non-strict lowering (what the backends use) still assigns an id.
+        ir = lower(scene, strict=False)
+        assert any(m.n_model["kind"] == "opaque" for m in ir.media)
+
+    def test_ideal_material_lowers_to_a_constant_medium(self):
         from optiland.materials.ideal import IdealMaterial  # noqa: PLC0415
         from optiland.nonsequential.materials.nsq_material import (
             NSQMaterial,  # noqa: PLC0415
@@ -258,12 +291,16 @@ class TestLowerCorrectness:
                 r1=50,
                 r2=-50,
                 thickness=5,
-                material=NSQMaterial(optiland_material=IdealMaterial(n=1.5)),
+                material=NSQMaterial(optiland_material=IdealMaterial(n=1.5, k=1e-4)),
                 front_aperture_radius=10,
             ),
         )
-        with pytest.raises(ValueError, match="catalog"):
-            lower(scene)
+        ir = lower(scene)
+        constant = [m for m in ir.media if m.n_model["kind"] == "constant"]
+        assert {(m.n_model["n"], m.k_model["k"]) for m in constant} == {
+            (1.0, 0.0),
+            (1.5, 1e-4),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +316,7 @@ def _walk_ir_values(value, path="root"):
     elif isinstance(value, dict):
         for k, v in value.items():
             yield from _walk_ir_values(v, f"{path}[{k!r}]")
-    elif isinstance(value, (list, tuple)):
+    elif isinstance(value, list | tuple):
         for i, v in enumerate(value):
             yield from _walk_ir_values(v, f"{path}[{i}]")
     else:
