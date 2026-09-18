@@ -257,6 +257,20 @@ each detector's flux is attributed to its arm.
 ``tools/merge_optic_paths.py`` wraps all of this in a command line with an
 optional per-source trace, Markdown report and plots.
 
+:class:`~optiland.nonsequential.system.MultiAxisSystem` keeps the folded
+scene together with its named **optical paths** (``OpticalPath``: the
+sequential ``Optic`` as a dict, its role and the scene components, sources
+and detectors it traverses) and the ``FoldSettings`` that produced it.
+``fold_system()`` builds one from two optics; ``rebuild()`` folds again
+after ``set_path_optic()``; ``rename_path()`` keeps the fold settings
+consistent; ``paths_for_component()`` answers a click on a drawn element.
+The ``.olsys`` file is the scene JSON plus the top-level ``"paths"`` and
+``"fold"`` keys, so ``NSQScene.from_json`` still reads it as a plain scene.
+The GUI's System view (``optiland_gui.nsq_panel``) activates a path by
+handing its optic to the connector and folds the system again on every
+``opticChanged`` (debounced), so the lens data editor and the sequential
+analyses edit the path in place.
+
 .. _nsq_rng:
 
 5. Reproducibility — PCG32

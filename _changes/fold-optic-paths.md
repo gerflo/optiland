@@ -11,14 +11,16 @@ Branch: `feat/fold-optic-paths` (stacked on `feat/beam-splitter-paths`)
 - `ExtendedSource(inner_radius=..., lambertian_cone=True)`: ring emitters and cosine-weighted emission restricted to a cone
 - serialization / IR: `{"type": "ideal", "index", "absorp"}` media, `annulus` and `even_asphere` geometry kinds, the new source fields
 - `tools/merge_optic_paths.py`: command line with per-source trace, Markdown report and plots
+- `optiland/nonsequential/system.py`: `MultiAxisSystem` (scene + named `OpticalPath`s + `FoldSettings`), `fold_system()`, rebuild after editing a path, rename, click lookup; the `.olsys` file carries `paths` and `fold`
+- GUI: the Non-Sequential panel is now the **System view** (sidebar "System"); a *Path* pull-down and clicks on drawn elements activate an optical path in the Lens Data Editor, 2D layout and analyses; edits there rebuild the system (debounced); paths can be renamed; the layout has wheel zoom, drag pan, *Fit* and view memory (`optiland_gui/widgets/plot_navigation.py`)
 - `.olsys` is the file extension of a multi-axis (non-sequential) system: the panel's Open/Save dialogs, `tools/merge_optic_paths.py` and *File → Open* use it (`.json` scene files still load)
-- GUI: *File → Open* (and the recent-files list) recognises a multi-axis system file and routes it to the Non-Sequential panel; the optical-system loader refuses such a file with a hint instead of resetting the workspace; the panel's default max depth is 48
+- GUI: *File → Open* (and the recent-files list) recognises a multi-axis system file and routes it to the System view; the optical-system loader refuses such a file with a hint instead of resetting the workspace; the panel's default max depth is 48
 
 ## What it does for the user
 
 - a fundus camera (observation through the Lochspiegel hole, ring illumination reflected by the mirror) becomes one scene: arm powers per source, spot positions on the chip, illumination footprint on the retina, stray light between the arms
 - drift between the two design files (a different working distance, a different mirror distance) is listed instead of silently absorbed
-- the merged scene opens in the GUI's Non-Sequential panel
+- the merged system opens in the GUI's System view; each path can be activated in the Lens Data Editor, edited and folded again
 
 ## Tests
 

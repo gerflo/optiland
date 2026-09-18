@@ -74,7 +74,7 @@ def test_loader_refuses_a_scene_without_resetting(qapp, monkeypatch, tmp_path):
     assert connector.get_surface_count() == surfaces_before
     message, severity = connector.toast_manager.notify.call_args.args[:2]
     assert severity == "error"
-    assert "Non-Sequential panel" in message
+    assert "System view" in message
     assert "aperture" not in message
 
 
@@ -107,7 +107,7 @@ def test_main_window_routes_a_scene_to_the_nsq_panel(qapp, tmp_path) -> None:
     window.focus_dock_widget.assert_called_once_with(window.panel_manager.nsq_dock)
     window._remember_recent_file.assert_called_once_with(path)
     message, severity = window.toast_manager.notify.call_args.args[:2]
-    assert severity == "info" and "non-sequential scene" in message
+    assert severity == "info" and "multi-axis system" in message
 
 
 def test_main_window_still_loads_optical_systems(tmp_path) -> None:

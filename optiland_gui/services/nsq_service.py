@@ -23,7 +23,9 @@ from optiland_gui.worker import _Worker
 
 if TYPE_CHECKING:
     from optiland.nonsequential.scene import NSQScene
+    from optiland.nonsequential.system import MultiAxisSystem, OpticalPath
     from optiland.nonsequential.tracer import SimulationResult
+    from optiland.optic import Optic
 
 logger = logging.getLogger(__name__)
 
@@ -40,16 +42,21 @@ class NSQService(QObject):
     """
 
     sceneChanged = Signal()
+    pathsChanged = Signal()
+    activePathChanged = Signal(object)
     traceStarted = Signal()
     traceFinished = Signal(object)
     traceFailed = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        self._system: MultiAxisSystem | None = None
         self._scene: NSQScene | None = None
         self._scene_path: str | None = None
         self._scene_label: str = ""
         self._result: SimulationResult | None = None
+        self._active_path: str | None = None
+        self._activating = False
         self._thread: QThread | None = None
         self._worker: _Worker | None = None
 
@@ -82,19 +89,144 @@ class NSQService(QObject):
         """Whether a background trace is running."""
         return self._thread is not None
 
+    @property
+    def system(self) -> MultiAxisSystem | None:
+        """The multi-axis system that owns the scene (``None`` if none)."""
+        return self._system
+
+    @property
+    def path_names(self) -> list[str]:
+        """Names of the system's optical paths, in order."""
+        return [] if self._system is None else self._system.path_names
+
+    @property
+    def active_path(self) -> str | None:
+        """Name of the path loaded into the sequential tools, if any."""
+        return self._active_path
+
+    @property
+    def is_activating(self) -> bool:
+        """True while a path is being handed to the connector."""
+        return self._activating
+
     def set_scene(self, scene: NSQScene, label: str, path: str | None = None) -> None:
-        """Replace the current scene and drop the previous result.
+        """Replace the current scene (as a system without paths).
 
         Args:
             scene: The new scene.
             label: Label shown in the panel.
             path: File the scene belongs to, if any.
         """
-        self._scene = scene
+        from optiland.nonsequential.system import MultiAxisSystem  # noqa: PLC0415
+
+        self.set_system(MultiAxisSystem(scene), label, path)
+
+    def set_system(
+        self, system: MultiAxisSystem, label: str, path: str | None = None
+    ) -> None:
+        """Replace the current system and drop the previous result.
+
+        Args:
+            system: The new multi-axis system.
+            label: Label shown in the panel.
+            path: File the system belongs to, if any.
+        """
+        self._system = system
+        self._scene = system.scene
         self._scene_label = label
         self._scene_path = path
         self._result = None
+        self._active_path = None
+        self.pathsChanged.emit()
+        self.activePathChanged.emit(None)
         self.sceneChanged.emit()
+
+    # ------------------------------------------------------------------
+    # Optical paths
+    # ------------------------------------------------------------------
+
+    def path(self, name: str) -> OpticalPath:
+        """The optical path called ``name``.
+
+        Raises:
+            RuntimeError: If no system is loaded.
+            KeyError: If there is no such path.
+        """
+        if self._system is None:
+            raise RuntimeError("No system loaded.")
+        return self._system.path(name)
+
+    def activate_path(self, name: str | None, connector) -> None:
+        """Load a path's sequential design into the connector.
+
+        The lens data editor, the 2D layout and every sequential analysis
+        then work on that path; edits flow back through
+        :meth:`sync_active_path`. ``None`` deactivates without touching the
+        connector.
+
+        Args:
+            name: Path name, or ``None``.
+            connector: The GUI connector (``load_optic_from_object``).
+        """
+        if name is None:
+            if self._active_path is not None:
+                self._active_path = None
+                self.activePathChanged.emit(None)
+            return
+        optic = self.path(name).build_optic()
+        self._activating = True
+        try:
+            connector.load_optic_from_object(optic)
+            # The loaded design is a copy of the saved path: nothing to save
+            # yet, so closing the window must not ask about it.
+            mark_clean = getattr(connector, "mark_current_state_clean", None)
+            if mark_clean is not None:
+                mark_clean()
+        finally:
+            self._activating = False
+        self._active_path = name
+        self.activePathChanged.emit(name)
+
+    def rename_path(self, old: str, new: str) -> None:
+        """Rename a path (the active one stays active under its new name)."""
+        if self._system is None:
+            raise RuntimeError("No system loaded.")
+        self._system.rename_path(old, new)
+        if self._active_path == old:
+            self._active_path = new.strip()
+        self.pathsChanged.emit()
+        self.activePathChanged.emit(self._active_path)
+
+    def sync_active_path(self, optic: Optic) -> None:
+        """Take the edited sequential design of the active path and rebuild.
+
+        Args:
+            optic: The connector's current optic.
+
+        Raises:
+            RuntimeError: If no path is active or the system cannot be
+                rebuilt (no fold settings).
+            Exception: Whatever the fold raises for an inconsistent edit;
+                the previous scene is kept in that case.
+        """
+        if self._system is None or self._active_path is None:
+            raise RuntimeError("No active optical path.")
+        previous = self._system.path(self._active_path).optic
+        self._system.set_path_optic(self._active_path, optic)
+        try:
+            self._system.rebuild()
+        except Exception:
+            self._system.set_path_optic(self._active_path, previous)
+            raise
+        self._scene = self._system.scene
+        self._result = None
+        self.sceneChanged.emit()
+
+    def paths_for_component(self, component_name: str) -> list[str]:
+        """Names of the paths a scene component, source or detector belongs to."""
+        if self._system is None:
+            return []
+        return self._system.paths_for_component(component_name)
 
     def load_sample(self, key: str) -> None:
         """Build one of the bundled sample scenes.
@@ -110,15 +242,16 @@ class NSQService(QObject):
         self.set_scene(build_sample_scene(key), SAMPLE_SCENES[key])
 
     def load_file(self, path: str) -> None:
-        """Load a scene from an NSQ JSON file.
+        """Load a multi-axis system (``.olsys``) or a plain scene file.
 
         Args:
-            path: Path to a file written by ``NSQScene.to_json``.
+            path: Path to a file written by ``MultiAxisSystem.to_json`` or
+                ``NSQScene.to_json``.
         """
-        from optiland.nonsequential.scene import NSQScene  # noqa: PLC0415
+        from optiland.nonsequential.system import MultiAxisSystem  # noqa: PLC0415
 
-        scene = NSQScene.from_json(path)
-        self.set_scene(scene, os.path.basename(path), path)
+        system = MultiAxisSystem.from_json(path)
+        self.set_system(system, os.path.basename(path), path)
 
     def save_file(self, path: str) -> None:
         """Write the current scene to an NSQ JSON file.
@@ -129,9 +262,9 @@ class NSQService(QObject):
         Raises:
             RuntimeError: If no scene is loaded.
         """
-        if self._scene is None:
+        if self._system is None:
             raise RuntimeError("No non-sequential scene to save.")
-        self._scene.to_json(path)
+        self._system.to_json(path)
         self._scene_path = path
         self._scene_label = os.path.basename(path)
         self.sceneChanged.emit()

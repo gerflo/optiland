@@ -96,7 +96,8 @@ class PanelManager:
         )
 
         self.nsq_panel = NSQPanel(self.connector)
-        self.nsq_dock = self._create_dock(self.nsq_panel, "NSQDock", "Non-Sequential")
+        # The dock keeps its object name so saved layouts still find it.
+        self.nsq_dock = self._create_dock(self.nsq_panel, "NSQDock", "System")
 
         self.catalog_browser_panel = CatalogBrowserPanel(self.connector)
         self.material_browser_panel = MaterialBrowserPanel(self.connector)

@@ -177,7 +177,7 @@ class MainWindow(FramelessWindow):
             return self._win.panel_manager.nsq_panel
 
         def show_nsq_panel(self):
-            """Brings the Non-Sequential dock widget to the front."""
+            """Brings the System dock widget (multi-axis systems) to the front."""
             self._win.focus_dock_widget(self._win.panel_manager.nsq_dock)
 
         def get_catalog_browser_panel(self):
@@ -578,7 +578,7 @@ class MainWindow(FramelessWindow):
         """Load a system file and update related UI state.
 
         A non-sequential scene file (``NSQScene.to_json``) is routed to the
-        Non-Sequential panel instead of the optical-system loader; the
+        System view instead of the optical-system loader; the
         current optical system stays as it is.
         """
         if is_nsq_scene_file(filepath):
@@ -595,7 +595,7 @@ class MainWindow(FramelessWindow):
         logger.debug("Open System action triggered: %s", filepath)
 
     def _open_nsq_scene_from_path(self, filepath: str) -> None:
-        """Load a multi-axis system (``.olsys``) into the Non-Sequential panel."""
+        """Load a multi-axis system (``.olsys``) into the System view."""
         self._remember_dialog_path("Paths/LastOpenDir", filepath)
         self._remember_recent_file(filepath)
         try:
@@ -607,7 +607,7 @@ class MainWindow(FramelessWindow):
             return
         self.focus_dock_widget(self.panel_manager.nsq_dock)
         self.toast_manager.notify(
-            f"Opened non-sequential scene — {os.path.basename(filepath)}",
+            f"Opened multi-axis system — {os.path.basename(filepath)}",
             "info",
         )
         logger.debug("Open non-sequential scene: %s", filepath)

@@ -201,5 +201,5 @@ Effect:
 
 How to use it:
 - `python tools/merge_optic_paths.py --imaging A.json --illumination B.json --fold-imaging 7 --fold-illumination 12 --out merged.olsys --trace 60000 --report report.md --plots plots/`
-- open `merged.olsys` via File -> Open (routed to the Non-Sequential panel), projection XZ
+- open `merged.olsys` via File -> Open (routed to the System view), projection XZ; pick a path in the *Path* pull-down or click an element to edit it in the Lens Data Editor
 - `from optiland.nonsequential.fold import fold_paths, trace_per_source`

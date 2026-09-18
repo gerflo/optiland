@@ -211,8 +211,8 @@ class FileService:
         """
         if is_nsq_scene_file(filepath):
             self._toast(
-                "This is a multi-axis (non-sequential) system, not an optical "
-                "system. Open it from the Non-Sequential panel (Open...).",
+                "This is a multi-axis system, not an optical "
+                "system. Open it in the System view (Open...).",
                 "error",
                 sub=filepath,
             )

@@ -52,6 +52,11 @@ def _parse_args() -> argparse.Namespace:
         ".olsys multi-axis system routed to the Non-Sequential panel).",
     )
     parser.add_argument(
+        "--path",
+        default=None,
+        help="Activate this optical path of the opened system before grabbing.",
+    )
+    parser.add_argument(
         "--trace", action="store_true", help="Run a non-sequential trace first."
     )
     parser.add_argument("--rays", type=int, default=20_000, help="Rays to trace.")
@@ -142,6 +147,7 @@ def main() -> int:
             "design": manager.lens_editor_dock,
             "analysis": manager.analysis_dock,
             "nonsequential": manager.nsq_dock,
+            "system": manager.nsq_dock,
             "optimization": manager.optimization_dock,
             "catalogs": manager.catalog_browser_dock,
             "scripts": manager.terminal_dock,
@@ -163,6 +169,9 @@ def main() -> int:
             nsq_panel.scene_combo.setCurrentIndex(index)
             nsq_panel.service.load_sample(args.scene)
     nsq_panel.projection_combo.setCurrentText(args.projection.upper())
+    if args.path:
+        nsq_panel.activate_path(args.path)
+        _settle(app, args.settle_ms)
     if args.trace:
         nsq_panel.rays_spin.setValue(args.rays)
         nsq_panel.split_spin.setValue(args.split_depth)
@@ -181,6 +190,8 @@ def main() -> int:
         _raise_dock(app, window, target, args.settle_ms)
         _grab(subject, output)
 
+    # Never block on the "save changes?" prompt: nothing here is worth saving.
+    window.connector.mark_current_state_clean()
     window.close()
     return 0
 
