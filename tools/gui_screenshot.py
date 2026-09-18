@@ -46,6 +46,12 @@ def _parse_args() -> argparse.Namespace:
         "or a path to a scene file (.olsys or NSQ JSON).",
     )
     parser.add_argument(
+        "--open",
+        default=None,
+        help="Open this file the way File -> Open does (an optical system, or a "
+        ".olsys multi-axis system routed to the Non-Sequential panel).",
+    )
+    parser.add_argument(
         "--trace", action="store_true", help="Run a non-sequential trace first."
     )
     parser.add_argument("--rays", type=int, default=20_000, help="Rays to trace.")
@@ -144,6 +150,9 @@ def main() -> int:
         _settle(app, args.settle_ms)
 
     nsq_panel = manager.nsq_panel
+    if args.open:
+        window._open_system_from_path(os.path.abspath(args.open))
+        _settle(app, args.settle_ms)
     if args.scene:
         if os.path.isfile(args.scene):
             nsq_panel.service.load_file(args.scene)
