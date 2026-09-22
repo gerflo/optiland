@@ -813,9 +813,10 @@ class NSQPanel(QWidget):
                 extent=extent,
                 aspect="equal",
             )
-            self.detector_figure.colorbar(
-                image, ax=ax, label="W/mm²", fraction=0.046, pad=0.03
-            )
+            # The colour bar hangs on the map, next to its equal-aspect box;
+            # colorbar(ax=ax) would anchor the map to its cell's right edge.
+            cax = ax.inset_axes([1.04, 0.0, 0.05, 1.0])
+            self.detector_figure.colorbar(image, cax=cax, label="W/mm²")
             ax.set_xlabel("x [mm]")
             ax.set_ylabel("y [mm]")
             ax.set_title(

@@ -211,6 +211,32 @@ class TestNSQPanel:
         assert np.mean(ax.get_xlim()) == pytest.approx(np.mean(view[0]))
         assert np.mean(ax.get_ylim()) == pytest.approx(np.mean(view[1]))
 
+    def test_detector_maps_stay_centred_on_a_flat_canvas(self, panel):
+        """O5: on a flat Detectors tab (690 x 140 px) each map was pushed to
+        the right edge of its cell, because ``colorbar(ax=ax)`` re-anchors
+        the equal-aspect map there, and the right title ran off the figure."""
+        panel.rays_spin.setValue(1000)
+        panel.run_trace_sync()
+        figure = panel.detector_figure
+        figure.set_size_inches(690 / figure.dpi, 140 / figure.dpi)
+        panel.detector_canvas.draw()
+
+        renderer = panel.detector_canvas.get_renderer()
+        maps = [ax for ax in figure.axes if ax.get_images()]
+        assert len(maps) == 2
+        for ax in maps:
+            box, cell = ax.get_position(), ax.get_position(original=True)
+            # Centred in its layout cell and as tall as the cell allows.
+            assert (box.x0 + box.x1) / 2 == pytest.approx((cell.x0 + cell.x1) / 2)
+            assert box.height == pytest.approx(cell.height, rel=0.02)
+            # The colour bar sits right next to the map.
+            (cax,) = ax.child_axes
+            gap = cax.get_position().x0 - box.x1
+            assert 0.0 < gap < 0.05
+            title = ax.title.get_window_extent(renderer)
+            assert title.x0 >= 0.0
+            assert title.x1 <= figure.bbox.width
+
     def test_title_stays_inside_after_the_canvas_shrinks(self, panel):
         """A dock made shorter after the first draw must not clip the title."""
         panel.layout_figure.set_size_inches(8, 6)
