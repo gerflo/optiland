@@ -713,11 +713,13 @@ class NSQPanel(QWidget):
         self._fill_summary()
 
     def _draw_layout(self, preserve_view: bool = True) -> None:
+        from optiland.analysis.base import EqualAspectAxes  # noqa: PLC0415
         from optiland.nonsequential.visualization import NSQViewer2D  # noqa: PLC0415
 
         gui_plot_utils.apply_gui_matplotlib_styles(theme=self.current_theme)
         self.layout_figure.clear()
-        ax = self.layout_figure.add_subplot(111)
+        # Equal scale also for limits a zoom or pan fixed, without warnings.
+        ax = self.layout_figure.add_subplot(111, axes_class=EqualAspectAxes)
         scene = self.service.scene
         if scene is None:
             _placeholder(ax, "No system loaded")

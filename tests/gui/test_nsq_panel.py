@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import warnings
 from unittest.mock import MagicMock
@@ -183,6 +184,32 @@ class TestNSQPanel:
         assert box.width == pytest.approx(full.width, rel=0.02)
         assert box.height == pytest.approx(full.height, rel=0.02)
         assert ax.get_aspect() == 1.0
+
+    def test_zoomed_view_redraws_without_aspect_warnings(self, panel, caplog):
+        """O2: a zoom or pan fixes the limits, and every redraw of the
+        equal-scale layout logged "Ignoring fixed y limits to fulfill fixed
+        data aspect with adjustable data limits"."""
+        panel.layout_figure.set_size_inches(10, 5)
+        panel.layout_canvas.draw()
+        ax = panel.layout_figure.axes[0]
+        (x0, x1), (y0, y1) = ax.get_xlim(), ax.get_ylim()
+        ax.set_xlim(x0 + 0.2 * (x1 - x0), x1 - 0.2 * (x1 - x0))
+        ax.set_ylim(y0 + 0.1 * (y1 - y0), y1 - 0.3 * (y1 - y0))
+
+        with caplog.at_level(logging.WARNING, logger="matplotlib"):
+            panel.layout_canvas.draw()
+            panel.navigation.remember_view(ax)
+            view = panel.navigation._view
+            panel._draw_layout(preserve_view=True)
+            panel.layout_canvas.draw()
+
+        assert [r.getMessage() for r in caplog.records] == []
+        ax = panel.layout_figure.axes[0]
+        box, full = ax.get_position(), ax.get_position(original=True)
+        assert box.width == pytest.approx(full.width, rel=0.02)
+        assert box.height == pytest.approx(full.height, rel=0.02)
+        assert np.mean(ax.get_xlim()) == pytest.approx(np.mean(view[0]))
+        assert np.mean(ax.get_ylim()) == pytest.approx(np.mean(view[1]))
 
     def test_title_stays_inside_after_the_canvas_shrinks(self, panel):
         """A dock made shorter after the first draw must not clip the title."""

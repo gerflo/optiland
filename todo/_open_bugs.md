@@ -29,12 +29,6 @@ nachgesehen, **gelesen** = nur aus einem Bericht, vor dem Fix reproduzieren.
 
 ## Offen
 
-### O2 – System-Tab: Matplotlib-Warnung „Ignoring fixed x/y limits…“ bei jedem Neuzeichnen nach Zoom/Pan
-- **Gefunden:** 2026-09-22 (GUI-Log 16:04:51–16:04:53, vier Warnungen `matplotlib.axes._base: Ignoring fixed y limits to fulfill fixed data aspect with adjustable data limits.`) · **Status:** ausgeführt
-- **Ort:** `optiland_gui/nsq_panel.py`, `NSQPanel._draw_layout` (Zeile ~742, `ax.set_aspect("equal", adjustable="datalim")`); `optiland_gui/widgets/plot_navigation.py` (`restore_view`, `on_scroll`, Pan über `drag_pan` setzen feste Grenzen)
-- **Befund:** Die Achse des System-Tabs hat `adjustable="datalim"`; sobald Zoom, Pan oder `restore_view` feste Grenzen setzen (Autoscale aus), protokolliert Matplotlib bei jedem `apply_aspect` die Warnung. Nachvollzogen mit einem Skript (NSQPanel, Beispielszene, Grenzen setzen, `remember_view`, `_draw_layout(preserve_view=True)`): 2 Warnungen beim Zeichnen nach dem Zoom, 3 beim Neuzeichnen mit wiederhergestellter Ansicht. Die Analyseplots haben dasselbe Problem schon gelöst: `EqualAspectAxes` in `optiland/analysis/base.py` schaltet Autoscale während `apply_aspect` kurz ein, genau um diese Warnung zu vermeiden. Der System-Tab nutzt die Klasse nicht. Die Darstellung selbst stimmt; das Log füllt sich bei jeder Interaktion mit Rauschen, das echte Fehler verdeckt.
-- **Behandlung:** In `_draw_layout` die Achse mit `self.layout_figure.add_subplot(111, axes_class=EqualAspectAxes)` anlegen (DRY, kein zweiter Mechanismus); das `ax.set_aspect("equal")` in `NSQViewer2D.view` (`optiland/nonsequential/visualization/viewer_2d.py:167`) lässt `adjustable` unverändert, die Zeile ~742 im Panel bleibt als Absicherung. Regressionstest in `tests/gui/test_nsq_panel.py`: Grenzen setzen, `remember_view`, `_draw_layout(preserve_view=True)`, `canvas.draw()`, kein Log-Eintrag von `matplotlib.axes._base` (`caplog`), die Achse füllt weiter die ganze Fläche (Regel „Plots füllen den verfügbaren Platz“), Ansicht bleibt erhalten.
-
 ### O3 – Nach fehlgeschlagenem Rebuild wird eine veraltete NSQ-Szene ohne Hinweis gespeichert und beim Öffnen gezeigt
 - **Gefunden:** 2026-09-22 (GUI-Log: vier gescheiterte Rebuilds 15:52–15:53 (O1, inzwischen behoben), danach 15:54:35 „Saved — RCR-27 Beleuchtung - Asphericon OL.olsys“) · **Status:** geprüft
 - **Ort:** `optiland_gui/services/nsq_service.py`, `sync_active_path` (Zeile ~323) und `load_file` (Zeile ~399); `optiland/nonsequential/system.py`, `MultiAxisSystem.from_dict` / `to_json`
