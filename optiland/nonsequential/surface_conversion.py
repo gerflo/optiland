@@ -58,6 +58,27 @@ if TYPE_CHECKING:
 SOURCE_CONE_MARGIN = 1.15
 #: Smallest cone an aimed source emits into [deg].
 MIN_SOURCE_CONE_DEG = 1.0
+#: Registry-name ending of a ring aperture's blocking centre disk.
+OBSCURATION_SUFFIX = ".obscuration"
+#: Registry-name ending of a mask stop's blocking disk or ring.
+MASK_SUFFIX = ".mask"
+
+
+def is_blocking_absorber(name: str) -> bool:
+    """Whether a registry name is a converted mask or ring-aperture centre.
+
+    Those absorbers stand for the zone a surface aperture blocks inside its
+    clear edge; the viewers draw them in the mask colour of the sequential
+    layouts (``MASK_COLOR``), not like rims.
+
+    Args:
+        name: Registry name of a scene component.
+
+    Returns:
+        True for names ending in :data:`MASK_SUFFIX` or
+        :data:`OBSCURATION_SUFFIX`.
+    """
+    return name.endswith((MASK_SUFFIX, OBSCURATION_SUFFIX))
 
 
 @dataclass
@@ -496,7 +517,7 @@ def add_optic_surfaces(
         )
         report.baffles.append(rim_name)
         if aperture.r_min > 0.0:
-            disk_name = f"{name}.obscuration"
+            disk_name = f"{name}{OBSCURATION_SUFFIX}"
             scene.add_component(
                 disk_name,
                 AbsorbingComponent(
@@ -519,7 +540,7 @@ def add_optic_surfaces(
                 )
             else:
                 mask_geometry = FinitePlaneGeometry(aperture_radius=outer_blocked)
-            mask_name = f"{name}.mask"
+            mask_name = f"{name}{MASK_SUFFIX}"
             scene.add_component(
                 mask_name,
                 AbsorbingComponent(

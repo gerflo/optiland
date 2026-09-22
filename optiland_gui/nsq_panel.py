@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from optiland.nonsequential.surface_conversion import is_blocking_absorber
 from optiland.optic import Optic
 
 from . import __version__, gui_plot_utils
@@ -777,7 +778,8 @@ class NSQPanel(QWidget):
                 artist.set_zorder(artist.get_zorder() + 1)
                 if hasattr(artist, "set_linewidth"):
                     artist.set_linewidth(3.0)
-                if hasattr(artist, "set_color"):
+                # Masks keep their red; it tells them apart from rims.
+                if hasattr(artist, "set_color") and not is_blocking_absorber(label):
                     artist.set_color(color)
             else:
                 artist.set_alpha(_DIM_ALPHA)

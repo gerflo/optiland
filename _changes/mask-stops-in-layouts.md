@@ -17,10 +17,11 @@ Branch: `master`
 - a mask stop is visible in the 2D and 3D layout as the element that blocks light, in red, while the aperture stop stays purple
 - masks show by default even when the aperture markers are switched off (the 2D default)
 - the blocked centre of a ring aperture is red like a mask's blocking disk, no longer pink
-- the System tab (multi-axis system): since the O1 fix the conversion into the non-sequential scene builds a mask's blocking disk or ring as an absorber (`S<i>.mask`), so the NSQ trace is dimmed correctly; it is still drawn grey like any absorber, not red (O4)
+- the System tab (multi-axis system): since the O1 fix the conversion into the non-sequential scene builds a mask's blocking disk or ring as an absorber (`S<i>.mask`), so the NSQ trace is dimmed correctly; since the O4 fix these absorbers and a ring aperture's centre disk (`S<i>.obscuration`) are drawn red in the System tab too (2D and 3D renderers, recognised by `is_blocking_absorber` from the registry name), and the active-path highlight thickens them but keeps the red
 
 ## Tests
 
 - `tests/visualization/system/test_mask_stops.py` (NumPy and PyTorch) -- which apertures count as masks; 2D red edge and bar, ring bars in YZ and XZ, bar following a curved lens surface, mask on the stop, switch combinations; 3D red disk and ring, disk on the curved surface, annular disk, switch combinations; ring apertures: 2D red bar over the blocked centre with the purple clear edge, mask switch, 3D red disk on the curved surface beside the edge ring
 - `tests/gui/test_viewer_mask_stops.py` -- masks drawn with the aperture markers off, *Show Masks* hides them and is remembered, a click on the mask bar picks its row, the 3D *Masks* box and `render_optic(show_masks=...)` reach the system plotter
 - `tests/gui/test_viewer_panel.py` -- the coupled 3D render now passes `show_masks`
+- `tests/nonsequential/test_nsq_surface_rendering.py` (2D, 3D) and `tests/gui/test_nsq_panel.py` -- System tab: mask and ring-centre absorbers red, rims not, red kept in the active path (O4)

@@ -151,7 +151,16 @@ def _local_profile(geometry, axis: int) -> np.ndarray | None:
     return pts
 
 
-def _color(component: BaseComponent, theme) -> object:
+def _color(component: BaseComponent, theme, name: str = "") -> object:
+    from optiland.nonsequential.surface_conversion import (  # noqa: PLC0415
+        is_blocking_absorber,
+    )
+
+    if is_blocking_absorber(name):
+        # A mask stop or ring-aperture centre: red as in the 2D/3D layout.
+        from optiland.visualization.system.system import MASK_COLOR  # noqa: PLC0415
+
+        return MASK_COLOR
     color = _KIND_COLORS.get(_component_kind(component), (0.5, 0.5, 0.5))
     if theme is not None and _component_kind(component) != "refractive":
         color = theme.parameters.get("axes.edgecolor", color)
@@ -200,7 +209,7 @@ class SurfaceRenderer2D(ComponentRenderer2D):
         ax.plot(
             pts_global[:, h_idx],
             pts_global[:, v_idx],
-            color=_color(surface, theme),
+            color=_color(surface, theme, component.name),
             linewidth=2.0,
             zorder=3,
             label=component.name,
@@ -274,8 +283,9 @@ class SurfaceRenderer3D(ComponentRenderer3D):
                 pts_global[:, 0], pts_global[:, 1], pts_global[:, 2]
             )
 
-        color = _KIND_COLORS.get(_component_kind(surface), (0.5, 0.5, 0.5))
+        from matplotlib.colors import to_rgb  # noqa: PLC0415
+
         prop = actor.GetProperty()
-        prop.SetColor(*color)
+        prop.SetColor(*to_rgb(_color(surface, None, component.name)))
         prop.SetOpacity(0.6 if _component_kind(surface) == "refractive" else 1.0)
         renderer.AddActor(actor)

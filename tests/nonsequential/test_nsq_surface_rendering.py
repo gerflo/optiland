@@ -49,6 +49,46 @@ def _labelled_lines(ax) -> dict[str, list]:
     return lines
 
 
+def masked_optic():
+    """A Circular Mask stop (S1, blocks r < 2) and a ring aperture (S2,
+    clear 1.5 < r < 6) in a collimated beam, both air-to-air."""
+    from optiland.optic import Optic
+    from optiland.physical_apertures import (
+        DifferenceAperture,
+        RadialAperture,
+        RectangularAperture,
+    )
+
+    optic = Optic()
+    optic.add_surface(index=0, thickness=np.inf)
+    optic.add_surface(
+        index=1,
+        thickness=5.0,
+        is_stop=True,
+        aperture=DifferenceAperture(
+            RadialAperture(r_max=6.0), RadialAperture(r_max=2.0)
+        ),
+    )
+    optic.add_surface(
+        index=2, thickness=5.0, aperture=RadialAperture(r_max=6.0, r_min=1.5)
+    )
+    optic.add_surface(index=3, aperture=RectangularAperture(-6.0, 6.0, -6.0, 6.0))
+    optic.set_aperture(aperture_type="EPD", value=10.0)
+    optic.fields.set_type("angle")
+    optic.fields.add(y=0.0)
+    optic.wavelengths.add(value=0.55, is_primary=True)
+    return optic
+
+
+def _masked_scene():
+    from optiland.nonsequential import NSQScene
+    from optiland.nonsequential.surface_conversion import add_optic_surfaces
+
+    scene = NSQScene()
+    add_optic_surfaces(scene, masked_optic())
+    return scene
+
+
 class TestSurfaceRenderer2D:
     def test_splitter_plate_is_drawn_where_it_sits(self):
         scene = beam_splitter_scene(splitter_radius=5.0)
@@ -105,6 +145,22 @@ class TestSurfaceRenderer2D:
         fig, ax = NSQViewer2D(scene).view(result, num_rays=20, projection="XZ")
         assert len(ax.get_lines()) > 20
 
+    def test_masks_are_red_like_in_the_sequential_layout(self):
+        """O4: the blocking disk of a mask stop and the blocked centre of a
+        ring aperture were drawn in the grey of every rim."""
+        from matplotlib.colors import same_color
+
+        from optiland.visualization.system.system import MASK_COLOR
+
+        fig, ax = NSQViewer2D(_masked_scene()).view(num_rays=0, projection="YZ")
+        lines = _labelled_lines(ax)
+        for name in ("S1.mask", "S2.obscuration"):
+            (line,) = lines[name]
+            assert same_color(line.get_color(), MASK_COLOR), name
+        for name in ("S1.rim", "S2.rim"):
+            (line,) = lines[name]
+            assert not same_color(line.get_color(), MASK_COLOR), name
+
 
 @pytest.mark.skipif(
     pytest.importorskip("importlib.util").find_spec("vtk") is None,
@@ -130,3 +186,24 @@ class TestSurfaceRenderer3D:
         for source in scene.sources:
             SourceRenderer3D().render(source, renderer, scene=scene)
         assert renderer.GetActors().GetNumberOfItems() == 1 + len(scene.sources)
+
+    def test_masks_are_red_like_in_the_sequential_layout(self):
+        """O4: mask and ring-aperture centre absorbers in the mask colour."""
+        import vtk
+        from matplotlib.colors import to_rgb
+
+        from optiland.nonsequential.visualization.renderers.surface import (
+            SurfaceRenderer3D,
+        )
+        from optiland.visualization.system.system import MASK_COLOR
+
+        scene = _masked_scene()
+        colors = {}
+        for name in ("S1.mask", "S2.obscuration", "S1.rim"):
+            renderer = vtk.vtkRenderer()
+            SurfaceRenderer3D().render(scene.component_registry.get(name), renderer)
+            actor = renderer.GetActors().GetLastActor()
+            colors[name] = tuple(actor.GetProperty().GetColor())
+        assert colors["S1.mask"] == pytest.approx(to_rgb(MASK_COLOR))
+        assert colors["S2.obscuration"] == pytest.approx(to_rgb(MASK_COLOR))
+        assert colors["S1.rim"] != pytest.approx(to_rgb(MASK_COLOR))

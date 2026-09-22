@@ -237,6 +237,29 @@ class TestNSQPanel:
             assert title.x0 >= 0.0
             assert title.x1 <= figure.bbox.width
 
+    def test_masks_stay_red_in_the_active_path(self, panel):
+        """O4: masks are red in the System view like in the 2D/3D layout;
+        highlighting the active path thickens them but keeps the colour."""
+        from matplotlib.colors import same_color
+
+        from optiland.nonsequential.system import MultiAxisSystem
+        from optiland.visualization.system.system import MASK_COLOR
+        from tests.nonsequential.test_nsq_surface_rendering import masked_optic
+
+        system = MultiAxisSystem.from_optic(masked_optic(), "Masked")
+        panel.service.set_system(system, "masked")
+        panel.activate_path("Masked")
+        assert panel.service.active_path == "Masked"
+
+        lines = {
+            line.get_label(): line for line in panel.layout_figure.axes[0].get_lines()
+        }
+        for name in ("S1.mask", "S2.obscuration"):
+            assert same_color(lines[name].get_color(), MASK_COLOR), name
+            assert lines[name].get_linewidth() == 3.0
+        assert not same_color(lines["S1.rim"].get_color(), MASK_COLOR)
+        assert lines["S1.rim"].get_linewidth() == 3.0
+
     def test_title_stays_inside_after_the_canvas_shrinks(self, panel):
         """A dock made shorter after the first draw must not clip the title."""
         panel.layout_figure.set_size_inches(8, 6)
