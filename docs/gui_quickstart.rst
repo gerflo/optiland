@@ -52,7 +52,7 @@ When you first open the Optiland GUI, you'll see a main window containing severa
    :align: center
 
 *   **Main Window**: Contains the main menu bar (File, Edit, View, Tools, Help), toolbars for quick actions, and manages the different panels.
-*   **Lens Data Editor**: This is where you view and modify the surface-by-surface data of your optical system, such as radius, thickness, material, conic constants, and semi-diameters. Changes made here are reflected in other panels.
+*   **Lens Data Editor**: This is where you view and modify the surface-by-surface data of your optical system, such as radius, thickness, material, conic constants, and semi-diameters. Changes made here are reflected in other panels. The thickness of the object row is the object distance; type ``inf`` for an object at infinity. A disabled surface is left out of the drawn and traced system while every other surface keeps its place.
 
     .. image:: _static/gui_lens_data_editor.png
        :alt: Viewer Panel (2D/3D)
@@ -87,6 +87,7 @@ When you first open the Optiland GUI, you'll see a main window containing severa
     *   **Aperture**: Define the system aperture (e.g., Entrance Pupil Diameter, F-number).
     *   **Fields**: Set up field points for analysis.
     *   **Wavelengths**: Define the wavelengths and their weights for calculations.
+    *   **Layout**: *Z origin* chooses where z = 0 lies on the z axis of the 2D layout and in its cursor readout: at surface 1 (Optiland's convention, a finite object sits at z = -object distance) or at the object, e.g. the light source of an illumination path. Only the displayed coordinate changes; the setting is saved with the design. An object at infinity always uses surface 1.
 
     .. image:: _static/gui_system_properties.png
        :alt: System Properties Panel

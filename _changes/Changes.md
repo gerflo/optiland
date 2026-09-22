@@ -221,3 +221,15 @@ How to use it:
 - sidebar *System* (or `iface.show_nsq_panel()`) shows the System tab, or raises its window when detached
 - click the small window button next to a tab title to detach it; close the window to dock it again
 - *Save Current Layout* stores the detached windows; *Dock All Windows* / *Reset Window Layout* dock every tab
+
+## 19. Object Distance and Layout Z Origin
+Commits: on `master` (`8f1dd370` and the z-origin commit after it)
+
+Effect:
+- the object row's Thickness (the object distance) is editable in the Lens Data Editor; `inf` puts the object at infinity
+- disabling surface 1 no longer drops its gap: the object keeps its distance to the next surface in the drawn/traced system
+- System Properties > Layout > *Z origin*: the 2D layout's z axis and cursor readout count from surface 1 (default) or from the object; saved per design in the `gui` block (`layout_z_origin`), undoable
+
+How to use it:
+- type the object distance into the Thickness cell of row 0
+- choose *Object* under System Properties > Layout to see z measured from the light source

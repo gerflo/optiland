@@ -10,6 +10,10 @@ Found with the user's illumination design (LED ring -> ring stop 0.1 mm
     LED-to-diffuser distance shrank from 1.0 to 0.9 mm). Its thickness
     was added to the object's ``thickness`` attribute, which does not
     place the object (and reads 0 for a file-loaded finite object).
+
+The same design asked for a z axis counted from the light source: System
+Properties > Layout > Z origin chooses surface 1 (Optiland's convention)
+or the object; only the 2D layout's labels and cursor readout move.
 """
 
 from __future__ import annotations
@@ -187,3 +191,156 @@ def test_the_object_can_be_moved_to_infinity(editor, connector) -> None:
 
     assert _z(connector.get_optic())[0] == -float("inf")
     assert _object_item(editor, connector.COL_THICKNESS).text() == "inf"
+
+
+# ---------------------------------------------------------------------------
+# Z origin of the layout: surface 1 (Optiland) or the object
+# ---------------------------------------------------------------------------
+
+
+def test_the_default_origin_is_surface_1(connector) -> None:
+    assert connector.get_layout_z_origin() == connector.Z_ORIGIN_SURFACE_1
+    assert connector.layout_z_offset() == 0.0
+
+
+def test_the_object_origin_shifts_by_the_object_distance(connector) -> None:
+    assert connector.set_layout_z_origin(connector.Z_ORIGIN_OBJECT)
+
+    assert connector.layout_z_offset() == pytest.approx(0.9)
+    # Display only: the geometry keeps surface 1 at z = 0.
+    assert _z(connector.get_optic())[1] == pytest.approx(0.0)
+
+
+def test_the_offset_follows_the_drawn_optic(connector) -> None:
+    connector.set_layout_z_origin(connector.Z_ORIGIN_OBJECT)
+    connector.set_surface_disabled(1, True)
+
+    # Drawn: the diffuser is surface 1, 1.0 mm from the object.
+    assert connector.layout_z_offset() == pytest.approx(1.0)
+
+
+def test_an_object_at_infinity_keeps_surface_1_as_origin(connector) -> None:
+    connector.set_layout_z_origin(connector.Z_ORIGIN_OBJECT)
+    connector.get_optic().fields.set_type("angle")
+    connector.get_optic().updater.set_thickness(be.inf, 0)
+
+    assert connector.layout_z_offset() == 0.0
+
+
+def test_an_unknown_origin_is_refused(connector) -> None:
+    with pytest.raises(ValueError):
+        connector.set_layout_z_origin("image")
+
+
+def test_the_origin_is_an_undoable_design_edit(connector) -> None:
+    connector.mark_current_state_clean()
+
+    connector.set_layout_z_origin(connector.Z_ORIGIN_OBJECT)
+    assert connector.has_unsaved_changes()
+
+    connector.undo()
+    assert connector.get_layout_z_origin() == connector.Z_ORIGIN_SURFACE_1
+    connector.redo()
+    assert connector.get_layout_z_origin() == connector.Z_ORIGIN_OBJECT
+
+
+def test_the_origin_is_saved_with_the_design(connector, tmp_path) -> None:
+    import json
+
+    plain = tmp_path / "plain.json"
+    connector.save_optic_to_file(str(plain))
+    # Designs that never touch the setting are saved as before.
+    assert "layout_z_origin" not in json.loads(plain.read_text("utf-8"))["gui"]
+
+    connector.set_layout_z_origin(connector.Z_ORIGIN_OBJECT)
+    path = tmp_path / "from_object.json"
+    connector.save_optic_to_file(str(path))
+    assert json.loads(path.read_text("utf-8"))["gui"]["layout_z_origin"] == "object"
+
+    connector.load_optic_from_file(str(plain))
+    assert connector.get_layout_z_origin() == connector.Z_ORIGIN_SURFACE_1
+    connector.load_optic_from_file(str(path))
+    assert connector.get_layout_z_origin() == connector.Z_ORIGIN_OBJECT
+
+
+def test_a_new_design_starts_from_surface_1(connector) -> None:
+    connector.set_layout_z_origin(connector.Z_ORIGIN_OBJECT)
+
+    connector.load_optic_from_object(_ring_source_optic())
+
+    assert connector.get_layout_z_origin() == connector.Z_ORIGIN_SURFACE_1
+
+
+class _ViewerSettings(_DefaultSettings):
+    def value(self, _key: str, default=None, *, type=None):  # noqa: A002, ANN001
+        if type is bool:
+            return bool(default)
+        if type is int:
+            return int(default)
+        return default
+
+
+@pytest.fixture()
+def viewer(connector, monkeypatch):
+    from optiland_gui.viewer_panel import ViewerPanel
+
+    monkeypatch.setattr("optiland_gui.viewer_panel.QSettings", _ViewerSettings)
+    monkeypatch.setattr(ViewerPanel, "_render_3d_now", lambda self: None)
+    panel = ViewerPanel(connector)
+    panel.resize(900, 600)
+    yield panel.viewer2D
+    panel.close()
+
+
+def test_the_layout_counts_z_from_the_object(viewer, connector) -> None:
+    connector.set_layout_z_origin(connector.Z_ORIGIN_OBJECT)
+    viewer._plot_optic_sync()
+    axis = viewer.ax.xaxis
+
+    # The object (drawn at z = -0.9) is labelled 0; surface 1 is at 0.9.
+    assert axis.get_major_formatter()(-0.9) == "0"
+    assert axis.get_major_formatter()(0.0) == "0.9"
+    # Ticks fall on round shown values.
+    shown = [round(t + 0.9, 6) for t in axis.get_major_locator()()]
+    step = shown[1] - shown[0]
+    assert all(abs(v / step - round(v / step)) < 1e-6 for v in shown)
+    assert "object" in viewer.ax.get_xlabel()
+
+
+def test_the_cursor_readout_counts_from_the_object(viewer, connector) -> None:
+    from types import SimpleNamespace
+
+    connector.set_layout_z_origin(connector.Z_ORIGIN_OBJECT)
+    viewer._plot_optic_sync()
+    event = SimpleNamespace(inaxes=viewer.ax, x=10, y=10, xdata=-0.9, ydata=1.0)
+
+    viewer.on_mouse_move_on_plot(event)
+
+    assert viewer.cursor_coord_label.text() == "(Z, Y) = (0.000, 1.000)"
+
+
+def test_surface_1_as_origin_keeps_the_default_axis(viewer, connector) -> None:
+    viewer._plot_optic_sync()
+
+    assert viewer._z_offset == 0.0
+    assert viewer.ax.get_xlabel() == "Z-axis (mm)"
+
+
+def test_the_system_properties_choose_the_origin(connector) -> None:
+    from optiland_gui.system_properties_panel import SystemPropertiesPanel
+
+    panel = SystemPropertiesPanel(connector)
+    editor = panel.layoutEditor
+    names = [
+        panel.navTree.topLevelItem(i).text(0)
+        for i in range(panel.navTree.topLevelItemCount())
+    ]
+    assert "Layout" in names
+
+    editor.cmbZOrigin.setCurrentIndex(1)
+    editor.cmbZOrigin.activated.emit(1)
+    assert connector.get_layout_z_origin() == connector.Z_ORIGIN_OBJECT
+
+    connector.undo()  # the editor follows the design
+    assert editor.cmbZOrigin.currentIndex() == 0
+    panel.close()

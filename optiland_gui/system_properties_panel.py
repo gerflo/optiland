@@ -92,33 +92,33 @@ _APERTURE_DESCRIPTIONS: dict[str, str] = {
 _FIELD_TYPE_DESCRIPTIONS: dict[str, str] = {
     "Angle": (
         "Each field point is specified by the angle (in degrees) between the incoming "
-        "chief ray and the optical axis. This is the natural choice for systems viewing "
-        "distant or infinite objects — cameras, telescopes, and collimated-beam "
+        "chief ray and the optical axis. This is the natural choice for systems viewing"
+        " distant or infinite objects — cameras, telescopes, and collimated-beam "
         "instruments — where you know the angular field of view (e.g. ±5°). Cannot be "
         "used when the object space is telecentric (chief rays must be parallel to the "
         "axis)."
     ),
     "Object Height": (
         "Each field point is specified by its physical distance (mm) from the optical "
-        "axis at the object plane. Use this for finite-conjugate systems — microscopes, "
-        "scanners, and machine-vision cameras — where you know the physical size of the "
-        "object being imaged. Only valid when the object is at a finite (not infinite) "
-        "distance."
+        "axis at the object plane. Use this for finite-conjugate systems — microscopes,"
+        " scanners, and machine-vision cameras — where you know the physical size of "
+        "the object being imaged. Only valid when the object is at a finite (not "
+        "infinite) distance."
     ),
     "Paraxial Image Height": (
         "Each field point is specified by its desired height at the image plane, "
         "estimated using first-order (paraxial) optics. The system works backwards to "
-        "find the object position that produces the target image height. Practical when "
-        "you know your sensor size and want to fill it predictably. Faster than Real "
+        "find the object position that produces the target image height. Practical when"
+        " you know your sensor size and want to fill it predictably. Faster than Real "
         "Image Height; accurate enough when distortion is small."
     ),
     "Real Image Height": (
         "Each field point is specified by the actual chief-ray height at the image "
-        "plane, verified by real ray tracing. The system iteratively adjusts the object "
-        "position until a traced ray lands at exactly the specified height. Use this "
+        "plane, verified by real ray tracing. The system iteratively adjusts the object"
+        " position until a traced ray lands at exactly the specified height. Use this "
         "when your design has significant distortion — wide-angle or fisheye lenses — "
-        "and field positions must match actual image locations rather than the paraxial "
-        "prediction. More accurate, but slower to compute."
+        "and field positions must match actual image locations rather than the paraxial"
+        " prediction. More accurate, but slower to compute."
     ),
 }
 
@@ -132,9 +132,9 @@ _POLARIZATION_DESCRIPTIONS: dict[str, str] = {
     ),
     "Unpolarized": (
         "Light is modelled as unpolarized — a statistical mixture of all polarization "
-        "orientations with equal probability. The simulation averages "
-        "polarization-dependent effects, so coating reflections and losses are "
-        "computed realistically. Use this when your source has no preferred polarization "
+        "orientations with equal probability. The simulation averages polarization-"
+        "dependent effects, so coating reflections and losses are computed "
+        "realistically. Use this when your source has no preferred polarization "
         "direction, such as an LED, lamp, or natural light, and you want to check how "
         "coatings affect overall throughput."
     ),
@@ -152,25 +152,42 @@ _RAY_AIMING_DESCRIPTIONS: dict[str, str] = {
         "Rays are aimed through the entrance pupil using a fast first-order "
         "approximation: pupil position and size are estimated from a single paraxial "
         "trace and ray starting conditions are scaled accordingly. This works well for "
-        "most standard imaging systems. It can fail for ring apertures (annular stops), "
-        "very wide fields, or pupils that differ significantly from the paraxial "
+        "most standard imaging systems. It can fail for ring apertures (annular stops),"
+        " very wide fields, or pupils that differ significantly from the paraxial "
         "estimate — try Iterative or Robust in those cases."
     ),
     "Iterative": (
         "Rays are aimed by iteratively adjusting their starting conditions until they "
         "actually pass through the correct position on the aperture stop, verified by "
         "real ray tracing. More accurate than Paraxial because real rays are used "
-        "rather than a linear approximation. Works well for annular pupils, ring stops, "
-        "and moderately complex systems. If some rays still fail to converge, try "
+        "rather than a linear approximation. Works well for annular pupils, ring stops,"
+        " and moderately complex systems. If some rays still fail to converge, try "
         "Robust mode."
     ),
     "Robust": (
         "The most reliable ray aiming mode. Starting from the paraxial solution, rays "
         "are guided toward the real solution in small incremental steps (homotopy "
         "continuation), enabling convergence even for severely distorted pupils or "
-        "strongly oblique fields where direct iteration fails. Best for very wide-angle "
-        "lenses, telecentric designs, or any system where Iterative mode gives "
+        "strongly oblique fields where direct iteration fails. Best for very wide-angle"
+        " lenses, telecentric designs, or any system where Iterative mode gives "
         "incomplete results. Slowest of the three options."
+    ),
+}
+
+
+_Z_ORIGIN_DESCRIPTIONS: dict[str, str] = {
+    "surface_1": (
+        "Optiland's convention: the first surface after the object lies at "
+        "z = 0, and a finite object sits at z = -(object distance). The "
+        "z axis of the 2D layout and its cursor readout count from there."
+    ),
+    "object": (
+        "The z axis of the 2D layout and its cursor readout count from the "
+        "object, e.g. the light source of an illumination path: the object "
+        "is shown at z = 0 and surface 1 at the object distance. Only the "
+        "displayed coordinate changes; thicknesses, positions and analyses "
+        "stay the same. An object at infinity has no finite place, so its "
+        "layout keeps surface 1 as origin."
     ),
 }
 
@@ -236,6 +253,7 @@ class SystemPropertiesPanel(QWidget):
         self.wavelengthsEditor = WavelengthsEditor(self.connector)
         self.polarizationEditor = PolarizationEditor(self.connector)
         self.rayAimingEditor = RayAimingEditor(self.connector)
+        self.layoutEditor = LayoutEditor(self.connector)
 
         self.add_nav_item("Metadata", self.metadataEditor)
         self.add_nav_item("Aperture", self.apertureEditor)
@@ -243,6 +261,7 @@ class SystemPropertiesPanel(QWidget):
         self.add_nav_item("Wavelengths", self.wavelengthsEditor)
         self.add_nav_item("Polarization", self.polarizationEditor)
         self.add_nav_item("Ray Aiming", self.rayAimingEditor)
+        self.add_nav_item("Layout", self.layoutEditor)
 
     def add_nav_item(self, name, widget):
         """
@@ -278,6 +297,7 @@ class SystemPropertiesPanel(QWidget):
         self.wavelengthsEditor.load_data()
         self.polarizationEditor.load_data()
         self.rayAimingEditor.load_data()
+        self.layoutEditor.load_data()
 
 
 class PropertyEditorBase(QWidget):
@@ -413,7 +433,9 @@ class ApertureEditor(PropertyEditorBase):
         self.btnApplyAperture = QPushButton("Apply Aperture Changes")
         layout.addRow(self.btnApplyAperture)
 
-        self.cmbApertureType.currentTextChanged.connect(self._update_aperture_description)
+        self.cmbApertureType.currentTextChanged.connect(
+            self._update_aperture_description
+        )
         self.cmbApertureType.currentTextChanged.connect(self.apply_aperture_changes)
         self.spnApertureValue.valueChanged.connect(self.apply_aperture_changes)
         self.btnApplyAperture.clicked.connect(self.apply_aperture_changes)
@@ -424,7 +446,9 @@ class ApertureEditor(PropertyEditorBase):
     def _update_aperture_description(self, key: str) -> None:
         """Update the description box when the aperture type selection changes."""
         self.descAperture.setPlainText(
-            _APERTURE_DESCRIPTIONS.get(key, "No description available for this aperture type.")
+            _APERTURE_DESCRIPTIONS.get(
+                key, "No description available for this aperture type."
+            )
         )
 
     @Slot()
@@ -519,7 +543,9 @@ class FieldsEditor(PropertyEditorBase):
     def _update_field_description(self, display_name: str) -> None:
         """Update the description box when the field type selection changes."""
         self.descFieldType.setPlainText(
-            _FIELD_TYPE_DESCRIPTIONS.get(display_name, "No description available for this field type.")
+            _FIELD_TYPE_DESCRIPTIONS.get(
+                display_name, "No description available for this field type."
+            )
         )
 
     @Slot()
@@ -1071,3 +1097,65 @@ class RayAimingEditor(PropertyEditorBase):
             self.connector._undo_redo_manager.add_state(old_state)
             self.connector.opticChanged.emit()
             print(f"Ray aiming updated: mode={mode}, max_iter={max_iter}, tol={tol}")
+
+
+class LayoutEditor(PropertyEditorBase):
+    """Editor for how the layout shows the system: where z = 0 lies.
+
+    The choice belongs to the design (saved with it, undoable). It is applied
+    as soon as it is picked; it changes only the displayed coordinate.
+    """
+
+    _ORIGIN_DISPLAY = ["Surface 1 (Optiland default)", "Object"]
+
+    def init_ui(self) -> None:
+        """Initialises the layout editor UI."""
+        layout = QFormLayout(self)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        self.cmbZOrigin = QComboBox()
+        self.cmbZOrigin.setObjectName("LayoutZOriginCombo")
+        self.cmbZOrigin.addItems(self._ORIGIN_DISPLAY)
+        layout.addRow("Z origin:", self.cmbZOrigin)
+
+        self.descZOrigin = self._make_description_box()
+        layout.addRow(self.descZOrigin)
+
+        # activated: only the user's choice, not a reload, becomes an edit.
+        self.cmbZOrigin.activated.connect(self.apply_z_origin)
+        self.cmbZOrigin.currentIndexChanged.connect(self._update_z_origin_description)
+        self._update_z_origin_description(self.cmbZOrigin.currentIndex())
+
+    def _origin_keys(self) -> tuple[str, ...]:
+        return (self.connector.Z_ORIGIN_SURFACE_1, self.connector.Z_ORIGIN_OBJECT)
+
+    @Slot(int)
+    def _update_z_origin_description(self, index: int) -> None:
+        """Explain the selected origin."""
+        keys = self._origin_keys()
+        key = keys[index] if 0 <= index < len(keys) else ""
+        self.descZOrigin.setPlainText(
+            _Z_ORIGIN_DESCRIPTIONS.get(key, "No description available.")
+        )
+
+    @Slot()
+    def load_data(self) -> None:
+        """Show the design's z origin."""
+        getter = getattr(self.connector, "get_layout_z_origin", None)
+        if not callable(getter):
+            return
+        self.is_loading = True
+        origin = getter()
+        keys = self._origin_keys()
+        self.cmbZOrigin.setCurrentIndex(keys.index(origin) if origin in keys else 0)
+        self.is_loading = False
+
+    @Slot()
+    def apply_z_origin(self) -> None:
+        """Make the selected origin the design's z origin."""
+        if self.is_loading:
+            return
+        self.connector.set_layout_z_origin(
+            self._origin_keys()[self.cmbZOrigin.currentIndex()]
+        )

@@ -15,6 +15,7 @@ import math
 
 from PySide6.QtCore import QObject, Signal
 
+import optiland.backend as be
 from optiland.optic import Optic
 from optiland_gui.catalogs.insertion import record_to_insert_specs
 from optiland_gui.services.analysis_runner import AnalysisRunner
@@ -94,6 +95,12 @@ class OptilandConnector(QObject):
 
     DEFAULT_WAVELENGTH_UM = 0.550
 
+    #: Where z = 0 lies in the 2D layout: Optiland's convention puts
+    #: surface 1 there; "object" counts z from a finite object instead.
+    Z_ORIGIN_SURFACE_1 = "surface_1"
+    Z_ORIGIN_OBJECT = "object"
+    Z_ORIGINS = (Z_ORIGIN_SURFACE_1, Z_ORIGIN_OBJECT)
+
     # Kept for backward compatibility; canonical copies live on SurfaceService.
     AVAILABLE_SURFACE_TYPES = SurfaceService.AVAILABLE_SURFACE_TYPES
     EXTRA_PARAM_MAP = SurfaceService.EXTRA_PARAM_MAP
@@ -108,6 +115,7 @@ class OptilandConnector(QObject):
         self._optic = Optic("Default System")
         self._undo_redo_manager = UndoRedoManager(self)
         self._disabled_surface_indices: set[int] = set()
+        self._layout_z_origin = self.Z_ORIGIN_SURFACE_1
         # Optional hook set by the main window: called with (data, filepath)
         # before a loaded design dict is turned into an Optic; returns
         # (possibly fixed data, fixes_applied). None disables validation.
@@ -294,6 +302,62 @@ class OptilandConnector(QObject):
             i for i in self._disabled_surface_indices if 0 < i < max_idx
         }
 
+    # ------------------------------------------------------------------
+    # Layout z origin (display only; the geometry keeps surface 1 at z = 0)
+    # ------------------------------------------------------------------
+
+    def get_layout_z_origin(self) -> str:
+        """Return where z = 0 lies in the 2D layout (one of ``Z_ORIGINS``)."""
+        return self._layout_z_origin
+
+    def set_layout_z_origin(self, origin: str) -> bool:
+        """Choose where z = 0 lies in the 2D layout, as an undoable edit.
+
+        The setting belongs to the design: it is saved with it (in the
+        ``"gui"`` block), restored by undo/redo and marks it modified.
+
+        Args:
+            origin: ``Z_ORIGIN_SURFACE_1`` or ``Z_ORIGIN_OBJECT``.
+
+        Returns:
+            ``True`` if the setting changed.
+
+        Raises:
+            ValueError: For an unknown origin.
+        """
+        if origin not in self.Z_ORIGINS:
+            raise ValueError(f"Unknown layout z origin {origin!r}")
+        if origin == self._layout_z_origin:
+            return False
+        old_state = self._capture_optic_state()
+        self._layout_z_origin = origin
+        self._undo_redo_manager.add_state(old_state)
+        self.set_modified(True)
+        self.opticChanged.emit()
+        return True
+
+    def layout_z_offset(self, optic: Optic | None = None) -> float:
+        """Amount added to a global z to show it in the layout's coordinates.
+
+        With the object as origin the object is shown at z = 0 and surface 1
+        at the object distance. An object at infinity has no finite place,
+        so its layout keeps surface 1 as origin.
+
+        Args:
+            optic: The optic being drawn (default: the effective optic).
+
+        Returns:
+            The offset in mm (0 for surface 1 as origin).
+        """
+        if self._layout_z_origin != self.Z_ORIGIN_OBJECT:
+            return 0.0
+        optic = optic if optic is not None else self.get_effective_optic()
+        try:
+            z_object = float(be.to_numpy(optic.surfaces[0].geometry.cs.z))
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return 0.0
+        return -z_object if math.isfinite(z_object) else 0.0
+
     def get_effective_optic(self) -> Optic:
         """Return an optic with disabled surfaces removed.
 
@@ -310,8 +374,6 @@ class OptilandConnector(QObject):
         if not self._disabled_surface_indices:
             return self._optic
         import copy
-
-        import optiland.backend as be
 
         effective = copy.deepcopy(self._optic)
         surfaces = effective.surfaces
@@ -428,6 +490,7 @@ class OptilandConnector(QObject):
         if is_specific_new_system:
             self._create_new_optic_structure(optic_instance)
             self._disabled_surface_indices.clear()
+            self._layout_z_origin = self.Z_ORIGIN_SURFACE_1
         else:
             self._ensure_valid_optic_structure(optic_instance)
             self.prune_disabled_state()
@@ -467,6 +530,10 @@ class OptilandConnector(QObject):
         data["gui"] = {
             "disabled_surfaces": sorted(self._disabled_surface_indices),
         }
+        # Only a non-default origin is written, so files of designs that
+        # never touch the setting stay as they were.
+        if self._layout_z_origin != self.Z_ORIGIN_SURFACE_1:
+            data["gui"]["layout_z_origin"] = self._layout_z_origin
         return data
 
     def restore_gui_state(self, state_data: dict) -> None:
@@ -486,6 +553,12 @@ class OptilandConnector(QObject):
         except (TypeError, ValueError):
             self._disabled_surface_indices = set()
         self.prune_disabled_state()
+        origin = (
+            gui_state.get("layout_z_origin") if isinstance(gui_state, dict) else None
+        )
+        self._layout_z_origin = (
+            origin if origin in self.Z_ORIGINS else self.Z_ORIGIN_SURFACE_1
+        )
 
     def _restore_optic_state(self, state_data: dict) -> None:
         """Restore the optic from a previously captured state dict.

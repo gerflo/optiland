@@ -17,6 +17,7 @@ import warnings
 import matplotlib
 import matplotlib.colors as mcolors
 import numpy as np
+from matplotlib import ticker
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
@@ -720,6 +721,34 @@ class ViewerPanel(QWidget):
 _GRAB_RADIUS_PX = 8  # pixel radius for grabbing/snapping to a measurement dot
 
 
+class _ShiftedAutoLocator(ticker.AutoLocator):
+    """Ticks at round values of the shown coordinate ``z + offset``.
+
+    The layout keeps drawing in Optiland's coordinates (surface 1 at z = 0);
+    with the object as origin only the labels move, and they should still
+    fall on round numbers.
+    """
+
+    def __init__(self, offset: float) -> None:
+        super().__init__()
+        self._offset = offset
+
+    def tick_values(self, vmin: float, vmax: float):  # noqa: ANN201
+        """Tick positions in drawing coordinates."""
+        shown = super().tick_values(vmin + self._offset, vmax + self._offset)
+        return np.asarray(shown) - self._offset
+
+
+def _shifted_z_formatter(offset: float) -> ticker.FuncFormatter:
+    """Label a drawing coordinate with the shown value ``z + offset``."""
+
+    def _label(z: float, _pos: int | None = None) -> str:
+        value = round(float(z) + offset, 9) + 0.0  # + 0.0 turns -0.0 into 0.0
+        return f"{value:.10g}".replace("-", "\u2212")
+
+    return ticker.FuncFormatter(_label)
+
+
 class _DraggablePanel(QLabel):
     """Measurement value panel that the user can drag by left-clicking."""
 
@@ -1299,6 +1328,9 @@ class MatplotlibViewer(QWidget):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents
         )
 
+        # Added to a drawing z to show it: the object's distance when the
+        # design counts z from the object (System Properties > Layout).
+        self._z_offset = 0.0
         self._measure_anchor = None  # (xdata, ydata) — first right-click (active)
         self._measure_target = None  # (xdata, ydata) — second right-click (locks panel)
         self._cursor_pixel = None  # current cursor in Qt canvas coords (px, py)
@@ -1955,7 +1987,7 @@ class MatplotlibViewer(QWidget):
 
         # Coordinate display
         if event.inaxes:
-            x_coord = f"{event.xdata:.3f}"
+            x_coord = f"{event.xdata + self._z_offset:.3f}"
             y_coord = f"{event.ydata:.3f}"
             self.cursor_coord_label.setText(f"(Z, Y) = ({x_coord}, {y_coord})")
             self.cursor_coord_label.adjustSize()
@@ -3094,6 +3126,21 @@ class MatplotlibViewer(QWidget):
         top = self.figure.subplotpars.top
         self.figure.subplots_adjust(bottom=min(bottom_pts / figure_pts, top - 0.1))
 
+    def _apply_z_origin(self, optic) -> None:  # noqa: ANN001
+        """Label the z axis from the design's z origin (surface 1 or object).
+
+        Only the tick labels, the axis title and the cursor readout move;
+        everything is still drawn with surface 1 at z = 0.
+        """
+        offset_of = getattr(self.connector, "layout_z_offset", None)
+        offset = offset_of(optic) if callable(offset_of) else 0.0
+        self._z_offset = float(offset) if isinstance(offset, int | float) else 0.0
+        if not self._z_offset:
+            return  # ax.clear() restored the default ticks
+        self.ax.xaxis.set_major_locator(_ShiftedAutoLocator(self._z_offset))
+        self.ax.xaxis.set_major_formatter(_shifted_z_formatter(self._z_offset))
+        self.ax.set_xlabel("Z-axis from the object (mm)")
+
     def _plot_optic_sync(self, preserve_zoom=None):
         """Synchronous matplotlib render — must stay on the main thread."""
         if preserve_zoom is None:
@@ -3186,6 +3233,7 @@ class MatplotlibViewer(QWidget):
                     )
                     self.ax.set_xlabel("Z-axis (mm)")
                     self.ax.set_ylabel("Y-axis (mm)")
+                    self._apply_z_origin(optic)
                     self.ax.grid(True, linestyle="--", alpha=0.7)
                     self.ax.set_aspect("auto")
                     if should_preserve_limits and xlim is not None and ylim is not None:
