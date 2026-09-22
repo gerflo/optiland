@@ -74,6 +74,11 @@ _DIM_ALPHA = 0.35
 #: ~38 px, without all three below ~23 px.
 _COMPACT_LAYOUT_PX = 120
 _TINY_LAYOUT_PX = 50
+#: Room a detector map needs besides the map [px]: tick labels, axis label
+#: and colour bar at the side; the two-line title, tick labels and axis
+#: label above and below.
+_MAP_DECOR_W_PX = 110
+_MAP_DECOR_H_PX = 80
 #: Text padding of the trace and view spin boxes [px]. The application
 #: style pads spin boxes by 34 px on the right, but Qt takes the arrow
 #: buttons off the text area on top of that padding; these boxes pad only
@@ -101,6 +106,30 @@ def _placeholder(ax, text: str) -> None:  # noqa: ANN001
         text: The message.
     """
     ax.text(0.5, 0.5, text, ha="center", va="center", in_layout=False)
+
+
+def _detector_grid(count: int, width: float, height: float) -> tuple[int, int]:
+    """Rows and columns that give ``count`` square maps the most room.
+
+    Each map keeps its equal aspect, so its side is limited by the smaller
+    of the cell's width and height, less the decorations around it. The
+    grid that makes that side largest wins; ties keep fewer columns.
+
+    Args:
+        count: Number of maps (at least 1).
+        width: Canvas width [px].
+        height: Canvas height [px].
+
+    Returns:
+        ``(rows, cols)``.
+    """
+    best, best_side = (count, 1), -np.inf
+    for cols in range(1, count + 1):
+        rows = -(-count // cols)
+        side = min(width / cols - _MAP_DECOR_W_PX, height / rows - _MAP_DECOR_H_PX)
+        if side > best_side:
+            best, best_side = (rows, cols), side
+    return best
 
 
 class _CompactSpinBox(QSpinBox):
@@ -153,6 +182,9 @@ class NSQPanel(QWidget):
         self._last_scene_key: tuple = ()
         # Canvases whose figure changed while they were hidden.
         self._stale_canvases: set[FigureCanvas] = set()
+        # Detector maps drawn and their (rows, cols) grid; 0 = placeholder.
+        self._detector_count = 0
+        self._detector_grid: tuple[int, int] = (1, 1)
         self._rebuild_timer = QTimer(self)
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(REBUILD_DELAY_MS)
@@ -356,6 +388,7 @@ class NSQPanel(QWidget):
         )
         detectors_box.addWidget(self.detector_toolbar)
         detectors_box.addWidget(self.detector_canvas, 1)
+        self.detector_canvas.mpl_connect("resize_event", self._on_detector_resize)
         self.tabs.addTab(detectors_tab, "Detectors")
 
         summary_tab = QWidget()
@@ -821,14 +854,16 @@ class NSQPanel(QWidget):
             for name, detector in result.detectors.items():
                 if hasattr(detector, "irradiance") and hasattr(detector, "x_coords"):
                     maps.append((name, detector))
+        self._detector_count = len(maps)
         if not maps:
             ax = self.detector_figure.add_subplot(111)
             _placeholder(ax, "Run a trace to see the detector irradiance maps")
             ax.set_axis_off()
             self._request_draw(self.detector_canvas)
             return
-        cols = 2 if len(maps) > 1 else 1
-        rows = int(np.ceil(len(maps) / cols))
+        bbox = self.detector_figure.bbox
+        rows, cols = _detector_grid(len(maps), bbox.width, bbox.height)
+        self._detector_grid = (rows, cols)
         for i, (name, det_map) in enumerate(maps, start=1):
             ax = self.detector_figure.add_subplot(rows, cols, i)
             extent = [
@@ -849,11 +884,25 @@ class NSQPanel(QWidget):
             self.detector_figure.colorbar(image, cax=cax, label="W/mm²")
             ax.set_xlabel("x [mm]")
             ax.set_ylabel("y [mm]")
+            # Two lines: no wider than a small map.
             ax.set_title(
-                f"{name}: {det_map.total_flux_float:.4g} W, {det_map.num_rays_hit} rays"
+                f"{name}\n{det_map.total_flux_float:.4g} W, {det_map.num_rays_hit} rays"
             )
         gui_plot_utils.apply_theme_to_existing_figure(self.detector_figure)
         self._request_draw(self.detector_canvas)
+
+    def _on_detector_resize(self, _event=None) -> None:  # noqa: ANN001
+        """Arrange the maps anew when the canvas shape calls for another grid.
+
+        Args:
+            _event: The canvas resize event.
+        """
+        if not self._detector_count:
+            return
+        bbox = self.detector_figure.bbox
+        grid = _detector_grid(self._detector_count, bbox.width, bbox.height)
+        if grid != self._detector_grid:
+            self._draw_detectors()
 
     def _request_draw(self, canvas: FigureCanvas) -> None:
         """Render *canvas* now if it is on screen, else once it is shown.

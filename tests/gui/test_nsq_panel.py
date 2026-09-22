@@ -407,6 +407,43 @@ class TestCanvasRendering:
         finally:
             panel.close()
 
+    @pytest.mark.parametrize(
+        ("size", "grid"), [((690, 140), (1, 4)), ((300, 600), (4, 1))]
+    )
+    def test_detector_maps_are_arranged_for_the_canvas_shape(self, qapp, size, grid):
+        """O8: the maps always stood in two columns; four maps on a flat
+        canvas collapsed the layout, and on a narrow one the maps and titles
+        were cut off at both sides. The grid follows the canvas shape."""
+        panel = NSQPanel(_connector())
+        panel.resize(1000, 700)
+        try:
+            index = panel.scene_combo.findData("side_illumination")
+            panel.scene_combo.setCurrentIndex(index)
+            panel.scene_combo.activated.emit(index)
+            panel.rays_spin.setValue(1000)
+            panel.run_trace_sync()
+            panel.show()
+            panel.tabs.setCurrentIndex(1)
+            _settle(qapp)
+
+            caught = self._collapse_warnings(
+                qapp, lambda: panel.detector_canvas.resize(*size)
+            )
+            caught += self._collapse_warnings(qapp, panel.detector_canvas.draw)
+
+            assert caught == []
+            figure = panel.detector_figure
+            maps = [ax for ax in figure.axes if ax.get_images()]
+            assert len(maps) == 4
+            assert maps[0].get_subplotspec().get_geometry()[:2] == grid
+            renderer = panel.detector_canvas.get_renderer()
+            for ax in figure.axes:
+                box = ax.get_tightbbox(renderer)
+                assert box.x0 >= -0.5 and box.x1 <= figure.bbox.width + 0.5
+                assert box.y0 >= -0.5 and box.y1 <= figure.bbox.height + 0.5
+        finally:
+            panel.close()
+
     def test_the_detector_placeholder_fits_a_narrow_canvas(self, qapp):
         panel = NSQPanel(_connector())
         try:
