@@ -11,7 +11,10 @@ from matplotlib.patches import Polygon
 
 matplotlib.use("Agg")
 
-sys.modules.setdefault("vtk", MagicMock())
+try:  # stub VTK only where it is genuinely missing; a leaked mock breaks
+    import vtk  # noqa: F401  # other modules that import vtk later
+except ImportError:
+    sys.modules.setdefault("vtk", MagicMock())
 
 import matplotlib.pyplot as plt
 from optiland import optic

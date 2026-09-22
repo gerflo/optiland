@@ -8,7 +8,6 @@ Kramer Harrison, 2024
 from __future__ import annotations
 
 import numpy as np
-import vtk
 
 import optiland.backend as be
 from optiland.utils import resolve_fields, resolve_wavelengths
@@ -187,9 +186,9 @@ class Rays2D:
             surv_sel = survivors[idx]
             n_other = num_rays - n_surv
             if n_other > 0 and len(non_survivors) > 0:
-                idx2 = np.round(
-                    np.linspace(0, len(non_survivors) - 1, n_other)
-                ).astype(int)
+                idx2 = np.round(np.linspace(0, len(non_survivors) - 1, n_other)).astype(
+                    int
+                )
                 other_sel = non_survivors[idx2]
                 selected = np.sort(np.concatenate([surv_sel, other_sel]))
             else:
@@ -470,6 +469,8 @@ class Rays3D(Rays2D):
             theme (Theme, optional): The theme to apply. Defaults to None.
 
         """
+        import vtk
+
         if theme:
             from matplotlib.colors import to_rgb
 

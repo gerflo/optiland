@@ -12,7 +12,6 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
-import vtk
 from matplotlib.patches import Polygon
 
 import optiland.backend as be
@@ -527,6 +526,8 @@ class Lens3D(Lens2D):
             vtkActor | None: The added annulus actor, or ``None`` when the
                 surface already reaches the lens edge.
         """
+        import vtk
+
         surf_props = surface_3d_obj.surf  # Actual Surface object with .geometry
         surf_geom = surf_props.geometry
 
@@ -624,6 +625,8 @@ class Lens3D(Lens2D):
                 circles.
 
         """
+        import vtk
+
         num_points = len(circle1)
 
         # Create vtkPoints object to hold all the points from both circles

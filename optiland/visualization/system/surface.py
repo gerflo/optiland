@@ -8,7 +8,6 @@ Kramer Harrison, 2024
 from __future__ import annotations
 
 import numpy as np
-import vtk
 
 import optiland.backend as be
 from optiland.physical_apertures import RadialAperture
@@ -239,6 +238,8 @@ class Surface3D(Surface2D):
             vtk.vtkActor: A VTK actor representing the asymmetric surface.
 
         """
+        import vtk
+
         x, y, z = self._compute_sag_3d()
         x = be.to_numpy(x)
         y = be.to_numpy(y)

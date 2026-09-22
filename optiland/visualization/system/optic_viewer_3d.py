@@ -12,8 +12,6 @@ re-worked by Manuel Fragata Mendes, june 2025
 
 from __future__ import annotations
 
-import vtk
-
 from optiland.visualization.base import BaseViewer3D
 from optiland.visualization.system.rays import Rays3D
 from optiland.visualization.system.system import OpticalSystem
@@ -42,6 +40,8 @@ class OpticViewer3D(BaseViewer3D):
 
         self.rays = Rays3D(optic)
         self.system = OpticalSystem(optic, self.rays, projection="3d")
+
+        import vtk
 
         self.ren_win = vtk.vtkRenderWindow()
         self.iren = vtk.vtkRenderWindowInteractor()
@@ -79,6 +79,8 @@ class OpticViewer3D(BaseViewer3D):
                 surface are not shown. Defaults to False.
 
         """
+        import vtk
+
         renderer = self._make_renderer(dark_mode)
         self.ren_win.AddRenderer(renderer)
 
