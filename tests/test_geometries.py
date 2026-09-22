@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from contextlib import nullcontext as does_not_raise
 
 import numpy as np
@@ -424,6 +425,45 @@ class TestEvenAsphere:
         geometry_dict = geometry.to_dict()
         new_geometry = geometries.EvenAsphere.from_dict(geometry_dict)
         assert new_geometry.to_dict() == geometry_dict
+
+    def test_diverging_ray_raises_no_floating_point_warning(self, set_test_backend):
+        """O6: a ray far outside the aperture of a high-order asphere made
+        the Newton step run away until ``r2 ** 7`` overflowed, and NumPy
+        printed "overflow encountered in power" on every trace. That ray
+        stays unconverged without floating-point warnings; a regular ray in
+        the same batch still lands on the surface."""
+        geometry = geometries.EvenAsphere(
+            CoordinateSystem(),
+            radius=11.65,
+            conic=-1.1,
+            tol=1e-6,
+            coefficients=[
+                3.6906721e-05,
+                -1.2854612e-08,
+                -1.4001677e-10,
+                -2.5131166e-13,
+                5.0178988e-16,
+                5.8558715e-18,
+                -1.1277944e-20,
+            ],
+        )
+        # A dead ray of the user's RCR-27 illumination 150 mm before the
+        # A18 asphere, 17 deg off-axis, and a regular ray at 3 mm height.
+        rays = RealRays(
+            x=[-6.060249612342408, 0.0],
+            y=[-5.210996708529664, 3.0],
+            z=[-150.00000000000003, -1.0],
+            L=[-0.2721237472113776, 0.0],
+            M=[0.08559050236256088, 0.0],
+            N=[0.9584481895798864, 1.0],
+            intensity=[0.0, 1.0],
+            wavelength=[0.55, 0.55],
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            t = geometry.distance(rays)
+        assert [str(w.message) for w in caught if "encountered" in str(w.message)] == []
+        assert_allclose(-1.0 + t[1], geometry.sag(0.0, 3.0), atol=1e-6)
 
 
 class TestPolynomialGeometry:

@@ -365,26 +365,31 @@ class NewtonRaphsonGeometry(StandardGeometry, ABC):
         tol = _effective_tolerance(self.tol, t)
 
         iterations = 0
-        f_t = self._surface_residual(t, rays)
-        converged = be.abs(f_t) < tol
-
-        for i in range(self.max_iter):
-            # 1-3. Convergence is checked before any normal evaluation.
-            if be.all(converged):
-                break
-
-            # 4. Only reached while at least one ray is still unconverged.
-            df_dt, scale, _ = self._surface_residual_dt(t, rays)
-            safe_df_dt, _ = _regularize_signed(df_dt, scale)
-
-            # 5. Freeze already-converged rays so a converged root is not
-            # perturbed by further steps.
-            step = be.where(converged, be.zeros_like(f_t), f_t / safe_df_dt)
-            t = t - step
-            iterations = i + 1
-
+        # A ray far outside the surface's valid domain (e.g. a vignetted ray
+        # heading past a high-order asphere) can make the step run away until
+        # the sag polynomial overflows. Such a ray simply stays unconverged,
+        # so the floating-point warnings it raises are noise.
+        with be.errstate(over="ignore", invalid="ignore"):
             f_t = self._surface_residual(t, rays)
             converged = be.abs(f_t) < tol
+
+            for i in range(self.max_iter):
+                # 1-3. Convergence is checked before any normal evaluation.
+                if be.all(converged):
+                    break
+
+                # 4. Only reached while at least one ray is still unconverged.
+                df_dt, scale, _ = self._surface_residual_dt(t, rays)
+                safe_df_dt, _ = _regularize_signed(df_dt, scale)
+
+                # 5. Freeze already-converged rays so a converged root is not
+                # perturbed by further steps.
+                step = be.where(converged, be.zeros_like(f_t), f_t / safe_df_dt)
+                t = t - step
+                iterations = i + 1
+
+                f_t = self._surface_residual(t, rays)
+                converged = be.abs(f_t) < tol
 
         return _DistanceSolveResult(
             t=t, residual=f_t, converged=converged, iterations=iterations
