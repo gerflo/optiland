@@ -126,7 +126,8 @@ class TestNSQPanel:
     def test_panel_starts_with_the_first_sample_scene(self, panel):
         assert panel.service.scene is not None
         assert panel.scene_combo.currentData() == "beam_splitter"
-        assert panel.scene_label.text() == "Beam splitter: one beam, two arms"
+        # The pull-down names the system; there is no separate label.
+        assert panel.scene_combo.currentText() == "Beam splitter: one beam, two arms"
         # The layout is drawn even before any trace: components and
         # detectors show up as lines.
         ax = panel.layout_figure.axes[0]
@@ -229,3 +230,157 @@ class TestNSQPanel:
         assert panel.summary_table.rowCount() > 0
         transmitted = panel.service.result.detectors["transmitted"].irradiance
         assert np.asarray(transmitted).sum() > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Compact controls: the System view is a tab of the System Viewer now
+# ---------------------------------------------------------------------------
+
+
+def _app_style_sheet() -> str:
+    """The style sheet the main window applies (default theme)."""
+    from optiland_gui.config import build_control_size_override
+    from optiland_gui.theme_manager import (
+        DEFAULT_THEME_ID,
+        build_palette_override,
+        get_theme,
+    )
+
+    theme = get_theme(DEFAULT_THEME_ID)
+    with open(theme.base_path, encoding="utf-8") as handle:
+        base = handle.read()
+    return "\n".join(
+        (base, build_palette_override(theme), build_control_size_override())
+    )
+
+
+def _settle(qapp, ms: int = 80) -> None:
+    from PySide6.QtCore import QDeadlineTimer, QEventLoop
+
+    deadline = QDeadlineTimer(ms)
+    while not deadline.hasExpired():
+        qapp.processEvents(QEventLoop.ProcessEventsFlag.AllEvents, 10)
+
+
+def _groups(panel) -> list:
+    """The labelled fields (and buttons) of the trace/view row."""
+    flow = panel.controls_widget.layout()
+    return [flow.itemAt(i).widget() for i in range(flow.count())]
+
+
+class TestCompactControls:
+    @pytest.fixture()
+    def styled(self, qapp):
+        panel = NSQPanel(_connector())
+        panel.setStyleSheet(_app_style_sheet())
+        panel.show()
+        yield panel
+        panel.close()
+
+    def _resize(self, qapp, panel, width: int, height: int = 800) -> None:
+        panel.resize(width, height)
+        _settle(qapp)
+
+    def test_system_and_path_share_one_row(self, qapp, styled):
+        self._resize(qapp, styled, 1000)
+
+        scene = styled.scene_combo.geometry()
+        path = styled.path_combo.geometry()
+        assert scene.center().y() == path.center().y()
+        assert scene.right() < path.left()
+
+    def test_there_is_no_label_above_the_tabs(self, qapp, styled):
+        from PySide6.QtWidgets import QLabel
+
+        self._resize(qapp, styled, 1400)
+
+        assert styled.findChild(QLabel, "NSQSceneLabel") is None
+        assert not hasattr(styled, "scene_label")
+        # Two rows of controls, then the Layout/Detectors/Summary tabs.
+        spacing = styled.layout().spacing()
+        controls_bottom = styled.controls_widget.geometry().bottom()
+        assert styled.tabs.y() <= controls_bottom + spacing + 2
+
+    def test_view_controls_share_the_trace_row_when_there_is_room(
+        self, qapp, styled
+    ):
+        self._resize(qapp, styled, 1400)
+
+        rays_row = styled.rays_spin.parentWidget().geometry()
+        for widget in (
+            styled.projection_combo.parentWidget(),
+            styled.drawn_spin.parentWidget(),
+            styled.reset_view_button,
+        ):
+            assert widget.geometry().center().y() == pytest.approx(
+                rays_row.center().y(), abs=1
+            )
+        assert styled.controls_widget.height() < 2 * rays_row.height()
+        assert (
+            styled.trace_button.geometry().center().y()
+            == pytest.approx(styled.controls_widget.geometry().center().y(), abs=2)
+        )
+
+    def test_controls_wrap_instead_of_widening_a_narrow_panel(self, qapp, styled):
+        # The old panel could not get narrower than its trace row (1099 px).
+        assert styled.minimumSizeHint().width() <= 700
+
+        self._resize(qapp, styled, 700)
+
+        box = styled.controls_widget.rect()
+        assert styled.controls_widget.height() > 2 * styled.rays_spin.height()
+        for widget in _groups(styled):
+            assert box.contains(widget.geometry()), widget
+
+    def test_spin_boxes_show_their_values(self, qapp, styled):
+        from PySide6.QtWidgets import QLineEdit
+
+        self._resize(qapp, styled, 1400)
+
+        for spin, widest in (
+            (styled.rays_spin, "20000000"),
+            (styled.seed_spin, "999999"),
+            (styled.depth_spin, "256"),
+            (styled.split_spin, "8"),
+            (styled.paths_spin, "50000"),
+            (styled.drawn_spin, "5000"),
+        ):
+            edit = spin.findChild(QLineEdit)
+            needed = edit.fontMetrics().horizontalAdvance(widest)
+            assert edit.width() >= needed, spin.objectName()
+
+    def test_the_layout_plot_gets_the_height_the_rows_gave_up(self, qapp, styled):
+        self._resize(qapp, styled, 1400, 800)
+        styled.layout_canvas.draw()
+
+        # Two control rows, the tab bar and the plot toolbar: the canvas
+        # has the rest of the panel.
+        overhead = (
+            styled.scene_combo.height()
+            + styled.controls_widget.height()
+            + styled.tabs.tabBar().height()
+            + styled.layout_toolbar.height()
+            + 60  # margins, spacing, tab frame
+        )
+        assert styled.layout_canvas.height() >= styled.height() - overhead
+        box = styled.layout_figure.axes[0].get_position()
+        assert box.width > 0.8 and box.height > 0.7
+
+    def test_a_system_file_is_named_in_the_system_pull_down(
+        self, qapp, styled, tmp_path
+    ):
+        from optiland.samples.nonsequential import SAMPLE_SCENES
+
+        path = tmp_path / "bench.json"
+        styled.service.save_file(str(path))
+        styled.service.load_file(str(path))
+
+        combo = styled.scene_combo
+        assert combo.currentText() == "bench.json"
+        assert combo.currentData() is None
+        assert combo.count() == len(SAMPLE_SCENES) + 1
+
+        styled.service.load_sample("side_illumination")
+
+        assert combo.count() == len(SAMPLE_SCENES)
+        assert combo.currentData() == "side_illumination"

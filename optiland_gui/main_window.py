@@ -109,6 +109,14 @@ except ImportError as e:
 
 logger = logging.getLogger(__name__)
 
+#: Settings key of the viewer tabs (detached windows) of the last session.
+CURRENT_TABS_KEY = "Layouts/CurrentTabs"
+
+
+def _layout_tabs_key(slot: int) -> str:
+    """Settings key of the viewer tabs stored with layout *slot*."""
+    return f"Layouts/Config{slot}Tabs"
+
 
 class MainWindow(FramelessWindow):
     """The main application window for the Optiland GUI.
@@ -184,8 +192,8 @@ class MainWindow(FramelessWindow):
             return self._win.panel_manager.nsq_panel
 
         def show_nsq_panel(self):
-            """Brings the System dock widget (multi-axis systems) to the front."""
-            self._win.focus_dock_widget(self._win.panel_manager.nsq_dock)
+            """Show the System view (a System Viewer tab or its own window)."""
+            self._win.panel_manager.show_system_panel()
 
         def get_catalog_browser_panel(self):
             """Returns the stock parts catalog browser panel."""
@@ -686,7 +694,7 @@ class MainWindow(FramelessWindow):
                 f"Load failed: {exc}", "error", sub_message=filepath
             )
             return
-        self.focus_dock_widget(self.panel_manager.nsq_dock)
+        self.panel_manager.show_system_panel()
         self.toast_manager.notify(
             f"Opened multi-axis system — {os.path.basename(filepath)}",
             "info",
@@ -808,7 +816,11 @@ class MainWindow(FramelessWindow):
         self.settings.setValue("Window/WasMaximized", was_maximized)
 
     def _restore_current_layout_state(self) -> None:
-        """Restore the last automatically persisted dock layout, if available."""
+        """Restore the last automatically persisted dock layout, if available.
+
+        The detached viewer tabs come back in their windows, where they were.
+        """
+        self._restore_tab_state(self.settings.value(CURRENT_TABS_KEY))
         state = self.settings.value("Layouts/CurrentState")
         if not isinstance(state, QByteArray) or state.isEmpty():
             return
@@ -818,9 +830,37 @@ class MainWindow(FramelessWindow):
         self._normalize_all_docks()
 
     def _save_current_layout_state(self) -> None:
-        """Persist the current dock layout, including docking and visibility."""
+        """Persist the current dock layout, including docking and visibility.
+
+        The viewer tabs are saved too: which are detached, where their
+        windows are, and where the windows of docked tabs were last.
+        """
         self._normalize_all_docks()
         self.settings.setValue("Layouts/CurrentState", self.saveState())
+        self.settings.setValue(CURRENT_TABS_KEY, self._tab_state_json(True))
+
+    def _tab_state_json(self, include_remembered: bool) -> str:
+        """The viewer tab arrangement as a JSON string for the settings."""
+        manager = getattr(self, "panel_manager", None)
+        if manager is None:
+            return "{}"
+        return json.dumps(manager.save_tab_state(include_remembered))
+
+    def _restore_tab_state(self, text: object) -> None:
+        """Arrange the viewer tabs from :meth:`_tab_state_json` output.
+
+        Missing or unreadable data docks every tab.
+        """
+        manager = getattr(self, "panel_manager", None)
+        if manager is None:
+            return
+        state: object = {}
+        if isinstance(text, str) and text:
+            try:
+                state = json.loads(text)
+            except ValueError:
+                logger.warning("Ignoring unreadable viewer tab layout: %r", text)
+        manager.restore_tab_state(state if isinstance(state, dict) else {})
 
     def changeEvent(self, event: QEvent) -> None:
         """Update the maximize button state when the window state changes."""
@@ -1707,6 +1747,10 @@ class MainWindow(FramelessWindow):
         dock_toolbar_state = self.saveState()
         self.settings.setValue(f"Layouts/Config{target_slot}Geometry", window_geometry)
         self.settings.setValue(f"Layouts/Config{target_slot}State", dock_toolbar_state)
+        # Detached viewer tabs are windows outside the dock state.
+        self.settings.setValue(
+            _layout_tabs_key(target_slot), self._tab_state_json(False)
+        )
         self.settings.setValue(f"Layouts/Config{target_slot}Name", layout_name)
         if self.toast_manager:
             self.toast_manager.notify(
@@ -1756,6 +1800,11 @@ class MainWindow(FramelessWindow):
                         slot_number,
                     )
                 self._normalize_all_docks()
+                # A layout saved before tabs could be detached has no entry:
+                # it docks every tab, as they were then.
+                self._restore_tab_state(
+                    self.settings.value(_layout_tabs_key(slot_number))
+                )
                 if self.toast_manager:
                     self.toast_manager.notify(
                         f"Layout {self._layout_slot_display_name(slot_number)} loaded.",
@@ -1810,8 +1859,12 @@ class MainWindow(FramelessWindow):
             return
         self._save_window_placement()
         self._save_current_layout_state()
-        if hasattr(self, "panel_manager") and self.panel_manager.python_terminal:
-            self.panel_manager.python_terminal.shutdown_kernel()
+        if hasattr(self, "panel_manager"):
+            # Detached tab windows go with the main window; the state that
+            # reopens them was saved above.
+            self.panel_manager.hide_detached_windows()
+            if self.panel_manager.python_terminal:
+                self.panel_manager.python_terminal.shutdown_kernel()
         event.accept()
 
     @Slot()

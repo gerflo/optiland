@@ -7,15 +7,18 @@ files. Nothing is mocked, so the screenshots show what a user would see.
 
 Examples::
 
-    # Whole window with the Non-Sequential dock raised, after a trace
-    python tools/gui_screenshot.py --panel nonsequential --trace out/nsq.png
+    # Whole window with the System tab of the System Viewer raised, after a trace
+    python tools/gui_screenshot.py --panel system --trace out/nsq.png
 
-    # Only the NSQ dock, both sample scenes, light theme
-    python tools/gui_screenshot.py --panel nonsequential --dock-only \\
+    # Only the System Viewer dock, the side-illumination sample, light theme
+    python tools/gui_screenshot.py --panel system --dock-only \\
         --scene side_illumination --trace --theme light out/side.png
 
-    # Every tab of the NSQ panel (suffixes _layout/_detectors/_summary)
-    python tools/gui_screenshot.py --panel nonsequential --trace --all-tabs out/nsq.png
+    # Every tab of the System view (suffixes _layout/_detectors/_summary)
+    python tools/gui_screenshot.py --panel system --trace --all-tabs out/nsq.png
+
+Detached viewer tabs of the last session are docked again first, so that
+they show up in the grab.
 """
 
 from __future__ import annotations
@@ -36,8 +39,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--panel",
         default=None,
-        help="Sidebar panel to raise: design, analysis, nonsequential, "
-        "optimization, catalogs, scripts.",
+        help="Sidebar panel to raise: design, analysis, system (alias "
+        "nonsequential: the System tab of the System Viewer), optimization, "
+        "catalogs, scripts.",
     )
     parser.add_argument(
         "--scene",
@@ -72,7 +76,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--all-tabs",
         action="store_true",
-        help="Grab every tab of the non-sequential panel.",
+        help="Grab every tab of the System view (Layout, Detectors, Summary).",
     )
     parser.add_argument(
         "--theme", default=None, help="Theme id to apply (e.g. dark, light)."
@@ -134,7 +138,7 @@ def _install_dialog_watchdog(app, window) -> None:
     window._screenshot_dialog_watchdog = timer
 
 
-def _raise_dock(app, window, dock, settle_ms: int) -> None:
+def _raise_dock(app, window, dock, settle_ms: int, system_tab: bool = False) -> None:
     """Bring *dock* to the front again.
 
     Background jobs that finish after start-up (the catalog import) raise
@@ -147,6 +151,9 @@ def _raise_dock(app, window, dock, settle_ms: int) -> None:
         # the main window; put it back for the picture.
         dock.setFloating(False)
     window.focus_dock_widget(dock)
+    if system_tab:
+        viewer = window.panel_manager.viewer_panel
+        viewer.show_view(viewer.SYSTEM_TAB)
     _settle(app, settle_ms)
 
 
@@ -179,14 +186,18 @@ def main() -> int:
         _settle(app, args.settle_ms)
 
     manager = window.panel_manager
+    # Tabs detached in the user's last session are windows of their own and
+    # would be missing from a grab of the main window.
+    manager.attach_all_tabs()
     target = None
     if args.panel:
-        manager.on_sidebar_menu_selected(args.panel)
+        panel = "nonsequential" if args.panel == "system" else args.panel
+        manager.on_sidebar_menu_selected(panel)
         docks = {
             "design": manager.lens_editor_dock,
             "analysis": manager.analysis_dock,
-            "nonsequential": manager.nsq_dock,
-            "system": manager.nsq_dock,
+            "nonsequential": manager.viewer_dock,
+            "system": manager.viewer_dock,
             "optimization": manager.optimization_dock,
             "catalogs": manager.catalog_browser_dock,
             "scripts": manager.terminal_dock,
@@ -219,14 +230,15 @@ def main() -> int:
 
     output = Path(args.output)
     subject = target if (args.dock_only and target is not None) else window
+    system_tab = args.panel in ("system", "nonsequential")
     if args.all_tabs:
         for index in range(nsq_panel.tabs.count()):
             nsq_panel.tabs.setCurrentIndex(index)
-            _raise_dock(app, window, target, args.settle_ms)
+            _raise_dock(app, window, target, args.settle_ms, system_tab)
             name = nsq_panel.tabs.tabText(index).lower()
             _grab(subject, output.with_name(f"{output.stem}_{name}{output.suffix}"))
     else:
-        _raise_dock(app, window, target, args.settle_ms)
+        _raise_dock(app, window, target, args.settle_ms, system_tab)
         _grab(subject, output)
 
     # Never block on the "save changes?" prompt: nothing here is worth saving.

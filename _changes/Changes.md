@@ -206,3 +206,18 @@ How to use it:
 - open `merged.olsys` via File -> Open (routed to the System view), projection XZ; pick a path in the *Path* pull-down or click an element to edit it in the Lens Data Editor
 - File -> Save stores the whole system as `.olsys`; File -> Export -> To Optiland JSON exports one path; File -> Open of a `.json` fills path 1 (a dialog offers the other paths of a folded system)
 - `from optiland.nonsequential.fold import fold_paths, trace_per_source`
+
+## 18. System View in the System Viewer, Detachable Viewer Tabs
+File: [system-viewer-detachable-tabs.md](./system-viewer-detachable-tabs.md)
+Commit: on `master`
+
+Effect:
+- the System view is the first tab of the System Viewer, next to 2D Layout, 3D Layout and Sag
+- every viewer tab can be shown in a separate window; closing the window docks it again; the last docked tab stays
+- detached windows and their positions are remembered across sessions and stored in saved layouts
+- the System tab is more compact: System and Path in one row, Projection/Rays drawn/Fit in the trace row, no label above its tabs
+
+How to use it:
+- sidebar *System* (or `iface.show_nsq_panel()`) shows the System tab, or raises its window when detached
+- click the small window button next to a tab title to detach it; close the window to dock it again
+- *Save Current Layout* stores the detached windows; *Dock All Windows* / *Reset Window Layout* dock every tab

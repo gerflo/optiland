@@ -59,10 +59,14 @@ When you first open the Optiland GUI, you'll see a main window containing severa
        :align: center
        :width: 600px
 
-*   **Viewer Panel**: This panel provides visual representations of your optical system.
+*   **System Viewer**: This panel provides visual representations of your optical system, one per tab.
 
-    *   **2D View**: Shows a 2D cross-section of the lens, with options to display rays.
-    *   **3D View**: Renders a 3D model of the system (if VTK is installed and working).
+    *   **System**: The whole multi-axis system (see *System View* below). It is the first tab.
+    *   **2D Layout**: Shows a 2D cross-section of the lens, with options to display rays.
+    *   **3D Layout**: Renders a 3D model of the system (if VTK is installed and working).
+    *   **Sag**: The sag of one surface.
+
+    Every tab has a small button next to its title that shows it in a separate window, for instance on a second screen. Closing that window puts the tab back in its old place. The last tab left in the System Viewer has no such button, so the viewer is never empty. The settings of the 2D and 3D layouts appear beside the layout you work in, docked or in its own window. Optiland remembers where each window was: the next session reopens the detached tabs where you left them, and a tab detached again opens where its window was last. *Dock All Windows* and *Reset Window Layout* put every tab back into the System Viewer.
 
     .. image:: _static/gui_viewer_panel.png
        :alt: Viewer Panel (2D/3D)
@@ -76,7 +80,7 @@ When you first open the Optiland GUI, you'll see a main window containing severa
        :align: center
        :width: 600px
 
-*   **System View**: Systems with several optical axes (a fundus camera: observation through the hole of a fold mirror, ring illumination reflected by it) are ``*.olsys`` files. The view draws the folded system with recorded ray paths, one irradiance map per detector and the energy balance; traces run on a background thread. The layout zooms with the mouse wheel around the cursor, pans with a left drag, and *Fit* (or a double click) shows everything again; the view keeps your zoom across traces and rebuilds. Every system folded with ``tools/merge_optic_paths.py`` carries its named **optical paths**: pick one in the *Path* pull-down, or click one of its elements in the layout, and that path's sequential design is loaded into the Lens Data Editor, the 2D layout, the analyses and the optimizer. Edits made there rebuild the system after a short pause (the trace result is cleared until you trace again); *Rename...* names a path. The system is the document: *File → Save* writes every path and the scene to a ``*.olsys`` file (with the file-format version and the GUI version that saved it), and *File → Export → To Optiland JSON* writes one path, chosen in a dialog, as a plain sequential design file. A sequential ``*.json`` opened through *File → Open* becomes path 1 of a new system; when the open system already has several paths, a dialog asks which one the file fills (the first is preselected) or whether to start a new system. A ``*.olsys`` file opened through *File → Open* or the recent-files list lands in this view with its first path active; two sample scenes (a 50:50 beam splitter, a side illumination with imaging in transmission) are bundled.
+*   **System View** (the *System* tab of the System Viewer; the *System* button in the sidebar brings it to the front): Systems with several optical axes (a fundus camera: observation through the hole of a fold mirror, ring illumination reflected by it) are ``*.olsys`` files. The view draws the folded system with recorded ray paths, one irradiance map per detector and the energy balance; traces run on a background thread. The layout zooms with the mouse wheel around the cursor, pans with a left drag, and *Fit* (or a double click) shows everything again; the view keeps your zoom across traces and rebuilds. Every system folded with ``tools/merge_optic_paths.py`` carries its named **optical paths**: pick one in the *Path* pull-down, or click one of its elements in the layout, and that path's sequential design is loaded into the Lens Data Editor, the 2D layout, the analyses and the optimizer. Edits made there rebuild the system after a short pause (the trace result is cleared until you trace again); *Rename...* names a path. The system is the document: *File → Save* writes every path and the scene to a ``*.olsys`` file (with the file-format version and the GUI version that saved it), and *File → Export → To Optiland JSON* writes one path, chosen in a dialog, as a plain sequential design file. A sequential ``*.json`` opened through *File → Open* becomes path 1 of a new system; when the open system already has several paths, a dialog asks which one the file fills (the first is preselected) or whether to start a new system. A ``*.olsys`` file opened through *File → Open* or the recent-files list lands in this view with its first path active; two sample scenes (a 50:50 beam splitter, a side illumination with imaging in transmission) are bundled.
 
 *   **System Properties Panel**: Manage system-wide settings that are not tied to individual surfaces. This includes:
 
@@ -102,7 +106,7 @@ Optiland features a VS Code-style **Command Palette** that provides quick access
 
 .. note::
 
-   All windows are dockable and can be rearranged to suit your workflow. You can also save your layout for future sessions. These can be loaded by pressing "1" or "2" in the top toolbar, corresponding to the slot used for saving your layout.
+   All windows are dockable and can be rearranged to suit your workflow. You can also save your layout for future sessions. These can be loaded by pressing "1" or "2" in the top toolbar, corresponding to the slot used for saving your layout. A saved layout includes the System Viewer tabs shown in separate windows and where those windows are; a layout saved before tabs could be detached docks every tab.
 
 Light theme and Dark theme
 --------------------------

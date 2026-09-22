@@ -8,6 +8,7 @@ keeps each class focused on a single responsibility."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt
@@ -23,6 +24,7 @@ from .optimization_panel import OptimizationPanel
 from .system_properties_panel import SystemPropertiesPanel
 from .viewer_panel import ViewerPanel
 from .widgets.custom_dock_widget import CustomDockWidget
+from .widgets.detachable_tabs import DetachableTabWidget
 from .widgets.python_terminal import PythonTerminalWidget
 from .widgets.sidebar import SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SidebarWidget
 
@@ -69,8 +71,10 @@ class PanelManager:
         self.sidebar.setMinimumWidth(SIDEBAR_MIN_WIDTH)
         self.sidebar.setMaximumWidth(SIDEBAR_MAX_WIDTH)
 
-        # Main panels
-        self.viewer_panel = ViewerPanel(self.connector)
+        # Main panels. The System view (the whole multi-axis system) is the
+        # first tab of the System Viewer, next to the 2D and 3D layouts.
+        self.nsq_panel = NSQPanel(self.connector)
+        self.viewer_panel = ViewerPanel(self.connector, system_panel=self.nsq_panel)
         self.viewer_dock = self._create_dock(
             self.viewer_panel, "ViewerDock", "System Viewer"
         )
@@ -94,10 +98,6 @@ class PanelManager:
         self.optimization_dock = self._create_dock(
             self.optimization_panel, "OptimizationDock", "Optimization"
         )
-
-        self.nsq_panel = NSQPanel(self.connector)
-        # The dock keeps its object name so saved layouts still find it.
-        self.nsq_dock = self._create_dock(self.nsq_panel, "NSQDock", "System")
 
         self.catalog_browser_panel = CatalogBrowserPanel(self.connector)
         self.material_browser_panel = MaterialBrowserPanel(self.connector)
@@ -128,7 +128,6 @@ class PanelManager:
             self.lens_editor_dock,
             self.system_properties_dock,
             self.analysis_dock,
-            self.nsq_dock,
             self.optimization_dock,
             self.catalog_browser_dock,
             self.terminal_dock,
@@ -202,8 +201,6 @@ class PanelManager:
         self.main_window.tabifyDockWidget(
             self.optimization_dock, self.catalog_browser_dock
         )
-        # The non-sequential panel shares the analysis area as a tab.
-        self.main_window.tabifyDockWidget(self.analysis_dock, self.nsq_dock)
         self.main_window.splitDockWidget(
             self.analysis_dock, self.terminal_dock, Qt.Vertical
         )
@@ -240,6 +237,61 @@ class PanelManager:
         if isinstance(analysis_parent, QTabWidget):
             analysis_parent.setCurrentWidget(self.analysis_dock)
         self.catalogs_panel.show_catalog_tab()
+        # Detached viewer tabs are windows of their own: the default layout
+        # has every tab docked.
+        self.attach_all_tabs()
+
+    # ------------------------------------------------------------------
+    # Detachable tabs (viewer tabs shown in windows of their own)
+    # ------------------------------------------------------------------
+
+    def detachable_tab_widgets(self) -> list[DetachableTabWidget]:
+        """The tab widgets whose tabs can live in separate windows."""
+        viewer_panel = getattr(self, "viewer_panel", None)
+        tabs = getattr(viewer_panel, "tabWidget", None)
+        return [tabs] if isinstance(tabs, DetachableTabWidget) else []
+
+    def save_tab_state(self, include_remembered: bool = True) -> dict:
+        """Detached tabs, their window geometry and the current tabs.
+
+        Args:
+            include_remembered: Also store where the windows of docked tabs
+                were last (for the session, not for a saved layout).
+
+        Returns:
+            JSON-friendly data keyed by each tab widget's object name.
+        """
+        return {
+            tabs.objectName(): tabs.save_state(include_remembered)
+            for tabs in self.detachable_tab_widgets()
+        }
+
+    def restore_tab_state(self, state: Mapping | None) -> None:
+        """Arrange the tabs as :meth:`save_tab_state` described them.
+
+        A tab widget missing from *state* docks all its tabs, which is how
+        a layout saved before tabs could be detached looked.
+        """
+        state = state if isinstance(state, Mapping) else {}
+        for tabs in self.detachable_tab_widgets():
+            tabs.restore_state(state.get(tabs.objectName()))
+
+    def attach_all_tabs(self) -> None:
+        """Dock every detached tab again."""
+        for tabs in self.detachable_tab_widgets():
+            tabs.attach_all()
+
+    def hide_detached_windows(self) -> None:
+        """Hide the detached tab windows without docking them (at exit)."""
+        for tabs in self.detachable_tab_widgets():
+            tabs.hide_windows()
+
+    def show_system_panel(self) -> None:
+        """Bring the System view to the front, docked or in its own window."""
+        tabs = self.viewer_panel.tabWidget
+        if not tabs.is_detached(ViewerPanel.SYSTEM_TAB):
+            self.main_window.focus_dock_widget(self.viewer_dock)
+        self.viewer_panel.show_view(ViewerPanel.SYSTEM_TAB)
 
     def get_all_docks(self) -> list[QDockWidget]:
         """Return a list of all managed dock widgets."""
@@ -279,9 +331,11 @@ class PanelManager:
             button_name: Internal name of the clicked sidebar button (e.g.
                 ``"analysis"``, ``"design"``).
         """
+        if button_name == "nonsequential":
+            self.show_system_panel()
+            return
         dock_map = {
             "analysis": self.analysis_dock,
-            "nonsequential": self.nsq_dock,
             "optimization": self.optimization_dock,
             "catalogs": self.catalog_browser_dock,
             "scripts": self.terminal_dock,

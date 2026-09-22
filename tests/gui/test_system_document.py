@@ -79,7 +79,9 @@ def _window(monkeypatch, choose=None):  # noqa: ANN001
     panel = NSQPanel(connector)
     window = SimpleNamespace(
         connector=connector,
-        panel_manager=SimpleNamespace(nsq_panel=panel, nsq_dock=object()),
+        panel_manager=SimpleNamespace(
+            nsq_panel=panel, show_system_panel=MagicMock()
+        ),
         toast_manager=connector.toast_manager,
         focus_dock_widget=MagicMock(),
         _remember_dialog_path=MagicMock(),
@@ -245,7 +247,7 @@ class TestOpenIntoFoldedSystem:
         assert service.document_name == "folded.olsys"
         assert not window._document_has_unsaved_changes()
         assert _title(window) == "Optiland \u2014 folded.olsys"
-        window.focus_dock_widget.assert_called_once()
+        window.panel_manager.show_system_panel.assert_called_once_with()
         window._maybe_save_changes_before_destructive_action.assert_called_once()
 
     def test_a_design_fills_the_first_path_by_default(

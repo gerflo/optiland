@@ -52,7 +52,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
-    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -86,6 +85,7 @@ from .surface_indexing import (
     editor_surface_index,
     effective_surface_index,
 )
+from .widgets.detachable_tabs import DetachableTabWidget
 from .worker import BusyOverlay
 
 if TYPE_CHECKING:
@@ -328,29 +328,45 @@ class ViewerPanel(QWidget):
     """
     A widget that contains multiple viewers for the optical system.
 
-    This panel uses a QTabWidget to host different types of viewers, such as
-    a 2D plot and a 3D rendering of the system.
+    The viewers are tabs of a :class:`DetachableTabWidget`: the System view
+    (when one is given), the 2D and 3D layouts and the sag plot. Every tab
+    can be moved into a window of its own and back; the tabs are named by
+    the keys ``SYSTEM_TAB``, ``LAYOUT_2D_TAB``, ``LAYOUT_3D_TAB`` and
+    ``SAG_TAB``.
 
     Attributes:
         connector (OptilandConnector): The connector to the main application logic.
-        tabWidget (QTabWidget): The widget hosting the different viewer tabs.
+        tabWidget (DetachableTabWidget): The widget hosting the viewer tabs.
+        system_panel (QWidget or None): The System view, the first tab.
         viewer2D (MatplotlibViewer): The 2D viewer widget.
         viewer3D (VTKViewer or QLabel): The 3D viewer widget, or a label if VTK
                                         is unavailable.
         settings_area (QWidget): The settings panel the 2D and 3D layouts
-                                 share, shown beside the tabs.
+                                 share, shown beside the layout in use.
     """
+
+    SYSTEM_TAB = "system"
+    LAYOUT_2D_TAB = "layout2d"
+    LAYOUT_3D_TAB = "layout3d"
+    SAG_TAB = "sag"
 
     # Lens Data Editor rows of what was clicked in the 2D or 3D layout.
     surfacesPicked = Signal(list)
 
-    def __init__(self, connector: OptilandConnector, parent=None):
+    def __init__(
+        self,
+        connector: OptilandConnector,
+        parent=None,
+        system_panel: QWidget | None = None,
+    ):
         """
         Initializes the ViewerPanel.
 
         Args:
             connector (OptilandConnector): The connector to the main application logic.
             parent (QWidget, optional): The parent widget. Defaults to None.
+            system_panel (QWidget, optional): The System view, shown as the
+                first tab. Defaults to None (no System tab).
         """
         super().__init__(parent)
         self.connector = connector
@@ -360,16 +376,20 @@ class ViewerPanel(QWidget):
         main_layout = QHBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(5)
-        self.tabWidget = QTabWidget()
+        self.tabWidget = DetachableTabWidget("System Viewer")
+        self.tabWidget.setObjectName("SystemViewerTabs")
+
+        # System view: the whole multi-axis system, first of the tabs
+        self.system_panel = system_panel
+        if system_panel is not None:
+            self.tabWidget.add_page(system_panel, "System", self.SYSTEM_TAB)
 
         # Create 2D Viewer Tab
         self.viewer2D = MatplotlibViewer(self.connector)
         self.viewer2D.settingsApplied.connect(self._render_3d_from_2d_settings)
         self.viewer2D.surfacesPicked.connect(self.surfacesPicked)
-        viewer2d_container = self._create_2d_viewer_tab()
-        self._viewer2d_tab_index = self.tabWidget.addTab(
-            viewer2d_container, "2D Layout"
-        )
+        self._viewer2d_page = self._create_2d_viewer_tab()
+        self.tabWidget.add_page(self._viewer2d_page, "2D Layout", self.LAYOUT_2D_TAB)
 
         # Create 3D Viewer Tab
         self.viewer3D = None
@@ -377,36 +397,105 @@ class ViewerPanel(QWidget):
         self._creating_3d_viewer = False
         self._rendering_3d = False
         self._scheduled_3d_activation = False
-        self._viewer3d_tab_index = -1
+        self._viewer3d_page: QWidget | None = None
         if VTK_AVAILABLE:
-            _3d_tab = self._create_3d_viewer_tab()
-            self._viewer3d_tab_index = self.tabWidget.addTab(_3d_tab, "3D Layout")
+            self._viewer3d_page = self._create_3d_viewer_tab()
+            self.tabWidget.add_page(
+                self._viewer3d_page, "3D Layout", self.LAYOUT_3D_TAB
+            )
 
         # Create Sag Viewer Tab
         self.sagViewer = SagViewer(self.connector, self)
-        self.tabWidget.addTab(self.sagViewer, "Sag")
+        self.tabWidget.add_page(self.sagViewer, "Sag", self.SAG_TAB)
 
         main_layout.addWidget(self.tabWidget, 1)
         # The 2D and 3D layouts share one settings panel. It sits beside the
-        # tabs so the gear button of either tab can show it; the Sag tab has
-        # settings of its own and hides it.
+        # layout the user works in, docked or detached, so the gear button of
+        # either can show it; the Sag tab has settings of its own.
         self.settings_area = self.viewer2D.detach_settings_area()
-        main_layout.addWidget(self.settings_area)
-        self.viewer2D.settings_toggle_btn.toggled.connect(
-            self._update_settings_area_visibility
+        self._place_settings_area(self._viewer2d_page)
+        gear_2d = self.viewer2D.settings_toggle_btn
+        gear_2d.toggled.connect(self._update_settings_area_visibility)
+        gear_2d.clicked.connect(
+            lambda _checked=False: self._place_settings_area(self._viewer2d_page)
         )
-        self.tabWidget.currentChanged.connect(self._update_settings_area_visibility)
+        if self._viewer3d_page is not None:
+            self._btn_3d_settings.clicked.connect(
+                lambda _checked=False: self._place_settings_area(self._viewer3d_page)
+            )
+        self.tabWidget.pageActivated.connect(self._on_page_activated)
+        self.tabWidget.tabDetached.connect(self._on_tab_moved)
+        self.tabWidget.tabAttached.connect(self._on_tab_moved)
+        self.tabWidget.detachedWindowShown.connect(self._on_tab_moved)
         self._update_settings_area_visibility()
-        self.tabWidget.currentChanged.connect(self._render_pending_3d_if_visible)
 
         self.connector.opticLoaded.connect(self.reset_original_views)
         self.connector.opticChanged.connect(self.update_viewers)
 
+    @property
+    def _viewer2d_tab_index(self) -> int:
+        """Tab index of the 2D layout (-1 while it is detached)."""
+        return self.tabWidget.indexOf(self._viewer2d_page)
+
+    @property
+    def _viewer3d_tab_index(self) -> int:
+        """Tab index of the 3D layout (-1 without VTK or while detached)."""
+        if self._viewer3d_page is None:
+            return -1
+        return self.tabWidget.indexOf(self._viewer3d_page)
+
+    def show_view(self, key: str) -> None:
+        """Bring the viewer *key* to the front: select its tab or raise its window.
+
+        Args:
+            key: One of the ``*_TAB`` keys.
+        """
+        self.tabWidget.show_page(key)
+
+    def _layout_pages(self) -> list[QWidget]:
+        """The pages that share the layout settings panel."""
+        return [p for p in (self._viewer2d_page, self._viewer3d_page) if p is not None]
+
+    def _place_settings_area(self, page: QWidget | None) -> None:
+        """Move the shared settings panel beside the layout on *page*."""
+        if page not in self._layout_pages():
+            return
+        area = self.settings_area
+        host = area.parentWidget()
+        if host is not page:
+            # The first host is the 2D viewer, whose ``layout`` attribute
+            # shadows QWidget.layout(); ask Qt directly.
+            host_layout = QWidget.layout(host) if host is not None else None
+            if host_layout is not None:
+                host_layout.removeWidget(area)
+            QWidget.layout(page).addWidget(area)
+        self._update_settings_area_visibility()
+
+    @Slot(QWidget)
+    def _on_page_activated(self, page: QWidget) -> None:
+        """The user works in *page* now: a layout takes the settings along."""
+        self._place_settings_area(page)
+        self._update_settings_area_visibility()
+        self._render_pending_3d_if_visible()
+
+    @Slot(str)
+    def _on_tab_moved(self, _key: str) -> None:
+        """A tab moved into a window or back: visibility may have changed."""
+        self._update_settings_area_visibility()
+        self._render_pending_3d_if_visible()
+
     def _create_3d_viewer_tab(self) -> QWidget:
         """Create the 3D tab container with toolbar and content area."""
         container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(5, 5, 5, 5)
+        # The shared settings panel joins this row when the 3D layout is
+        # the one in use.
+        page_layout = QHBoxLayout(container)
+        page_layout.setContentsMargins(5, 5, 5, 5)
+        page_layout.setSpacing(5)
+        view = QWidget()
+        page_layout.addWidget(view, 1)
+        layout = QVBoxLayout(view)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
 
         # Toolbar row — same layout style as the 2D tab. The object name gives
@@ -468,7 +557,7 @@ class ViewerPanel(QWidget):
             return True
         if self._creating_3d_viewer:
             return False
-        if not VTK_AVAILABLE or self._viewer3d_tab_index < 0:
+        if not VTK_AVAILABLE or self._viewer3d_page is None:
             return False
 
         self._creating_3d_viewer = True
@@ -490,19 +579,22 @@ class ViewerPanel(QWidget):
     def _create_2d_viewer_tab(self):
         """Creates the container widget for the 2D viewer."""
         container = QWidget()
-        layout = QVBoxLayout(container)
+        # The shared settings panel joins this row when the 2D layout is
+        # the one in use.
+        layout = QHBoxLayout(container)
         layout.setContentsMargins(5, 5, 5, 5)
-        layout.addWidget(self.viewer2D)
+        layout.setSpacing(5)
+        layout.addWidget(self.viewer2D, 1)
         return container
 
     def _update_settings_area_visibility(self, *_args) -> None:
-        """Show the shared settings panel beside the 2D and 3D layout tabs only."""
-        current = self.tabWidget.currentIndex()
-        on_layout_tab = current == self._viewer2d_tab_index or (
-            self._viewer3d_tab_index >= 0 and current == self._viewer3d_tab_index
+        """Show the shared settings panel only beside a layout that is on show."""
+        host = self.settings_area.parentWidget()
+        on_layout = host in self._layout_pages() and self.tabWidget.is_page_visible(
+            host
         )
         self.settings_area.setVisible(
-            on_layout_tab and self.viewer2D.settings_toggle_btn.isChecked()
+            on_layout and self.viewer2D.settings_toggle_btn.isChecked()
         )
 
     def _style_3d_settings_button(self, theme: str) -> None:
@@ -555,10 +647,9 @@ class ViewerPanel(QWidget):
         self._render_3d_now()
 
     def _is_3d_tab_active(self) -> bool:
-        """Return whether the VTK viewer tab is currently visible."""
-        return bool(
-            self._viewer3d_tab_index >= 0
-            and self.tabWidget.currentIndex() == self._viewer3d_tab_index
+        """Return whether the 3D layout is on show (current tab or own window)."""
+        return self._viewer3d_page is not None and self.tabWidget.is_page_visible(
+            self._viewer3d_page
         )
 
     def _render_3d_now(self) -> None:
@@ -590,9 +681,8 @@ class ViewerPanel(QWidget):
         finally:
             self._rendering_3d = False
 
-    @Slot(int)
-    def _render_pending_3d_if_visible(self, _index: int) -> None:
-        """Render delayed 3D updates once the 3D tab becomes visible."""
+    def _render_pending_3d_if_visible(self, *_args) -> None:
+        """Render delayed 3D updates once the 3D layout becomes visible."""
         if self._is_3d_tab_active() and (self._pending_3d_render or not self.viewer3D):
             self._schedule_3d_activation()
 
@@ -613,6 +703,7 @@ class ViewerPanel(QWidget):
     def update_theme(self, theme_name: str):
         """Updates the theme for all viewers in this panel."""
         self.current_theme = theme_name
+        self.tabWidget.update_theme()
         if self.viewer2D:
             self.viewer2D.update_theme(theme_name)
             self._style_3d_settings_button(theme_name)

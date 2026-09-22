@@ -350,12 +350,14 @@ def test_3d_layout_tab_has_a_gear_for_the_shared_settings_panel(
     gear_3d = panel._btn_3d_settings
     settings = panel.settings_area
     sag_tab_index = panel.tabWidget.indexOf(panel.sagViewer)
-    # One panel, holding the 2D layout's controls, laid out beside the tabs.
-    assert settings.parentWidget() is panel
+    # One panel, holding the 2D layout's controls, laid out beside the
+    # layout in use.
+    assert settings.parentWidget() is panel._viewer2d_page
     assert settings.isAncestorOf(panel.viewer2D.num_rays_spinbox)
     assert settings.isHidden()
 
     panel.tabWidget.setCurrentIndex(panel._viewer3d_tab_index)
+    assert settings.parentWidget() is panel._viewer3d_page
     gear_3d.click()
     assert gear_3d.isChecked()
     assert gear_2d.isChecked()

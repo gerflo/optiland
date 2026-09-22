@@ -22,10 +22,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import Qt, QTimer, Slot
+from PySide6.QtCore import QSize, Qt, QTimer, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
@@ -46,8 +47,10 @@ from optiland.optic import Optic
 
 from . import __version__, gui_plot_utils
 from .analysis_panel import CustomMatplotlibToolbar
+from .config import SPIN_BUTTON_WIDTH_PX
 from .services.file_service import with_scene_extension
 from .services.nsq_service import NSQService, default_path_name
+from .widgets.flow_layout import FlowLayout
 from .widgets.plot_navigation import PlotNavigation
 from .worker import BusyOverlay
 
@@ -59,10 +62,49 @@ logger = logging.getLogger(__name__)
 _PROJECTIONS = ("XZ", "YZ", "XY")
 #: Combo entry that means "no path active".
 NO_PATH = "(none)"
+_SAMPLES_PLACEHOLDER = "Sample scenes..."
 #: Delay between the last edit of the active path and the rebuild [ms].
 REBUILD_DELAY_MS = 300
 _HIGHLIGHT = {"dark": "#FFB000", "light": "#D9480F"}
 _DIM_ALPHA = 0.35
+#: Text padding of the trace and view spin boxes [px]. The application
+#: style pads spin boxes by 34 px on the right, but Qt takes the arrow
+#: buttons off the text area on top of that padding; these boxes pad only
+#: as much as they need, so the whole row fits into one line sooner.
+_SPIN_PADDING_LEFT_PX = 6
+_SPIN_PADDING_RIGHT_PX = 2
+#: Width a compact spin box needs besides its digits [px]: its padding,
+#: the arrow buttons, the borders and the line edit's text margins.
+_SPIN_CHROME_PX = (
+    _SPIN_PADDING_LEFT_PX + _SPIN_PADDING_RIGHT_PX + SPIN_BUTTON_WIDTH_PX + 10
+)
+#: Characters the System and Path pull-downs show at their minimum width.
+_COMBO_MIN_CHARS = 10
+
+
+class _CompactSpinBox(QSpinBox):
+    """A spin box as wide as *digits* digits need.
+
+    Qt sizes a spin box for the widest value of its range, and the style
+    sheet's padding comes on top: a seed range up to 2e9 took 160 px.
+    Longer numbers still fit into the box; they scroll.
+
+    Args:
+        digits: Digits the box shows without scrolling.
+    """
+
+    def __init__(self, digits: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._digits = digits
+
+    def sizeHint(self) -> QSize:  # noqa: N802 -- Qt override
+        """Room for the digits plus the box's chrome."""
+        width = self.fontMetrics().horizontalAdvance("8" * self._digits)
+        return QSize(width + _SPIN_CHROME_PX, super().sizeHint().height())
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 -- Qt override
+        """The box does not shrink below its digits."""
+        return self.sizeHint()
 
 
 class NSQPanel(QWidget):
@@ -130,31 +172,33 @@ class NSQPanel(QWidget):
         root.setContentsMargins(6, 6, 6, 6)
         root.setSpacing(6)
 
-        # Row 1: system selection --------------------------------------
-        scene_row = QHBoxLayout()
-        scene_row.addWidget(QLabel("System:"))
+        # Row 1: system and optical path ------------------------------------
+        top_row = QHBoxLayout()
+        top_row.addWidget(QLabel("System:"))
         self.scene_combo = QComboBox()
         self.scene_combo.setObjectName("NSQSceneCombo")
-        self.scene_combo.setPlaceholderText("Sample scenes...")
+        self.scene_combo.setPlaceholderText(_SAMPLES_PLACEHOLDER)
         for key, label in SAMPLE_SCENES.items():
             self.scene_combo.addItem(label, key)
         self.scene_combo.activated.connect(self._on_sample_selected)
-        scene_row.addWidget(self.scene_combo, 1)
+        self._make_combo_shrinkable(self.scene_combo)
+        # The pull-down names the loaded system; a file that is not one of
+        # the samples gets an entry of its own at the top (no sample key).
+        self._document_entry = False
+        top_row.addWidget(self.scene_combo, 3)
 
         self.open_button = QPushButton("Open...")
         self.open_button.setObjectName("NSQOpenButton")
         self.open_button.clicked.connect(self._on_open_clicked)
-        scene_row.addWidget(self.open_button)
+        top_row.addWidget(self.open_button)
 
         self.save_button = QPushButton("Save...")
         self.save_button.setObjectName("NSQSaveButton")
         self.save_button.clicked.connect(self._on_save_clicked)
-        scene_row.addWidget(self.save_button)
-        root.addLayout(scene_row)
+        top_row.addWidget(self.save_button)
 
-        # Row 2: optical paths ------------------------------------------
-        path_row = QHBoxLayout()
-        path_row.addWidget(QLabel("Path:"))
+        top_row.addSpacing(12)
+        top_row.addWidget(QLabel("Path:"))
         self.path_combo = QComboBox()
         self.path_combo.setObjectName("NSQPathCombo")
         self.path_combo.setToolTip(
@@ -163,68 +207,80 @@ class NSQPanel(QWidget):
             "element in the layout does the same."
         )
         self.path_combo.activated.connect(self._on_path_selected)
-        path_row.addWidget(self.path_combo, 1)
+        self._make_combo_shrinkable(self.path_combo)
+        top_row.addWidget(self.path_combo, 2)
         self.rename_path_button = QPushButton("Rename...")
         self.rename_path_button.setObjectName("NSQRenamePathButton")
         self.rename_path_button.clicked.connect(self._on_rename_path_clicked)
-        path_row.addWidget(self.rename_path_button)
-        root.addLayout(path_row)
+        top_row.addWidget(self.rename_path_button)
+        root.addLayout(top_row)
 
-        # Row 3: trace controls --------------------------------------------
-        controls = QHBoxLayout()
+        # Row 2: trace and view controls. One line when the panel is wide
+        # enough; on a narrow panel the controls wrap instead of forcing a
+        # wide minimum size. The Trace button stays at the right.
+        controls_row = QHBoxLayout()
+        self.controls_widget = QWidget()
+        self.controls_widget.setObjectName("NSQControls")
+        # A widget's own style sheet wins over the main window's.
+        self.controls_widget.setStyleSheet(
+            f"QAbstractSpinBox {{ padding-left: {_SPIN_PADDING_LEFT_PX}px;"
+            f" padding-right: {_SPIN_PADDING_RIGHT_PX}px; }}"
+        )
+        controls = FlowLayout(self.controls_widget, h_spacing=10, v_spacing=4)
+        controls.setContentsMargins(0, 0, 0, 0)
 
-        def _spin(label: str, lo: int, hi: int, value: int, name: str) -> QSpinBox:
-            controls.addWidget(QLabel(label))
-            box = QSpinBox()
+        def _field(label: str, widget: QWidget) -> None:
+            group = QWidget()
+            box = QHBoxLayout(group)
+            box.setContentsMargins(0, 0, 0, 0)
+            box.setSpacing(4)
+            box.addWidget(QLabel(label))
+            box.addWidget(widget)
+            controls.addWidget(group)
+
+        def _spin(
+            label: str, lo: int, hi: int, value: int, name: str, digits: int
+        ) -> QSpinBox:
+            box = _CompactSpinBox(digits)
             box.setObjectName(name)
             box.setRange(lo, hi)
             box.setValue(value)
             box.setAccelerated(True)
-            controls.addWidget(box)
+            _field(label, box)
             return box
 
-        self.rays_spin = _spin("Rays:", 100, 20_000_000, 20_000, "NSQRaysSpin")
+        self.rays_spin = _spin("Rays:", 100, 20_000_000, 20_000, "NSQRaysSpin", 8)
         self.rays_spin.setSingleStep(1000)
-        self.seed_spin = _spin("Seed:", 0, 2_000_000_000, 7, "NSQSeedSpin")
+        self.seed_spin = _spin("Seed:", 0, 2_000_000_000, 7, "NSQSeedSpin", 6)
         # 48 hits cover a folded system (a fundus camera's ring illumination
         # meets ~18 surfaces before the retina, ~27 when it returns).
-        self.depth_spin = _spin("Max depth:", 1, 256, 48, "NSQDepthSpin")
-        self.split_spin = _spin("Split depth:", 0, 8, 0, "NSQSplitSpin")
+        self.depth_spin = _spin("Max depth:", 1, 256, 48, "NSQDepthSpin", 3)
+        self.split_spin = _spin("Split depth:", 0, 8, 0, "NSQSplitSpin", 2)
         self.split_spin.setToolTip(
             "0: one branch per hit, chosen by roulette.\n"
             "n > 0: follow both reflected and transmitted branches for the "
             "first n hits of every ray (deterministic arm powers)."
         )
-        self.paths_spin = _spin("Recorded paths:", 0, 50_000, 500, "NSQPathsSpin")
+        self.paths_spin = _spin("Recorded paths:", 0, 50_000, 500, "NSQPathsSpin", 5)
         self.paths_spin.setSingleStep(100)
 
-        controls.addStretch(1)
-        self.trace_button = QPushButton("Trace")
-        self.trace_button.setObjectName("NSQTraceButton")
-        self.trace_button.setDefault(True)
-        self.trace_button.clicked.connect(self._on_trace_clicked)
-        controls.addWidget(self.trace_button)
-        root.addLayout(controls)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.VLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
+        controls.addWidget(separator)
 
-        # Row 4: view controls ---------------------------------------------
-        view_row = QHBoxLayout()
-        self.scene_label = QLabel("")
-        self.scene_label.setObjectName("NSQSceneLabel")
-        view_row.addWidget(self.scene_label, 1)
-        view_row.addWidget(QLabel("Projection:"))
         self.projection_combo = QComboBox()
         self.projection_combo.setObjectName("NSQProjectionCombo")
         self.projection_combo.addItems(_PROJECTIONS)
         self.projection_combo.currentTextChanged.connect(self._on_projection_changed)
-        view_row.addWidget(self.projection_combo)
-        view_row.addWidget(QLabel("Rays drawn:"))
-        self.drawn_spin = QSpinBox()
+        _field("Projection:", self.projection_combo)
+        self.drawn_spin = _CompactSpinBox(4)
         self.drawn_spin.setObjectName("NSQDrawnSpin")
         self.drawn_spin.setRange(0, 5000)
         self.drawn_spin.setValue(120)
         self.drawn_spin.setSingleStep(20)
         self.drawn_spin.valueChanged.connect(lambda _v: self.redraw())
-        view_row.addWidget(self.drawn_spin)
+        _field("Rays drawn:", self.drawn_spin)
         self.reset_view_button = QPushButton("Fit")
         self.reset_view_button.setObjectName("NSQFitButton")
         self.reset_view_button.setToolTip(
@@ -232,8 +288,15 @@ class NSQPanel(QWidget):
             "same; wheel zooms, left drag pans)."
         )
         self.reset_view_button.clicked.connect(self.reset_layout_view)
-        view_row.addWidget(self.reset_view_button)
-        root.addLayout(view_row)
+        controls.addWidget(self.reset_view_button)
+        controls_row.addWidget(self.controls_widget, 1)
+
+        self.trace_button = QPushButton("Trace")
+        self.trace_button.setObjectName("NSQTraceButton")
+        self.trace_button.setDefault(True)
+        self.trace_button.clicked.connect(self._on_trace_clicked)
+        controls_row.addWidget(self.trace_button, 0, Qt.AlignmentFlag.AlignTop)
+        root.addLayout(controls_row)
 
         # Tabs ------------------------------------------------------------
         self.tabs = QTabWidget()
@@ -294,6 +357,18 @@ class NSQPanel(QWidget):
 
         root.addWidget(self.tabs, 1)
         self._busy_overlay = BusyOverlay(self.tabs)
+
+    @staticmethod
+    def _make_combo_shrinkable(combo: QComboBox) -> None:
+        """Let a pull-down shrink to a few characters instead of its longest entry.
+
+        Both pull-downs share one row; sized for their longest entry they
+        would set a wide minimum width for the whole System Viewer.
+        """
+        combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        combo.setMinimumContentsLength(_COMBO_MIN_CHARS)
 
     # ------------------------------------------------------------------
     # Slots
@@ -540,16 +615,30 @@ class NSQPanel(QWidget):
         """Trace on the GUI thread with the panel's settings (tests, scripts)."""
         return self.service.trace_sync(**self._trace_kwargs())
 
+    def _show_document_in_combo(self, label: str) -> None:
+        """Make the System pull-down name the loaded system.
+
+        A sample is shown by its entry. Any other system (a file) gets an
+        entry of its own at the top, without a sample key, so the pull-down
+        never shows a stale sample name.
+        """
+        combo = self.scene_combo
+        combo.blockSignals(True)
+        if self._document_entry:
+            combo.removeItem(0)
+            self._document_entry = False
+        index = combo.findText(label) if label else -1
+        if index < 0 and label:
+            combo.insertItem(0, label, None)
+            self._document_entry = True
+            index = 0
+        combo.setCurrentIndex(index)
+        combo.setToolTip(label)
+        combo.blockSignals(False)
+
     @Slot()
     def _on_scene_changed(self) -> None:
-        self.scene_label.setText(self.service.scene_label)
-        # The pull-down lists the samples; a document that is not one of
-        # them shows the placeholder instead of a stale sample name.
-        self.scene_combo.blockSignals(True)
-        self.scene_combo.setCurrentIndex(
-            self.scene_combo.findText(self.service.scene_label)
-        )
-        self.scene_combo.blockSignals(False)
+        self._show_document_in_combo(self.service.scene_label)
         key = (self.service.scene_label, self.service.scene_path)
         # A different system starts with the full view; a rebuilt or
         # re-traced one keeps the user's zoom.
