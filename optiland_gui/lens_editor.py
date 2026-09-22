@@ -857,6 +857,27 @@ class _AccentFocusDelegate(QStyledItemDelegate):
             editor.installEventFilter(self._owner)
         return editor
 
+    def eventFilter(self, editor, event) -> bool:  # noqa: ANN001
+        """Let the Lens Editor's Enter navigation run before Qt's commit.
+
+        Qt installs this delegate's filter on a cell editor after the one
+        ``createEditor`` installs, so the delegate sees Enter first and
+        queues a commit-and-close for the editor. The Lens Editor's Enter
+        navigation then commits the value itself, which rebuilds the table
+        and closes the editor; the queued commit reached an editor the view
+        no longer knew ("commitData called with an editor that does not
+        belong to this view"). When the navigation takes the key, Qt's
+        commit is not queued at all.
+        """
+        if (
+            event.type() == QEvent.Type.KeyPress
+            and event.key() in (Qt.Key_Return, Qt.Key_Enter)
+            and editor.property("lens_table_editor")
+            and self._owner.eventFilter(editor, event)
+        ):
+            return True
+        return super().eventFilter(editor, event)
+
     def updateEditorGeometry(self, editor, option, index) -> None:  # noqa: ANN001
         """Make inline editors fill the cell instead of sitting inset inside it."""
         del index

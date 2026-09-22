@@ -9,7 +9,8 @@ vignetted design:
    expected and already dropped via a finite mask).
 2. ``QAbstractItemView::commitData called with an editor that does not
    belong to this view`` / ``edit: editing failed`` when the lens table is
-   rebuilt while a cell editor is open.
+   rebuilt while a cell editor is open, and (2026-09-22 session log) on
+   every cell confirmed with Enter.
 3. ``Lens surfaces overlap`` printed on every single repaint instead of
    being reported once in the GUI.
 """
@@ -118,6 +119,53 @@ class TestLensEditorEditorLifecycle:
         editor._close_active_cell_editor()  # must not raise
         assert editor.tableWidget.rowCount() > 0
 
+    def test_enter_commits_without_orphaned_editor_message(
+        self, qapp, real_connector
+    ) -> None:
+        """Regression: Qt's delegate filter saw Enter before the Lens
+        Editor's and queued a commit for the cell editor; the Lens Editor's
+        Enter navigation then committed itself, which rebuilt the table and
+        closed the editor, so the queued commit reached an editor the view
+        no longer knew."""
+        from PySide6.QtCore import Qt, qInstallMessageHandler
+        from PySide6.QtTest import QTest
+
+        from optiland_gui.lens_editor import LensEditor
+
+        messages: list[str] = []
+        previous = qInstallMessageHandler(
+            lambda _mode, _context, text: messages.append(text)
+        )
+        editor = LensEditor(real_connector)
+        try:
+            editor.resize(1200, 400)
+            editor.show()
+            QTest.qWaitForWindowExposed(editor)
+            editor.load_data()
+            table = editor.tableWidget
+            col = real_connector.COL_THICKNESS
+            table.setCurrentCell(1, col)
+            table.editItem(table.item(1, col))
+            qapp.processEvents()
+            cell_editor = qapp.focusWidget()
+            cell_editor.selectAll()
+            QTest.keyClicks(cell_editor, "6")
+            QTest.keyClick(cell_editor, Qt.Key.Key_Return)
+            for _ in range(5):
+                QTest.qWait(20)
+            position = (table.currentRow(), table.currentColumn())
+        finally:
+            qInstallMessageHandler(previous)
+            editor.close()
+            editor.deleteLater()
+
+        surface = real_connector.get_optic().surfaces.surfaces[1]
+        assert float(be.to_numpy(surface.thickness)) == pytest.approx(6.0)
+        # Enter still moves on like Tab does.
+        assert position == (1, real_connector.COL_MATERIAL)
+        orphaned = [m for m in messages if "does not belong to this view" in m]
+        assert orphaned == []
+
 
 class TestDrawingWarningReporting:
     def _make_panel(self):
@@ -208,3 +256,22 @@ def mock_connector(minimal_optic, qapp):
     conn.get_group_rows.return_value = []
     conn.get_disabled_surface_indices.return_value = set()
     return conn
+
+
+@pytest.fixture()
+def real_connector(minimal_optic, qapp, monkeypatch):
+    """A real connector, so a committed cell rebuilds the table."""
+    from optiland_gui.optiland_connector import OptilandConnector
+
+    monkeypatch.setattr(
+        "optiland_gui.optiland_connector.CatalogService",
+        lambda connector: MagicMock(),
+    )
+    monkeypatch.setattr(
+        "optiland_gui.optiland_connector.MaterialCatalogService",
+        lambda connector: MagicMock(),
+    )
+    connector = OptilandConnector()
+    connector.toast_manager = MagicMock()
+    connector.load_optic_from_object(minimal_optic)
+    return connector
