@@ -10,6 +10,7 @@ tree to switch between different property editors.
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import TYPE_CHECKING
 
@@ -44,10 +45,13 @@ from optiland.fields import (
     RealImageHeightField,
 )
 
+from .utils.number_input import parse_user_float
 from .utils.table_copy import TableCopySupport
 
 if TYPE_CHECKING:
     from .optiland_connector import OptilandConnector
+
+logger = logging.getLogger(__name__)
 
 _FIELD_TYPE_MAP: dict[type, str] = {
     AngleField: "angle",
@@ -190,6 +194,43 @@ _Z_ORIGIN_DESCRIPTIONS: dict[str, str] = {
         "layout keeps surface 1 as origin."
     ),
 }
+
+
+def _parse_table_numbers(
+    table: QTableWidget, row: int, columns: tuple[int, ...], table_name: str
+) -> list[float]:
+    """Parse the numbers typed into *columns* of *row*, decimal comma accepted.
+
+    An entry that is not a number is logged as a warning, which the GUI shows
+    as a toast, so a rejected edit does not vanish silently.
+
+    Args:
+        table: The table holding the entries.
+        row: Row index in the table.
+        columns: Column indices to read, in order.
+        table_name: Name of the table in the warning (``"Fields"``).
+
+    Returns:
+        The parsed numbers, one per column.
+
+    Raises:
+        ValueError: If a cell is empty or not a number.
+    """
+    values = []
+    for col in columns:
+        item = table.item(row, col)
+        text = item.text() if item is not None else ""
+        try:
+            values.append(parse_user_float(text))
+        except ValueError:
+            logger.warning(
+                "%s table row %d: %r is not a number; the change was not applied.",
+                table_name,
+                row + 1,
+                text,
+            )
+            raise
+    return values
 
 
 class SystemPropertiesPanel(QWidget):
@@ -623,26 +664,23 @@ class FieldsEditor(PropertyEditorBase):
 
     def _update_field_from_row(self, row_index):
         """Reads data from a table row and updates the corresponding field object.
-        Returns True if a change was made."""
-        try:
-            x = float(self.tableFields.item(row_index, 0).text())
-            y = float(self.tableFields.item(row_index, 1).text())
-            vx = float(self.tableFields.item(row_index, 2).text())
-            vy = float(self.tableFields.item(row_index, 3).text())
+        Returns True if a change was made.
 
-            field_obj = self.connector.get_optic().fields.fields[row_index]
-            if (
-                field_obj.x != x
-                or field_obj.y != y
-                or field_obj.vx != vx
-                or field_obj.vy != vy
-            ):
-                field_obj.x, field_obj.y, field_obj.vx, field_obj.vy = x, y, vx, vy
-                return True
-        except (ValueError, AttributeError) as e:
-            print(f"Invalid data in fields table row {row_index + 1}: {e}")
-            # Re-raise the exception to be handled by the caller
-            raise ValueError(f"Invalid data in row {row_index + 1}") from e
+        Raises:
+            ValueError: If a cell of the row is not a number.
+        """
+        x, y, vx, vy = _parse_table_numbers(
+            self.tableFields, row_index, (0, 1, 2, 3), "Fields"
+        )
+        field_obj = self.connector.get_optic().fields.fields[row_index]
+        if (
+            field_obj.x != x
+            or field_obj.y != y
+            or field_obj.vx != vx
+            or field_obj.vy != vy
+        ):
+            field_obj.x, field_obj.y, field_obj.vx, field_obj.vy = x, y, vx, vy
+            return True
         return False
 
     @Slot()
@@ -808,19 +846,18 @@ class WavelengthsEditor(PropertyEditorBase):
         if self.tableWavelengths.rowCount() == optic.wavelengths.num_wavelengths:
             for i in range(self.tableWavelengths.rowCount()):
                 try:
-                    new_val_um_str = self.tableWavelengths.item(i, 0).text()
-                    new_val_um = float(new_val_um_str)
-
-                    wl_obj = optic.wavelengths.wavelengths[i]
-                    if wl_obj.value != new_val_um:
-                        wl_obj._value = new_val_um
-                        wl_obj._unit = "um"
-                        wl_obj._value_in_um = new_val_um
-                        changed = True
-                except (ValueError, AttributeError):
-                    print(f"Invalid numeric data in Wavelengths table row {i + 1}.")
+                    (new_val_um,) = _parse_table_numbers(
+                        self.tableWavelengths, i, (0,), "Wavelengths"
+                    )
+                except ValueError:
                     self.load_data()
                     return
+                wl_obj = optic.wavelengths.wavelengths[i]
+                if wl_obj.value != new_val_um:
+                    wl_obj._value = new_val_um
+                    wl_obj._unit = "um"
+                    wl_obj._value_in_um = new_val_um
+                    changed = True
             if changed:
                 self.connector.opticChanged.emit()
                 print("Wavelength table changes applied.")

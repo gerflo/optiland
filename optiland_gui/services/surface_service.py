@@ -30,6 +30,7 @@ from optiland.surfaces.factories.geometry_factory import (
     config_registry,
 )
 from optiland.surfaces.standard_surface import Surface
+from optiland_gui.utils.number_input import parse_user_float
 
 logger = logging.getLogger(__name__)
 
@@ -213,21 +214,8 @@ class SurfaceService:
         optic.updater.update()
         return default
 
-    @staticmethod
-    def _parse_user_float(value: str) -> float:
-        """Parse a user-entered number, accepting a comma decimal separator.
-
-        A single comma without a dot is treated as a decimal comma
-        (``"97,1"`` -> 97.1); commas alongside a dot are treated as
-        thousands separators (``"1,234.5"`` -> 1234.5).
-        """
-        text = str(value).strip().replace(" ", "").replace(" ", "")
-        if "," in text:
-            if "." not in text and text.count(",") == 1:
-                text = text.replace(",", ".")
-            else:
-                text = text.replace(",", "")
-        return float(text)
+    #: The Lens Data Editor's number parser (decimal comma accepted).
+    _parse_user_float = staticmethod(parse_user_float)
 
     @staticmethod
     def _get_paraxial_focal_length(surface: object) -> float:
