@@ -68,6 +68,12 @@ _SAMPLES_PLACEHOLDER = "Sample scenes..."
 REBUILD_DELAY_MS = 300
 _HIGHLIGHT = {"dark": "#FFB000", "light": "#D9480F"}
 _DIM_ALPHA = 0.35
+#: Layout canvas heights [px] below which the title and x label, and then
+#: also the x tick labels, are left out: with them constrained layout
+#: leaves the plot no height below ~74 px, without the first two below
+#: ~38 px, without all three below ~23 px.
+_COMPACT_LAYOUT_PX = 120
+_TINY_LAYOUT_PX = 50
 #: Text padding of the trace and view spin boxes [px]. The application
 #: style pads spin boxes by 34 px on the right, but Qt takes the arrow
 #: buttons off the text area on top of that padding; these boxes pad only
@@ -336,6 +342,7 @@ class NSQPanel(QWidget):
             self.layout_canvas, on_reset=self.reset_layout_view
         )
         self.layout_canvas.mpl_connect("pick_event", self._on_layout_pick)
+        self.layout_canvas.mpl_connect("resize_event", self._fit_layout_decorations)
         self.tabs.addTab(layout_tab, "Layout")
 
         detectors_tab = QWidget()
@@ -746,7 +753,28 @@ class NSQPanel(QWidget):
         gui_plot_utils.apply_theme_to_existing_figure(self.layout_figure)
         if preserve_view and self.navigation.user_changed_view:
             self.navigation.restore_view(ax)
+        self._fit_layout_decorations()
         self._request_draw(self.layout_canvas)
+
+    def _fit_layout_decorations(self, _event=None) -> None:  # noqa: ANN001
+        """Leave out decorations a flat layout canvas has no room for.
+
+        Constrained layout warns and gives up when the title, the axis
+        labels and the tick labels leave the plot no height. Below
+        :data:`_COMPACT_LAYOUT_PX` the title (the pull-downs name system and
+        path) and the x label are hidden, below :data:`_TINY_LAYOUT_PX` also
+        the x tick labels; a taller canvas shows them again.
+
+        Args:
+            _event: The canvas resize event, when called as its handler.
+        """
+        height = self.layout_figure.bbox.height
+        compact = height < _COMPACT_LAYOUT_PX
+        tiny = height < _TINY_LAYOUT_PX
+        for ax in self.layout_figure.axes:
+            ax.title.set_visible(not compact)
+            ax.xaxis.label.set_visible(not compact)
+            ax.tick_params(axis="x", labelbottom=not tiny)
 
     def _layout_title(self) -> str:
         active = self.service.active_path

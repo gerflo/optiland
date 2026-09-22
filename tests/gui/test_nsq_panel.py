@@ -377,6 +377,36 @@ class TestCanvasRendering:
         finally:
             panel.close()
 
+    @pytest.mark.parametrize("height", [67, 45, 30])
+    def test_a_flat_visible_layout_keeps_its_plot(self, qapp, height):
+        """O7: a System view squeezed below ~74 px (the user's log after
+        opening a .json into it) warned "constrained_layout not applied"
+        on every draw: title, x label and tick labels left the plot no
+        height. A flat canvas drops the title and x label (the pull-downs
+        name system and path), a very flat one the x tick labels too."""
+        panel = NSQPanel(_connector())
+        panel.resize(1000, 700)
+        try:
+            panel.show()
+            _settle(qapp)
+
+            caught = self._collapse_warnings(
+                qapp, lambda: panel.layout_canvas.resize(674, height)
+            )
+            caught += self._collapse_warnings(qapp, panel.layout_canvas.draw)
+
+            assert caught == []
+            ax = panel.layout_figure.axes[0]
+            assert ax.get_position().height > 0.3
+            assert not ax.title.get_visible()
+
+            panel.layout_canvas.resize(674, 400)
+            _settle(qapp)
+            assert ax.title.get_visible() and ax.xaxis.label.get_visible()
+            assert all(label.get_visible() for label in ax.get_xticklabels())
+        finally:
+            panel.close()
+
     def test_the_detector_placeholder_fits_a_narrow_canvas(self, qapp):
         panel = NSQPanel(_connector())
         try:
