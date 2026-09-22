@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PySide6.QtCore import QSize, Qt, QTimer, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Slot
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -82,6 +82,20 @@ _SPIN_CHROME_PX = (
 _COMBO_MIN_CHARS = 10
 
 
+def _placeholder(ax, text: str) -> None:  # noqa: ANN001
+    """Write *text* in the middle of an empty plot.
+
+    The text stays out of the constrained layout: a line wider than the
+    canvas would otherwise claim more margin than the figure has and
+    collapse the axes.
+
+    Args:
+        ax: The axes to write into.
+        text: The message.
+    """
+    ax.text(0.5, 0.5, text, ha="center", va="center", in_layout=False)
+
+
 class _CompactSpinBox(QSpinBox):
     """A spin box as wide as *digits* digits need.
 
@@ -130,6 +144,8 @@ class NSQPanel(QWidget):
         self.service = service if service is not None else NSQService(self)
         self.current_theme = "dark"
         self._last_scene_key: tuple = ()
+        # Canvases whose figure changed while they were hidden.
+        self._stale_canvases: set[FigureCanvas] = set()
         self._rebuild_timer = QTimer(self)
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(REBUILD_DELAY_MS)
@@ -310,6 +326,7 @@ class NSQPanel(QWidget):
         # (tight_layout would fix the margins at the first draw's size).
         self.layout_figure = Figure(figsize=(8, 5), layout="constrained")
         self.layout_canvas = FigureCanvas(self.layout_figure)
+        self.layout_canvas.installEventFilter(self)
         self.layout_toolbar = CustomMatplotlibToolbar(self.layout_canvas, layout_tab)
         self.layout_toolbar.on_view_limits_changed = self._on_toolbar_view_changed
         layout_box.addWidget(self.layout_toolbar)
@@ -325,6 +342,7 @@ class NSQPanel(QWidget):
         detectors_box.setContentsMargins(0, 0, 0, 0)
         self.detector_figure = Figure(figsize=(8, 5), layout="constrained")
         self.detector_canvas = FigureCanvas(self.detector_figure)
+        self.detector_canvas.installEventFilter(self)
         self.detector_toolbar = CustomMatplotlibToolbar(
             self.detector_canvas, detectors_tab
         )
@@ -702,8 +720,8 @@ class NSQPanel(QWidget):
         ax = self.layout_figure.add_subplot(111)
         scene = self.service.scene
         if scene is None:
-            ax.text(0.5, 0.5, "No system loaded", ha="center", va="center")
-            self.layout_canvas.draw_idle()
+            _placeholder(ax, "No system loaded")
+            self._request_draw(self.layout_canvas)
             return
         result = self.service.result
         num_rays = self.drawn_spin.value() if result is not None else 0
@@ -717,7 +735,7 @@ class NSQPanel(QWidget):
             )
         except Exception as exc:  # noqa: BLE001 -- drawing must never crash the GUI
             logger.exception("NSQ layout drawing failed")
-            ax.text(0.5, 0.5, f"Layout error: {exc}", ha="center", va="center")
+            _placeholder(ax, f"Layout error: {exc}")
         self._style_path_artists(ax)
         # Equal scale without shrinking the axes box: expand the data
         # limits instead so the plot keeps the whole canvas.
@@ -725,7 +743,7 @@ class NSQPanel(QWidget):
         gui_plot_utils.apply_theme_to_existing_figure(self.layout_figure)
         if preserve_view and self.navigation.user_changed_view:
             self.navigation.restore_view(ax)
-        self.layout_canvas.draw_idle()
+        self._request_draw(self.layout_canvas)
 
     def _layout_title(self) -> str:
         active = self.service.active_path
@@ -773,15 +791,9 @@ class NSQPanel(QWidget):
                     maps.append((name, detector))
         if not maps:
             ax = self.detector_figure.add_subplot(111)
-            ax.text(
-                0.5,
-                0.5,
-                "Run a trace to see the detector irradiance maps",
-                ha="center",
-                va="center",
-            )
+            _placeholder(ax, "Run a trace to see the detector irradiance maps")
             ax.set_axis_off()
-            self.detector_canvas.draw_idle()
+            self._request_draw(self.detector_canvas)
             return
         cols = 2 if len(maps) > 1 else 1
         rows = int(np.ceil(len(maps) / cols))
@@ -808,7 +820,32 @@ class NSQPanel(QWidget):
                 f"{name}: {det_map.total_flux_float:.4g} W, {det_map.num_rays_hit} rays"
             )
         gui_plot_utils.apply_theme_to_existing_figure(self.detector_figure)
-        self.detector_canvas.draw_idle()
+        self._request_draw(self.detector_canvas)
+
+    def _request_draw(self, canvas: FigureCanvas) -> None:
+        """Render *canvas* now if it is on screen, else once it is shown.
+
+        A hidden canvas (the Detectors tab, or the whole System view while
+        the Lens Data Editor is in use) keeps the figure size of its last
+        layout, often a small one; constrained layout cannot fit the axes
+        there and warns on every rebuild. Nobody sees that rendering, so it
+        waits for the canvas's Show event (see :meth:`eventFilter`).
+
+        Args:
+            canvas: The layout or detector canvas.
+        """
+        if canvas.isVisible():
+            self._stale_canvases.discard(canvas)
+            canvas.draw_idle()
+        else:
+            self._stale_canvases.add(canvas)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802 -- Qt override
+        """Render a canvas whose figure changed while it was hidden."""
+        if event.type() == QEvent.Type.Show and watched in self._stale_canvases:
+            self._stale_canvases.discard(watched)
+            watched.draw_idle()
+        return super().eventFilter(watched, event)
 
     def _fill_summary(self) -> None:
         rows = self.service.summary_rows()

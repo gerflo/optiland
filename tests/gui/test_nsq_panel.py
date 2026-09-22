@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import warnings
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -230,6 +231,89 @@ class TestNSQPanel:
         assert panel.summary_table.rowCount() > 0
         transmitted = panel.service.result.detectors["transmitted"].irradiance
         assert np.asarray(transmitted).sum() > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Rendering: no collapsed constrained layouts
+# ---------------------------------------------------------------------------
+
+
+class TestCanvasRendering:
+    """Regression (2026-09-22 session log): "constrained_layout not applied
+    because axes sizes collapsed to zero" after every edit in the Lens Data
+    Editor. Every rebuild rendered both figures, also while the System view
+    or the Detectors tab was hidden, at the size the canvas had when it was
+    last laid out; and the Detectors placeholder text counted for the
+    layout, so any canvas narrower than the text (~330 px) collapsed."""
+
+    @staticmethod
+    def _collapse_warnings(qapp, action) -> list:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            action()
+            _settle(qapp)
+        return [
+            w for w in caught if "constrained_layout not applied" in str(w.message)
+        ]
+
+    @staticmethod
+    def _record_draws(panel) -> list[str]:
+        drawn: list[str] = []
+        panel.layout_canvas.mpl_connect(
+            "draw_event", lambda _event: drawn.append("layout")
+        )
+        panel.detector_canvas.mpl_connect(
+            "draw_event", lambda _event: drawn.append("detectors")
+        )
+        return drawn
+
+    def test_hidden_canvases_are_not_rendered_on_redraw(self, qapp):
+        panel = NSQPanel(_connector())
+        try:
+            _settle(qapp)
+            # Figure sizes a canvas kept from its last layout in a small dock.
+            panel.layout_figure.set_size_inches(2.5, 0.5)
+            panel.detector_figure.set_size_inches(2.5, 2.0)
+            drawn = self._record_draws(panel)
+
+            caught = self._collapse_warnings(qapp, panel.redraw)
+
+            assert caught == []
+            assert drawn == []
+        finally:
+            panel.close()
+
+    def test_a_hidden_canvas_is_rendered_when_it_is_shown(self, qapp):
+        panel = NSQPanel(_connector())
+        panel.resize(1000, 700)
+        try:
+            panel.redraw()
+            drawn = self._record_draws(panel)
+
+            panel.show()
+            _settle(qapp)
+            assert "layout" in drawn
+            assert "detectors" not in drawn  # its tab is still hidden
+
+            panel.tabs.setCurrentIndex(1)
+            _settle(qapp)
+            assert "detectors" in drawn
+        finally:
+            panel.close()
+
+    def test_the_detector_placeholder_fits_a_narrow_canvas(self, qapp):
+        panel = NSQPanel(_connector())
+        try:
+            panel.detector_figure.set_size_inches(2.5, 3.0)
+
+            caught = self._collapse_warnings(qapp, panel.detector_canvas.draw)
+
+            assert caught == []
+            box = panel.detector_figure.axes[0].get_position()
+            assert box.width > 0.8
+            assert box.height > 0.8
+        finally:
+            panel.close()
 
 
 # ---------------------------------------------------------------------------
