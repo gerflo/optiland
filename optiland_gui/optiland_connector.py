@@ -11,6 +11,7 @@ Author: Manuel Fragata Mendes, 2025
 from __future__ import annotations
 
 import logging
+import math
 
 from PySide6.QtCore import QObject, Signal
 
@@ -298,9 +299,10 @@ class OptilandConnector(QObject):
 
         If no surfaces are disabled the live optic is returned directly.
         Otherwise a deep copy is made, disabled surfaces are spliced out
-        (their thickness is merged into the preceding surface), and the
-        result is returned.  Falls back to the live optic if the filtered
-        copy cannot be updated successfully.
+        (the gap before and behind each one becomes the preceding
+        surface's thickness, so every other surface keeps its place), and
+        the result is returned.  Falls back to the live optic if the
+        filtered copy cannot be updated successfully.
 
         Returns:
             The effective :class:`~optiland.optic.Optic` instance.
@@ -309,14 +311,24 @@ class OptilandConnector(QObject):
             return self._optic
         import copy
 
+        import optiland.backend as be
+
         effective = copy.deepcopy(self._optic)
-        num_surfaces = effective.surfaces.num_surfaces
+        surfaces = effective.surfaces
         for idx in sorted(self._disabled_surface_indices, reverse=True):
-            if idx <= 0 or idx >= num_surfaces - 1:
+            if idx <= 0 or idx >= surfaces.num_surfaces - 1:
                 continue
-            effective.surfaces[idx - 1].thickness += effective.surfaces[idx].thickness
-            effective.surfaces.remove(idx)
-            num_surfaces -= 1
+            # Positions, not thickness attributes: a finite object is placed
+            # by its z alone (its attribute reads 0 after loading a file).
+            z = [float(be.to_numpy(s.geometry.cs.z)) for s in surfaces]
+            gap = z[idx + 1] - z[idx - 1]
+            surfaces[idx - 1].thickness = gap
+            surfaces.remove(idx)
+            if idx == 1 and math.isfinite(gap):
+                # The next surface became surface 1 and may have moved to
+                # z = 0 (its place by definition); the object goes with it.
+                new_first = float(be.to_numpy(surfaces[1].geometry.cs.z))
+                surfaces[0].geometry.cs.z = be.array(new_first - gap)
         try:
             effective.updater.update()
         except Exception:

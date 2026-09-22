@@ -1877,8 +1877,13 @@ class LensEditor(QWidget):
                 "Semi-Diameter",
             ]
             is_last_thickness = row == num_surfaces - 1 and header == "Thickness"
+            # The object's thickness is the object distance, a design
+            # parameter like any other gap ("inf" puts it at infinity).
+            is_object_distance = row == 0 and header == "Thickness"
 
-            if (is_obj_or_img and is_non_editable_header) or is_last_thickness:
+            if (
+                is_obj_or_img and is_non_editable_header and not is_object_distance
+            ) or is_last_thickness:
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
 
             # Highlight cells that are registered optimization variables
