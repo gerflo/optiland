@@ -231,21 +231,45 @@ class _Aperture:
     r_min: float
     rectangular: tuple[float, float, float, float] | None
     estimated: bool
+    #: Radial zone ``(r_min, r_max)`` a mask stop blocks, if any.
+    blocked: tuple[float, float] | None = None
+    #: The aperture's shape is enforced as its circumscribed circle.
+    approximated: bool = False
+
+
+def _centred_radial(ap) -> tuple[float, float] | None:
+    """``(r_max, r_min)`` of a centred radial aperture, else None."""
+    from optiland.physical_apertures.radial import RadialAperture  # noqa: PLC0415
+
+    if not isinstance(ap, RadialAperture):
+        return None
+    if float(getattr(ap, "offset_x", 0.0)) or float(getattr(ap, "offset_y", 0.0)):
+        return None
+    return float(ap.r_max), float(ap.r_min)
 
 
 def _aperture_of(surface, optic, index: int) -> _Aperture:
+    from optiland.visualization.system.system import mask_zone  # noqa: PLC0415
+
     ap = surface.aperture
-    if ap is not None and hasattr(ap, "r_max"):
-        return _Aperture(float(ap.r_max), float(getattr(ap, "r_min", 0.0)), None, False)
-    if ap is not None and hasattr(ap, "x_min"):
+    if ap is None:
+        r, estimated = _surface_semi_diameter(surface, optic, index)
+        return _Aperture(float(r), 0.0, None, estimated)
+    radial = _centred_radial(ap)
+    if radial is not None:
+        return _Aperture(*radial, None, False)
+    if hasattr(ap, "x_min"):
         rect = (float(ap.x_min), float(ap.x_max), float(ap.y_min), float(ap.y_max))
         r = max(abs(v) for v in rect)
         return _Aperture(r, 0.0, rect, False)
-    if ap is not None and hasattr(ap, "extent"):
-        r = max(abs(float(v)) for v in ap.extent())
-        return _Aperture(r, 0.0, None, False)
-    r, estimated = _surface_semi_diameter(surface, optic, index)
-    return _Aperture(float(r), 0.0, None, estimated)
+    zone = mask_zone(ap)
+    clear = _centred_radial(getattr(ap, "a", None)) if zone is not None else None
+    if clear is not None:
+        return _Aperture(*clear, None, False, blocked=zone)
+    # Any other shape (ellipse, polygon, a decentred or boolean aperture):
+    # the circumscribed circle of its extent.
+    r = max(abs(float(v)) for v in ap.extent)
+    return _Aperture(r, 0.0, None, False, approximated=True)
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +411,11 @@ def add_optic_surfaces(
         aperture = _aperture_of(surface, optic, i)
         if aperture.estimated:
             report.notes.append(f"{name}: aperture estimated ({aperture.r_max:.3g} mm)")
+        if aperture.approximated:
+            report.notes.append(
+                f"{name}: {type(surface.aperture).__name__} enforced as its "
+                f"circumscribed circle ({aperture.r_max:.3g} mm)"
+            )
         r_max = aperture.r_max
         cs = flat_coordinate_system(surface.geometry.cs, frame)
 
@@ -466,6 +495,29 @@ def add_optic_surfaces(
                 ),
             )
             report.baffles.append(disk_name)
+        if aperture.blocked is not None:
+            # A mask stop's blocking disk or ring, at the surface like the
+            # rim: flat, at the sag of its inner edge.
+            inner, outer_blocked = aperture.blocked
+            if inner > 0.0:
+                mask_geometry = AnnularPlaneGeometry(
+                    inner_radius=inner,
+                    outer_radius=outer_blocked,
+                    z_offset=surface_sag(surface, inner),
+                )
+            else:
+                mask_geometry = FinitePlaneGeometry(aperture_radius=outer_blocked)
+            mask_name = f"{name}.mask"
+            scene.add_component(
+                mask_name,
+                AbsorbingComponent(
+                    cs=cs,
+                    geometry=mask_geometry,
+                    material_front=materials.get(pre),
+                    name=f"{label} mask",
+                ),
+            )
+            report.baffles.append(mask_name)
     return report
 
 

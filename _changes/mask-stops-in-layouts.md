@@ -15,7 +15,7 @@ Branch: `master`
 
 - a mask stop is visible in the 2D and 3D layout as the element that blocks light, in red, while the aperture stop stays purple
 - masks show by default even when the aperture markers are switched off (the 2D default)
-- the System tab (multi-axis system) still shows neither stops nor masks: the conversion into the non-sequential scene does not carry masks yet
+- the System tab (multi-axis system): since the O1 fix the conversion into the non-sequential scene builds a mask's blocking disk or ring as an absorber (`S<i>.mask`), so the NSQ trace is dimmed correctly; it is still drawn grey like any absorber, not red (O4)
 
 ## Tests
 

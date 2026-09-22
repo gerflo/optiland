@@ -243,6 +243,109 @@ class TestAddOpticSurfaces:
             add_optic_surfaces(NSQScene(), optic)
 
 
+def _masked_stop_optic(aperture) -> Optic:
+    """A collimated beam (EPD 10) through an air-to-air stop carrying
+    *aperture*, onto an image plane 5 mm behind it."""
+    optic = Optic()
+    optic.add_surface(index=0, thickness=np.inf)
+    optic.add_surface(index=1, thickness=5.0, is_stop=True, aperture=aperture)
+    optic.add_surface(index=2, aperture=RectangularAperture(-6.0, 6.0, -6.0, 6.0))
+    optic.set_aperture(aperture_type="EPD", value=10.0)
+    optic.fields.set_type("angle")
+    optic.fields.add(y=0.0)
+    optic.wavelengths.add(value=0.55, is_primary=True)
+    return optic
+
+
+def _irradiance_by_radius(optic: Optic):
+    """Trace the beam; return the image irradiance and each pixel's radius.
+
+    The detector splats every hit bilinearly onto the pixels within one
+    pitch (0.25 mm) in x and y, so a shadow edge blurs by up to 0.36 mm.
+    """
+    from optiland.nonsequential.surface_conversion import (
+        add_collimated_field_sources,
+    )
+
+    scene = NSQScene()
+    add_optic_surfaces(scene, optic)
+    add_collimated_field_sources(scene, optic)
+    add_image_detector(scene, optic, "camera", num_pixels=(48, 48))
+    detector = scene.trace(num_rays=40_000, seed=3).detectors["camera"]
+    x, y = np.meshgrid(
+        np.asarray(detector.x_coords), np.asarray(detector.y_coords)
+    )
+    return np.asarray(detector.irradiance), np.hypot(x, y)
+
+
+class TestMaskApertures:
+    """O1: a mask stop (``DifferenceAperture`` of two centred radial
+    apertures, the Lens Data Editor's Circular/Annular Mask) crashed the
+    conversion with "'tuple' object is not callable"; the blocked disk or
+    ring must absorb in the NSQ scene."""
+
+    @staticmethod
+    def _mask(clear: float, blocked_outer: float, blocked_inner: float = 0.0):
+        from optiland.physical_apertures import DifferenceAperture
+
+        return DifferenceAperture(
+            RadialAperture(r_max=clear, r_min=0.0),
+            RadialAperture(r_max=blocked_outer, r_min=blocked_inner),
+        )
+
+    def test_circular_mask_becomes_an_absorbing_disk(self):
+        optic = _masked_stop_optic(self._mask(6.0, 2.0))
+        scene = NSQScene()
+        report = add_optic_surfaces(scene, optic)
+
+        rim = scene.component_registry.get("S1.rim").component
+        assert float(rim.geometry.inner_radius) == pytest.approx(6.0)
+        disk = scene.component_registry.get("S1.mask").component
+        assert isinstance(disk, AbsorbingComponent)
+        assert isinstance(disk.geometry, FinitePlaneGeometry)
+        assert float(disk.geometry.aperture_radius) == pytest.approx(2.0)
+        assert "S1.mask" in report.baffles
+
+    def test_annular_mask_becomes_an_absorbing_ring(self):
+        optic = _masked_stop_optic(self._mask(6.0, 3.0, 2.0))
+        scene = NSQScene()
+        add_optic_surfaces(scene, optic)
+
+        ring = scene.component_registry.get("S1.mask").component
+        assert isinstance(ring, AbsorbingComponent)
+        assert isinstance(ring.geometry, AnnularPlaneGeometry)
+        assert float(ring.geometry.inner_radius) == pytest.approx(2.0)
+        assert float(ring.geometry.outer_radius) == pytest.approx(3.0)
+
+    def test_circular_mask_casts_its_shadow(self):
+        irradiance, r = _irradiance_by_radius(
+            _masked_stop_optic(self._mask(6.0, 2.0))
+        )
+        assert irradiance[r < 1.6].max() == 0.0
+        assert irradiance[(r > 2.5) & (r < 4.5)].min() > 0.0
+
+    def test_annular_mask_casts_a_ring_shadow(self):
+        irradiance, r = _irradiance_by_radius(
+            _masked_stop_optic(self._mask(6.0, 3.0, 2.0))
+        )
+        assert irradiance[(r > 2.4) & (r < 2.6)].max() == 0.0
+        assert irradiance[r < 1.6].min() > 0.0
+        assert irradiance[(r > 3.4) & (r < 4.5)].min() > 0.0
+
+    def test_other_shapes_convert_to_their_circumscribed_circle(self):
+        from optiland.physical_apertures import EllipticalAperture
+
+        optic = _masked_stop_optic(EllipticalAperture(a=6.0, b=5.5))
+        scene = NSQScene()
+        report = add_optic_surfaces(scene, optic)
+
+        rim = scene.component_registry.get("S1.rim").component
+        assert float(rim.geometry.inner_radius) == pytest.approx(6.0)
+        assert any(
+            "S1" in note and "EllipticalAperture" in note for note in report.notes
+        )
+
+
 class TestObjectAndImage:
     def test_field_points_lie_on_the_curved_object(self):
         optic = _eye_and_lens_optic()
