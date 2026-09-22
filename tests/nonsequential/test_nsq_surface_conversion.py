@@ -346,6 +346,70 @@ class TestMaskApertures:
         )
 
 
+class TestUnboundedClearAperture:
+    """A mask with an infinite clear radius (the Lens Data Editor accepts
+    ``inf``) or a ring aperture without outer edge became a rim baffle with
+    ``inner_radius == outer_radius == inf``; drawing the System view then
+    computed ``inf * 0`` ("invalid value encountered in multiply"). Such a
+    surface clips nothing outside, so it is sized like one without
+    aperture."""
+
+    @staticmethod
+    def _open_rim_radius() -> float:
+        scene = NSQScene()
+        add_optic_surfaces(scene, _masked_stop_optic(None))
+        return float(
+            scene.component_registry.get("S1.rim").component.geometry.inner_radius
+        )
+
+    def test_mask_is_sized_like_a_surface_without_aperture(self):
+        optic = _masked_stop_optic(TestMaskApertures._mask(np.inf, 2.0))
+        scene = NSQScene()
+        report = add_optic_surfaces(scene, optic)
+
+        rim = scene.component_registry.get("S1.rim").component.geometry
+        assert math.isfinite(float(rim.outer_radius))
+        assert float(rim.inner_radius) == pytest.approx(self._open_rim_radius())
+        disk = scene.component_registry.get("S1.mask").component.geometry
+        assert float(disk.aperture_radius) == pytest.approx(2.0)
+        assert any("S1: aperture estimated" in note for note in report.notes)
+
+    def test_ring_aperture_without_outer_edge_keeps_its_obscuration(self):
+        optic = _masked_stop_optic(RadialAperture(r_max=np.inf, r_min=1.5))
+        scene = NSQScene()
+        add_optic_surfaces(scene, optic)
+
+        rim = scene.component_registry.get("S1.rim").component.geometry
+        assert float(rim.inner_radius) == pytest.approx(self._open_rim_radius())
+        disk = scene.component_registry.get("S1.obscuration").component.geometry
+        assert float(disk.aperture_radius) == pytest.approx(1.5)
+
+    def test_scene_draws_and_bounds_without_invalid_values(self):
+        import matplotlib.pyplot as plt
+
+        optic = _masked_stop_optic(TestMaskApertures._mask(np.inf, 2.0))
+        scene = NSQScene()
+        add_optic_surfaces(scene, optic)
+
+        fig, ax = plt.subplots()
+        try:
+            with np.errstate(invalid="raise"):
+                scene.view(ax=ax, projection="YZ")
+        finally:
+            plt.close(fig)
+        for surface in scene.surfaces:
+            box = surface.geometry.bounding_box(_get_transform(surface.cs))
+            assert np.all(np.isfinite(box.min_corner))
+            assert np.all(np.isfinite(box.max_corner))
+
+    def test_mask_casts_its_shadow(self):
+        irradiance, r = _irradiance_by_radius(
+            _masked_stop_optic(TestMaskApertures._mask(np.inf, 2.0))
+        )
+        assert irradiance[r < 1.6].max() == 0.0
+        assert irradiance[(r > 2.5) & (r < 4.5)].min() > 0.0
+
+
 class TestObjectAndImage:
     def test_field_points_lie_on_the_curved_object(self):
         optic = _eye_and_lens_optic()

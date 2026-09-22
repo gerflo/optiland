@@ -29,7 +29,7 @@ Kramer Harrison, 2026
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -249,12 +249,24 @@ def _centred_radial(ap) -> tuple[float, float] | None:
 
 
 def _aperture_of(surface, optic, index: int) -> _Aperture:
+    aperture = _declared_aperture(surface.aperture)
+    if aperture is not None and math.isfinite(aperture.r_max):
+        return aperture
+    # No clear limit -- no aperture, or an unbounded clear part such as a
+    # mask with an infinite clear radius: the sequential engine clips
+    # nothing outside, so the surface is sized like one without aperture.
+    r, estimated = _surface_semi_diameter(surface, optic, index)
+    if aperture is None:
+        return _Aperture(float(r), 0.0, None, estimated)
+    return replace(aperture, r_max=float(r), estimated=estimated)
+
+
+def _declared_aperture(ap) -> _Aperture | None:
+    """The aperture a surface declares, or None without one."""
     from optiland.visualization.system.system import mask_zone  # noqa: PLC0415
 
-    ap = surface.aperture
     if ap is None:
-        r, estimated = _surface_semi_diameter(surface, optic, index)
-        return _Aperture(float(r), 0.0, None, estimated)
+        return None
     radial = _centred_radial(ap)
     if radial is not None:
         return _Aperture(*radial, None, False)
