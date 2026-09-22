@@ -553,6 +553,7 @@ def test_viewer_panel_passes_2d_ray_count_and_full_pupil_distribution_to_3d_rend
         "distribution": "hexapolar",
         "show_stop_apertures": True,
         "show_non_stop_apertures": True,
+        "show_masks": True,
         "hide_vignetted": False,
     }
 
@@ -597,6 +598,7 @@ def test_viewer_panel_apply_2d_settings_refreshes_coupled_3d_renderer(
         "distribution": "random",
         "show_stop_apertures": True,
         "show_non_stop_apertures": True,
+        "show_masks": True,
         "hide_vignetted": False,
     }
 

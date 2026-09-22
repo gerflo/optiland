@@ -10,7 +10,10 @@ from __future__ import annotations
 import warnings
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 import optiland.backend as be
+from optiland.physical_apertures.base import DifferenceAperture
 from optiland.physical_apertures.radial import RadialAperture
 from optiland.visualization.system.lens import Lens2D, Lens3D
 from optiland.visualization.system.mirror import Mirror3D
@@ -24,6 +27,45 @@ if TYPE_CHECKING:
 # Built-in component types ("lens", "mirror", "surface") are handled via the
 # internal component_registry on each OpticalSystem instance.
 _CUSTOM_RENDERER_REGISTRY: dict[str, ComponentRenderer] = {}
+
+STOP_COLOR = "#9B30FF"  # purple: visible on both dark and light
+APERTURE_COLOR = "#7700CC"  # darker purple for non-stop apertures
+MASK_COLOR = "#E8202A"  # red: mask stops, visible on both dark and light
+
+# 2D mask body: a bar this thick (points), sampled at this many points per
+# blocked zone so it follows a curved surface instead of cutting its chord.
+MASK_LINE_WIDTH = 3.5
+_MASK_SAMPLES = 33
+
+
+def mask_zone(aperture) -> tuple[float, float] | None:
+    """The radial zone ``(r_min, r_max)`` a mask stop blocks.
+
+    A mask stop is a clear circle minus a centred disk (``r_min == 0``) or
+    ring: ``DifferenceAperture(RadialAperture, RadialAperture)``, as the
+    GUI's Circular/Annular Mask and the anti-reflex dots define it.
+
+    Args:
+        aperture: A surface's physical aperture, or None.
+
+    Returns:
+        The blocked zone in the surface's local frame, or None when the
+        aperture is not such a mask (including a decentred blocking disk).
+    """
+    if not isinstance(aperture, DifferenceAperture):
+        return None
+    blocked = aperture.b
+    if not isinstance(blocked, RadialAperture):
+        return None
+    if float(getattr(blocked, "offset_x", 0.0)) or float(
+        getattr(blocked, "offset_y", 0.0)
+    ):
+        return None
+    r_min = float(be.to_numpy(blocked.r_min))
+    r_max = float(be.to_numpy(blocked.r_max))
+    if not r_max > r_min:
+        return None
+    return r_min, r_max
 
 
 class _CustomRendererAdapter:
@@ -129,14 +171,26 @@ class OpticalSystem:
         show_stop_apertures=True,
         show_non_stop_apertures=True,
         hide_internal_surfaces=False,
+        show_masks=None,
     ):
         """Plots the components of the optical system on the given
         axis (or renderer for 3D plotting).
 
+        Args:
+            show_apertures: Draw the aperture markers of the stop and the
+                other surfaces with an aperture.
+            show_stop_apertures: 3D only: draw the stop's aperture marker.
+            show_non_stop_apertures: 3D only: draw the other surfaces'
+                aperture markers.
+            hide_internal_surfaces: Draw compound lenses by their outer
+                surfaces only.
+            show_masks: Draw mask stops (see :func:`mask_zone`) in red, with
+                their blocking disk or ring. None follows ``show_apertures``.
+
         Returns:
             dict: Every drawn artist (2D) or actor (3D) mapped to what it
                 shows: the component for lenses and standalone surfaces, the
-                surface for aperture markers.
+                surface for aperture and mask markers.
         """
         self._identify_components(hide_internal_surfaces=hide_internal_surfaces)
         artists = {}
@@ -144,17 +198,24 @@ class OpticalSystem:
             component_artists = component.plot(ax, theme=theme, projection=projection)
             if component_artists:
                 artists.update(component_artists)
-        if show_apertures:
+        if show_masks is None:
+            show_masks = show_apertures
+        if show_apertures or show_masks:
             if self.projection == "2d":
                 aperture_artists = self._plot_apertures(
-                    ax, theme=theme, projection=projection
+                    ax,
+                    theme=theme,
+                    projection=projection,
+                    show_apertures=show_apertures,
+                    show_masks=show_masks,
                 )
             else:
                 aperture_artists = self._plot_apertures_3d(
                     ax,
                     theme=theme,
-                    show_stop=show_stop_apertures,
-                    show_non_stop=show_non_stop_apertures,
+                    show_stop=show_apertures and show_stop_apertures,
+                    show_non_stop=show_apertures and show_non_stop_apertures,
+                    show_masks=show_masks,
                 )
             artists.update(aperture_artists)
         return artists
@@ -356,70 +417,191 @@ class OpticalSystem:
             )
         return line
 
-    def _plot_apertures(self, ax, theme=None, projection="YZ"):
+    @staticmethod
+    def _local_zone_coords(projection: str, lo: float, hi: float):
+        """Local points sampled from ``lo`` to ``hi`` along the shown axis."""
+        t = be.linspace(lo, hi, _MASK_SAMPLES)
+        if projection == "XZ":
+            return t, be.zeros_like(t)
+        return be.zeros_like(t), t  # YZ
+
+    def _draw_mask_body(self, ax, surface, projection: str, zone) -> list:
+        """Draw the blocked zone of a mask stop as thick red bars on its surface.
+
+        A centred disk is one bar across the axis; a ring is two bars, one
+        on either side of the axis.
+
+        Returns:
+            list: The drawn lines.
+        """
+        r_min, r_max = zone
+        segments = (
+            [(-r_max, r_max)] if r_min == 0 else [(r_min, r_max), (-r_max, -r_min)]
+        )
+        lines = []
+        for lo, hi in segments:
+            x_local, y_local = self._local_zone_coords(projection, lo, hi)
+            z_global, axis_vals = self._aperture_indicator_globals(
+                surface, projection, x_local, y_local
+            )
+            (line,) = ax.plot(
+                z_global,
+                axis_vals,
+                color=MASK_COLOR,
+                linewidth=MASK_LINE_WIDTH,
+                solid_capstyle="butt",
+            )
+            lines.append(line)
+        return lines
+
+    def _plot_apertures(
+        self, ax, theme=None, projection="YZ", show_apertures=True, show_masks=True
+    ):
+        """Draw the aperture markers and mask stops onto a 2D axis.
+
+        The stop is purple, other apertures dark purple. A mask stop is red:
+        its clear edge like an aperture marker, its blocking disk or ring as
+        a thick bar that follows the surface. A mask on the stop surface keeps
+        the stop's purple edge.
+
+        Args:
+            show_apertures: Draw the markers of the stop and the apertures
+                that are no mask.
+            show_masks: Draw the mask stops (clear edge and blocked zone).
+
+        Returns:
+            dict: Every drawn line mapped to the surface it marks.
+        """
         if projection == "XY":
             return {}
         if projection not in ("XZ", "YZ"):
             raise ValueError("Invalid projection type. Must be 'XY', 'XZ', or 'YZ'.")
-
-        stop_color = "#9B30FF"  # purple: visible on both dark and light
-        aperture_color = "#7700CC"  # darker purple for non-stop apertures
 
         artists = {}
         for idx, surface in enumerate(self.optic.surfaces):
             # Skip surfaces without any aperture indicator (unless it is the stop)
             if surface.aperture is None and not surface.is_stop:
                 continue
-            extent = self._aperture_extent(surface, idx)
-            if extent is None:
-                continue
+            zone = mask_zone(surface.aperture)
+            if surface.is_stop:
+                facecolor, show_edge = STOP_COLOR, show_apertures
+            elif zone is not None:
+                facecolor, show_edge = MASK_COLOR, show_masks
+            else:
+                facecolor, show_edge = APERTURE_COLOR, show_apertures
 
-            x_local, y_local = self._local_aperture_coords(projection, extent)
-            z_global, axis_vals = self._aperture_indicator_globals(
-                surface, projection, x_local, y_local
-            )
+            extent = self._aperture_extent(surface, idx) if show_edge else None
+            if extent is not None:
+                x_local, y_local = self._local_aperture_coords(projection, extent)
+                z_global, axis_vals = self._aperture_indicator_globals(
+                    surface, projection, x_local, y_local
+                )
+                line = self._draw_aperture_indicator(ax, z_global, axis_vals, facecolor)
+                artists[line] = surface
 
-            facecolor = stop_color if surface.is_stop else aperture_color
-            line = self._draw_aperture_indicator(ax, z_global, axis_vals, facecolor)
-            artists[line] = surface
+                # For ring apertures (r_min > 0): draw the inner blocking edge too
+                if (
+                    isinstance(surface.aperture, RadialAperture)
+                    and surface.aperture.r_min > 0
+                ):
+                    r_in = float(surface.aperture.r_min)
+                    xi_local, yi_local = self._local_aperture_coords(
+                        projection, (-r_in, r_in, -r_in, r_in)
+                    )
+                    zi_global, axis_vals_i = self._aperture_indicator_globals(
+                        surface, projection, xi_local, yi_local
+                    )
+                    line_i = self._draw_aperture_indicator(
+                        ax, zi_global, axis_vals_i, facecolor, inward=True
+                    )
+                    artists[line_i] = surface
 
-            # For ring apertures (r_min > 0): draw the inner blocking edge too
-            if (
-                isinstance(surface.aperture, RadialAperture)
-                and surface.aperture.r_min > 0
-            ):
-                r_in = float(surface.aperture.r_min)
-                xi_local, yi_local = self._local_aperture_coords(
-                    projection, (-r_in, r_in, -r_in, r_in)
-                )
-                zi_global, axis_vals_i = self._aperture_indicator_globals(
-                    surface, projection, xi_local, yi_local
-                )
-                line_i = self._draw_aperture_indicator(
-                    ax, zi_global, axis_vals_i, facecolor, inward=True
-                )
-                artists[line_i] = surface
+            if zone is not None and show_masks:
+                for line in self._draw_mask_body(ax, surface, projection, zone):
+                    artists[line] = surface
 
         return artists
 
+    @staticmethod
+    def _add_aperture_disk(
+        renderer, surface, r_in, r_out, color, *, opacity=0.65, on_surface=False
+    ):
+        """Add a disk or ring actor in the surface's local frame.
+
+        Args:
+            renderer: The VTK renderer.
+            surface: The surface whose frame places the disk.
+            r_in: Inner radius of the ring (0 for a full disk).
+            r_out: Outer radius.
+            color: RGB tuple.
+            opacity: Actor opacity.
+            on_surface: Lay the disk onto the surface's sag instead of its
+                vertex plane, and draw it in front of the coincident surface.
+
+        Returns:
+            The added actor.
+        """
+        import vtk
+
+        disk = vtk.vtkDiskSource()
+        disk.SetInnerRadius(r_in)
+        disk.SetOuterRadius(r_out)
+        disk.SetRadialResolution(8 if on_surface else 1)
+        disk.SetCircumferentialResolution(64)
+        disk.Update()
+        mapper = vtk.vtkPolyDataMapper()
+        if on_surface:
+            poly = disk.GetOutput()
+            points = poly.GetPoints()
+            xyz = np.array(
+                [points.GetPoint(i) for i in range(points.GetNumberOfPoints())]
+            )
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                sag = surface.geometry.sag(be.array(xyz[:, 0]), be.array(xyz[:, 1]))
+            sag = np.nan_to_num(np.asarray(be.to_numpy(sag), dtype=float))
+            for i, (x, y, z) in enumerate(zip(xyz[:, 0], xyz[:, 1], sag, strict=True)):
+                points.SetPoint(i, x, y, z)
+            points.Modified()
+            mapper.SetInputData(poly)
+            # The disk lies on a lens surface: pull it in front of that face.
+            mapper.SetRelativeCoincidentTopologyPolygonOffsetParameters(-2.0, -2.0)
+        else:
+            mapper.SetInputConnection(disk.GetOutputPort())
+        actor = vtk.vtkActor()
+        actor.SetMapper(mapper)
+        actor = transform_3d(actor, surface)
+        prop = actor.GetProperty()
+        prop.SetColor(*color)
+        prop.SetOpacity(opacity)
+        prop.SetAmbient(0.6)
+        prop.SetDiffuse(0.4)
+        prop.SetSpecular(0.2)
+        prop.SetSpecularPower(20.0)
+        renderer.AddActor(actor)
+        return actor
+
     def _plot_apertures_3d(
-        self, renderer, theme=None, show_stop=True, show_non_stop=True
+        self, renderer, theme=None, show_stop=True, show_non_stop=True, show_masks=True
     ):
         """Add translucent aperture disk actors to the 3D renderer.
+
+        A mask stop is red: a ring beyond its clear edge and its blocking
+        disk or ring laid onto the surface. A mask on the stop surface keeps
+        the stop's purple ring.
 
         Returns:
             dict: Every added actor mapped to the surface whose aperture it
                 shows.
         """
-        import vtk
+        from matplotlib.colors import to_rgb
 
         actors = {}
-        stop_color = (0.61, 0.19, 1.0)
+        stop_color = to_rgb(STOP_COLOR)
+        mask_color = to_rgb(MASK_COLOR)
         if theme:
-            from matplotlib.colors import to_rgb
-
-            stop_hex = theme.parameters.get("aperture.stop_color", "#9B30FF")
-            stop_color = to_rgb(stop_hex)
+            stop_color = to_rgb(theme.parameters.get("aperture.stop_color", STOP_COLOR))
+            mask_color = to_rgb(theme.parameters.get("aperture.mask_color", MASK_COLOR))
 
         # Non-stop apertures are 20% lighter than stop color
         aperture_color = tuple(min(1.0, c + 0.20 * (1.0 - c)) for c in stop_color)
@@ -427,50 +609,39 @@ class OpticalSystem:
         for idx, surface in enumerate(self.optic.surfaces):
             if surface.aperture is None and not surface.is_stop:
                 continue
-            if surface.is_stop and not show_stop:
-                continue
-            if not surface.is_stop and not show_non_stop:
-                continue
+            zone = mask_zone(surface.aperture)
+            if surface.is_stop:
+                color, show_edge = stop_color, show_stop
+            elif zone is not None:
+                color, show_edge = mask_color, show_masks
+            else:
+                color, show_edge = aperture_color, show_non_stop
 
-            extent = self._aperture_extent(surface, idx)
-            if extent is None:
-                continue
-            r_outer_edge = max(abs(float(v)) for v in extent)
-            if r_outer_edge <= 0:
-                continue
+            extent = self._aperture_extent(surface, idx) if show_edge else None
+            r_outer_edge = (
+                max(abs(float(v)) for v in extent) if extent is not None else 0.0
+            )
+            if r_outer_edge > 0:
+                # Outer blocking ring (beyond clear aperture)
+                actor = self._add_aperture_disk(
+                    renderer, surface, r_outer_edge, r_outer_edge * 1.5, color
+                )
+                actors[actor] = surface
 
-            color = stop_color if surface.is_stop else aperture_color
+                # For ring apertures (r_min > 0): add inner central obstruction disk
+                if (
+                    isinstance(surface.aperture, RadialAperture)
+                    and surface.aperture.r_min > 0
+                ):
+                    r_inner_edge = float(surface.aperture.r_min)
+                    actor = self._add_aperture_disk(
+                        renderer, surface, 0.0, r_inner_edge, color
+                    )
+                    actors[actor] = surface
 
-            def _add_disk(r_in, r_out, surface=surface, color=color):
-                disk = vtk.vtkDiskSource()
-                disk.SetInnerRadius(r_in)
-                disk.SetOuterRadius(r_out)
-                disk.SetRadialResolution(1)
-                disk.SetCircumferentialResolution(64)
-                disk.Update()
-                mapper = vtk.vtkPolyDataMapper()
-                mapper.SetInputConnection(disk.GetOutputPort())
-                actor = vtk.vtkActor()
-                actor.SetMapper(mapper)
-                actor = transform_3d(actor, surface)
-                prop = actor.GetProperty()
-                prop.SetColor(*color)
-                prop.SetOpacity(0.65)
-                prop.SetAmbient(0.6)
-                prop.SetDiffuse(0.4)
-                prop.SetSpecular(0.2)
-                prop.SetSpecularPower(20.0)
-                renderer.AddActor(actor)
-                return actor
-
-            # Outer blocking ring (beyond clear aperture)
-            actors[_add_disk(r_outer_edge, r_outer_edge * 1.5)] = surface
-
-            # For ring apertures (r_min > 0): add inner central obstruction disk
-            if (
-                isinstance(surface.aperture, RadialAperture)
-                and surface.aperture.r_min > 0
-            ):
-                r_inner_edge = float(surface.aperture.r_min)
-                actors[_add_disk(0.0, r_inner_edge)] = surface
+            if zone is not None and show_masks:
+                actor = self._add_aperture_disk(
+                    renderer, surface, *zone, mask_color, opacity=0.9, on_surface=True
+                )
+                actors[actor] = surface
         return actors

@@ -522,9 +522,17 @@ class ViewerPanel(QWidget):
             lambda _: self._render_3d_from_2d_settings()
         )
 
+        self._chk_3d_masks = QCheckBox("Masks")
+        self._chk_3d_masks.setToolTip(
+            "Show mask stops (circular and annular masks) in red"
+        )
+        self._chk_3d_masks.setChecked(True)
+        self._chk_3d_masks.toggled.connect(lambda _: self._render_3d_from_2d_settings())
+
         toolbar_layout.addWidget(self._btn_3d_refresh)
         toolbar_layout.addWidget(self._chk_3d_stop)
         toolbar_layout.addWidget(self._chk_3d_non_stop)
+        toolbar_layout.addWidget(self._chk_3d_masks)
         toolbar_layout.addStretch()
 
         # Settings toggle — right-aligned like the 2D tab's gear button and
@@ -669,6 +677,9 @@ class ViewerPanel(QWidget):
             if hasattr(self, "_chk_3d_non_stop")
             else True
         )
+        show_masks = (
+            self._chk_3d_masks.isChecked() if hasattr(self, "_chk_3d_masks") else True
+        )
         self._rendering_3d = True
         try:
             self.viewer3D.render_optic(
@@ -676,6 +687,7 @@ class ViewerPanel(QWidget):
                 distribution=distribution,
                 show_stop_apertures=show_stop,
                 show_non_stop_apertures=show_non_stop,
+                show_masks=show_masks,
                 hide_vignetted=self.viewer2D.hide_vignetted_rays(),
             )
             self._pending_3d_render = False
@@ -1241,6 +1253,22 @@ class MatplotlibViewer(QWidget):
         self.settings_form_layout.addRow(
             "Show Apertures:", self.show_apertures_checkbox
         )
+
+        self.show_masks_checkbox = QCheckBox()
+        self.show_masks_checkbox.setToolTip(
+            "Draw mask stops (circular and annular masks) in red, with their "
+            "blocking disk or ring, also when the aperture markers are off."
+        )
+        self.show_masks_checkbox.setChecked(
+            self.settings.value("Viewer2D/ShowMasks", True, type=bool)
+        )
+        self.show_masks_checkbox.toggled.connect(
+            lambda checked: (
+                self.settings.setValue("Viewer2D/ShowMasks", bool(checked)),
+                self.plot_optic(),
+            )
+        )
+        self.settings_form_layout.addRow("Show Masks:", self.show_masks_checkbox)
 
         self.display_y_measures_checkbox = QCheckBox()
         self.display_y_measures_checkbox.setToolTip(
@@ -3180,6 +3208,7 @@ class MatplotlibViewer(QWidget):
                     hide_internal = self.hide_internal_surfaces_checkbox.isChecked()
                     show_measures = self.display_y_measures_checkbox.isChecked()
                     show_apertures = self.show_apertures_checkbox.isChecked()
+                    show_masks = self.show_masks_checkbox.isChecked()
                     ray_error = None
                     try:
                         rays2d_plotter.plot(
@@ -3214,6 +3243,7 @@ class MatplotlibViewer(QWidget):
                             theme=theme,
                             hide_internal_surfaces=hide_internal,
                             show_apertures=show_apertures,
+                            show_masks=show_masks,
                         )
                     self._report_drawing_warnings(drawing_warnings)
                     if ray_error is not None:
@@ -3329,6 +3359,7 @@ class VTKViewer(QWidget):
         self._last_hide_vignetted = False
         self._show_stop_apertures = True
         self._show_non_stop_apertures = True
+        self._show_masks = True
         # Actors of the last render mapped to what they show: the lens or
         # surface component, or the surface of an aperture disk (see
         # OpticalSystem.plot), plus the optic they were drawn from.
@@ -3410,12 +3441,15 @@ class VTKViewer(QWidget):
         show_stop_apertures: bool | None = None,
         show_non_stop_apertures: bool | None = None,
         hide_vignetted: bool | None = None,
+        show_masks: bool | None = None,
     ):
         """Re-renders the 3D optical system on the main thread.
 
         ``hide_vignetted`` mirrors the 2D layout's "Rays Reach Image" setting:
         rays blocked by an aperture are then not drawn at all, instead of being
-        drawn up to the surface that blocks them.
+        drawn up to the surface that blocks them. ``show_masks`` shows the
+        mask stops in red, independent of the aperture switches. A None
+        keeps the setting of the previous render.
 
         VTK compiles OpenGL shaders eagerly when actors are added to a renderer,
         so it cannot run off the main thread.  We show the BusyOverlay, then
@@ -3430,6 +3464,8 @@ class VTKViewer(QWidget):
             self._show_stop_apertures = show_stop_apertures
         if show_non_stop_apertures is not None:
             self._show_non_stop_apertures = show_non_stop_apertures
+        if show_masks is not None:
+            self._show_masks = show_masks
         if hide_vignetted is not None:
             self._last_hide_vignetted = bool(hide_vignetted)
         self._last_num_rays = int(num_rays)
@@ -3490,6 +3526,7 @@ class VTKViewer(QWidget):
                             theme=theme,
                             show_stop_apertures=self._show_stop_apertures,
                             show_non_stop_apertures=self._show_non_stop_apertures,
+                            show_masks=self._show_masks,
                         )
                         or {}
                     )

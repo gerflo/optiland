@@ -233,3 +233,15 @@ Effect:
 How to use it:
 - type the object distance into the Thickness cell of row 0
 - choose *Object* under System Properties > Layout to see z measured from the light source
+
+## 20. Mask Stops in the 2D and 3D Layout
+File: [mask-stops-in-layouts.md](./mask-stops-in-layouts.md)
+Commit: on `master`
+
+Effect:
+- mask stops (*Circular Mask*, *Annular Mask*, anti-reflex dots) are red in the 2D and 3D layout, with their blocking disk or ring on the surface; the aperture stop stays purple
+- masks have their own switch, on by default, so they show even with the aperture markers off
+
+How to use it:
+- 2D settings: *Show Masks*; 3D toolbar: *Masks*
+- `OpticalSystem.plot(..., show_masks=True)` in scripts; by default masks follow `show_apertures`
