@@ -28,6 +28,7 @@ from optiland.physical_apertures import (
     RectangularAperture,
 )
 from optiland.visualization.system.system import (
+    APERTURE_COLOR,
     MASK_COLOR,
     MASK_LINE_WIDTH,
     STOP_COLOR,
@@ -339,3 +340,85 @@ def test_3d_masks_have_their_own_switch(
 
     assert len(_actors_of_color(actors, MASK_COLOR)) == red_actors
     assert len(_actors_of_color(actors, STOP_COLOR)) == purple_actors
+
+
+# ---------------------------------------------------------------------------
+# Ring apertures: the blocked centre is drawn like a mask's blocking disk
+# ---------------------------------------------------------------------------
+#
+# A ring aperture (``RadialAperture`` with ``r_min > 0``, the Lens Data
+# Editor's Annular Aperture) blocks the disk inside ``r_min``. The 2D layout
+# marked that disk only by a purple inner edge, the 3D layout by a
+# translucent light-purple disk that read as pink (user, 2026-09-22): the
+# blocked region is red now, drawn like a mask's; the clear edge stays an
+# aperture marker.
+
+RING_OUTER = 6.0
+RING_INNER = 2.0
+
+
+def _ring() -> RadialAperture:
+    return RadialAperture(r_max=RING_OUTER, r_min=RING_INNER)
+
+
+@pytest.mark.parametrize("projection", ["YZ", "XZ"])
+def test_2d_ring_aperture_centre_is_a_red_bar(set_test_backend, projection) -> None:
+    optic = _optic({4: _ring()})
+    ring_surface = optic.surfaces.surfaces[4]
+
+    fig, _, artists = _plot_2d(optic, projection=projection)
+
+    (body,) = _lines_of_color(artists, MASK_COLOR)
+    assert artists[body] is ring_surface
+    assert body.get_linewidth() == MASK_LINE_WIDTH
+    y = np.asarray(body.get_ydata(), dtype=float)
+    np.testing.assert_allclose([y.min(), y.max()], [-RING_INNER, RING_INNER])
+    # The clear edge is the only aperture marker left on the ring surface.
+    (edge,) = [
+        line
+        for line in _lines_of_color(artists, APERTURE_COLOR)
+        if artists[line] is ring_surface
+    ]
+    np.testing.assert_allclose(sorted(edge.get_ydata()), [-RING_OUTER, RING_OUTER])
+    plt.close(fig)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "red_lines", "edge_lines"),
+    [
+        ({}, 1, 1),
+        ({"show_masks": False}, 0, 1),
+        ({"show_apertures": False, "show_masks": True}, 1, 0),
+    ],
+)
+def test_2d_ring_aperture_centre_follows_the_mask_switch(
+    set_test_backend, kwargs, red_lines, edge_lines
+) -> None:
+    optic = _optic({4: _ring()})
+
+    fig, _, artists = _plot_2d(optic, **kwargs)
+
+    assert len(_lines_of_color(artists, MASK_COLOR)) == red_lines
+    assert len(_lines_of_color(artists, APERTURE_COLOR)) == edge_lines
+    plt.close(fig)
+
+
+def test_3d_ring_aperture_centre_is_a_red_disk_on_the_surface(
+    set_test_backend,
+) -> None:
+    optic = _optic({2: RadialAperture(r_max=8.0, r_min=3.0)})
+    ring_surface = optic.surfaces.surfaces[2]
+
+    actors = _plot_3d(optic)
+
+    (disk,) = _actors_of_color(actors, MASK_COLOR)
+    assert actors[disk] is ring_surface
+    assert _radial_extent(disk) == pytest.approx(3.0, rel=1e-6)
+    assert disk.GetProperty().GetOpacity() > 0.8  # a blocker reads opaque
+    _, _, _, _, z0, z1 = disk.GetBounds()
+    vertex = _vertex_z(optic, 2)
+    assert z0 == pytest.approx(vertex, abs=1e-6)
+    assert z1 == pytest.approx(vertex + _sag(optic, 2, 3.0), abs=1e-6)
+    # Besides the red disk, the ring surface keeps only its edge ring.
+    others = [a for a, s in actors.items() if s is ring_surface and a is not disk]
+    assert [_radial_extent(a) for a in others] == [pytest.approx(1.5 * 8.0)]

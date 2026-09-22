@@ -68,6 +68,31 @@ def mask_zone(aperture) -> tuple[float, float] | None:
     return r_min, r_max
 
 
+def _blocked_zone(aperture) -> tuple[float, float] | None:
+    """The radial zone inside the clear edge that is drawn red.
+
+    That is a mask stop's blocked zone (:func:`mask_zone`) or the central
+    disk ``(0, r_min)`` a ring aperture (a centred ``RadialAperture`` with
+    ``r_min > 0``) blocks. The ring aperture itself stays an aperture: its
+    clear edge keeps the aperture colour.
+
+    Args:
+        aperture: A surface's physical aperture, or None.
+
+    Returns:
+        The blocked zone in the surface's local frame, or None.
+    """
+    zone = mask_zone(aperture)
+    if zone is not None or not isinstance(aperture, RadialAperture):
+        return zone
+    if float(getattr(aperture, "offset_x", 0.0)) or float(
+        getattr(aperture, "offset_y", 0.0)
+    ):
+        return None
+    r_min = float(be.to_numpy(aperture.r_min))
+    return (0.0, r_min) if r_min > 0.0 else None
+
+
 class _CustomRendererAdapter:
     """Adapts a ComponentRenderer to the plot()-based component interface."""
 
@@ -391,9 +416,7 @@ class OpticalSystem:
         return be.to_numpy(z_global), be.to_numpy(axis_vals)
 
     @staticmethod
-    def _draw_aperture_indicator(
-        ax, z_global, axis_vals, facecolor: str, inward: bool = False
-    ):
+    def _draw_aperture_indicator(ax, z_global, axis_vals, facecolor: str):
         (line,) = ax.plot(z_global, axis_vals, color=facecolor, linewidth=1.5)
 
         eps = 1e-6
@@ -404,10 +427,9 @@ class OpticalSystem:
             "linewidth": 0,
             "mutation_scale": 8,
         }
-        direction = -1 if inward else 1  # inward: arrows point toward the axis
         for z_val, axis_val, sign in (
-            (z_global[1], axis_vals[1], direction),  # top
-            (z_global[0], axis_vals[0], -direction),  # bottom
+            (z_global[1], axis_vals[1], 1),  # top
+            (z_global[0], axis_vals[0], -1),  # bottom
         ):
             ax.annotate(
                 "",
@@ -462,12 +484,14 @@ class OpticalSystem:
         The stop is purple, other apertures dark purple. A mask stop is red:
         its clear edge like an aperture marker, its blocking disk or ring as
         a thick bar that follows the surface. A mask on the stop surface keeps
-        the stop's purple edge.
+        the stop's purple edge. The central disk a ring aperture blocks is
+        drawn like a mask's blocking disk.
 
         Args:
             show_apertures: Draw the markers of the stop and the apertures
                 that are no mask.
-            show_masks: Draw the mask stops (clear edge and blocked zone).
+            show_masks: Draw the mask stops (clear edge and blocked zone) and
+                the blocked centre of ring apertures.
 
         Returns:
             dict: Every drawn line mapped to the surface it marks.
@@ -499,25 +523,9 @@ class OpticalSystem:
                 line = self._draw_aperture_indicator(ax, z_global, axis_vals, facecolor)
                 artists[line] = surface
 
-                # For ring apertures (r_min > 0): draw the inner blocking edge too
-                if (
-                    isinstance(surface.aperture, RadialAperture)
-                    and surface.aperture.r_min > 0
-                ):
-                    r_in = float(surface.aperture.r_min)
-                    xi_local, yi_local = self._local_aperture_coords(
-                        projection, (-r_in, r_in, -r_in, r_in)
-                    )
-                    zi_global, axis_vals_i = self._aperture_indicator_globals(
-                        surface, projection, xi_local, yi_local
-                    )
-                    line_i = self._draw_aperture_indicator(
-                        ax, zi_global, axis_vals_i, facecolor, inward=True
-                    )
-                    artists[line_i] = surface
-
-            if zone is not None and show_masks:
-                for line in self._draw_mask_body(ax, surface, projection, zone):
+            blocked = _blocked_zone(surface.aperture)
+            if blocked is not None and show_masks:
+                for line in self._draw_mask_body(ax, surface, projection, blocked):
                     artists[line] = surface
 
         return artists
@@ -588,7 +596,8 @@ class OpticalSystem:
 
         A mask stop is red: a ring beyond its clear edge and its blocking
         disk or ring laid onto the surface. A mask on the stop surface keeps
-        the stop's purple ring.
+        the stop's purple ring. The central disk a ring aperture blocks is
+        drawn like a mask's blocking disk.
 
         Returns:
             dict: Every added actor mapped to the surface whose aperture it
@@ -628,20 +637,15 @@ class OpticalSystem:
                 )
                 actors[actor] = surface
 
-                # For ring apertures (r_min > 0): add inner central obstruction disk
-                if (
-                    isinstance(surface.aperture, RadialAperture)
-                    and surface.aperture.r_min > 0
-                ):
-                    r_inner_edge = float(surface.aperture.r_min)
-                    actor = self._add_aperture_disk(
-                        renderer, surface, 0.0, r_inner_edge, color
-                    )
-                    actors[actor] = surface
-
-            if zone is not None and show_masks:
+            blocked = _blocked_zone(surface.aperture)
+            if blocked is not None and show_masks:
                 actor = self._add_aperture_disk(
-                    renderer, surface, *zone, mask_color, opacity=0.9, on_surface=True
+                    renderer,
+                    surface,
+                    *blocked,
+                    mask_color,
+                    opacity=0.9,
+                    on_surface=True,
                 )
                 actors[actor] = surface
         return actors

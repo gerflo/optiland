@@ -241,6 +241,7 @@ Commit: on `master`
 Effect:
 - mask stops (*Circular Mask*, *Annular Mask*, anti-reflex dots) are red in the 2D and 3D layout, with their blocking disk or ring on the surface; the aperture stop stays purple
 - masks have their own switch, on by default, so they show even with the aperture markers off
+- the centre a ring aperture (*Annular Aperture*) blocks is red the same way, no longer pink
 
 How to use it:
 - 2D settings: *Show Masks*; 3D toolbar: *Masks*
