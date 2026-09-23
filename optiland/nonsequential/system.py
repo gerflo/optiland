@@ -31,8 +31,10 @@ Kramer Harrison, 2026
 
 from __future__ import annotations
 
+import difflib
 import importlib.metadata
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -278,12 +280,29 @@ class MultiAxisSystem:
     def set_path_optic(self, name: str, optic: Optic | dict[str, Any]) -> None:
         """Replace the sequential design of a path (no rebuild yet).
 
+        The fold surface of a folded path is tracked through the edit: when
+        surfaces were inserted or removed ahead of it, its fold index moves
+        with it (see :func:`track_surface_index`), so the fold stays at the
+        mirror.
+
         Args:
             name: Path name.
             optic: An ``Optic`` or its ``to_dict()`` data.
         """
         data = optic if isinstance(optic, dict) else optic.to_dict()
-        self.path(name).optic = data
+        path = self.path(name)
+        if self.fold is not None:
+            old = _surfaces_of(path.optic)
+            new = _surfaces_of(data)
+            if name == self.fold.imaging:
+                self.fold.fold_imaging = track_surface_index(
+                    old, new, self.fold.fold_imaging
+                )
+            if name == self.fold.illumination:
+                self.fold.fold_illumination = track_surface_index(
+                    old, new, self.fold.fold_illumination
+                )
+        path.optic = data
 
     def paths_for_component(self, component_name: str) -> list[str]:
         """Names of the paths that traverse a scene component (or source)."""
@@ -480,6 +499,97 @@ def _assign_fold_members(path: OpticalPath, report: FoldReport, role: str) -> No
         path.sources = [ILLUMINATION]
         path.detectors = [SAMPLE, DUMP]
     path.role = role
+
+
+def _surfaces_of(optic: dict[str, Any]) -> list[dict[str, Any]]:
+    """The surface dicts of ``Optic.to_dict()`` data (empty when absent)."""
+    group = optic.get("surface_group") if isinstance(optic, dict) else None
+    surfaces = group.get("surfaces") if isinstance(group, dict) else None
+    return list(surfaces or [])
+
+
+def _normalize_numbers(value: Any) -> Any:
+    """Copy ``value`` with every number as a float of nine significant digits.
+
+    A design read from a file and the same design captured from the editor
+    differ in ``0`` versus ``0.0`` and in float noise; neither makes a
+    surface a different one.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int | float):
+        number = float(value)
+        return float(f"{number:.9g}") if math.isfinite(number) else number
+    if isinstance(value, dict):
+        return {str(k): _normalize_numbers(v) for k, v in value.items()}
+    if isinstance(value, list | tuple):
+        return [_normalize_numbers(v) for v in value]
+    return value
+
+
+def _surface_signature(surface: dict[str, Any]) -> str:
+    """A position-free identity of a surface dict for matching across edits.
+
+    The coordinate system is left out: inserting a surface ahead of another
+    moves that one along the axis without making it a different surface.
+    """
+    geometry = dict(surface.get("geometry") or {})
+    geometry.pop("cs", None)
+    identity = {
+        "type": surface.get("type"),
+        "surface_type": surface.get("surface_type"),
+        "geometry": geometry,
+        "material_post": surface.get("material_post"),
+        "aperture": surface.get("aperture"),
+        "comment": surface.get("comment"),
+        "interaction_model": surface.get("interaction_model"),
+    }
+    return json.dumps(_normalize_numbers(identity), sort_keys=True, default=str)
+
+
+def track_surface_index(
+    old: list[dict[str, Any]], new: list[dict[str, Any]], index: int
+) -> int:
+    """Where surface ``index`` of ``old`` is in ``new`` after an edit.
+
+    Surfaces are matched by their position-free identity (comment, aperture,
+    geometry, medium) in the longest common runs of both lists; the index
+    moves with the run its surface is in. A surface that was edited itself
+    is in no run and follows the matched surfaces around it; when those
+    disagree (the surface was removed) or nothing matches at all (a
+    different design), the index is kept.
+
+    Args:
+        old: Surface dicts before the edit.
+        new: Surface dicts after the edit.
+        index: Index into ``old``.
+
+    Returns:
+        The index into ``new``, or ``index`` when it cannot be tracked.
+    """
+    if not 0 <= index < len(old):
+        return index
+    matcher = difflib.SequenceMatcher(
+        None,
+        [_surface_signature(s) for s in old],
+        [_surface_signature(s) for s in new],
+        autojunk=False,
+    )
+    offset_before: int | None = None
+    offset_after: int | None = None
+    for i, j, n in matcher.get_matching_blocks():
+        if n == 0:
+            continue
+        if i <= index < i + n:
+            return index + (j - i)
+        if i + n <= index:
+            offset_before = j - i
+        elif offset_after is None:
+            offset_after = j - i
+    if offset_before is not None and offset_after is not None:
+        return index + offset_before if offset_before == offset_after else index
+    offset = offset_before if offset_before is not None else offset_after
+    return index if offset is None else index + offset
 
 
 def _default_name(optic: Optic, fallback: str) -> str:

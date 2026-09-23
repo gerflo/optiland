@@ -213,10 +213,22 @@ class TestGeometry:
         )
 
     def test_fold_surface_must_be_an_aperture(self):
-        with pytest.raises(ConversionError, match="air-to-air"):
+        with pytest.raises(ConversionError, match="air-to-air") as info:
             fold_paths(imaging_optic(), illumination_optic(), 1, _FOLD_ILLUMINATION)
+        # O11: the message names the surface it hit and its media, so a fold
+        # index that no longer points at the mirror is recognisable.
+        message = str(info.value)
+        assert "imaging" in message and "surface 1" in message
+        assert "N-BK7" in message and "inserted or removed" in message
         with pytest.raises(ValueError, match="inner surface"):
             fold_paths(imaging_optic(), illumination_optic(), 0, _FOLD_ILLUMINATION)
+
+    def test_fold_surface_error_names_the_surface_comment(self):
+        """The surface a shifted fold index hits is named by its comment (O11)."""
+        illumination = illumination_optic()
+        illumination.surfaces.surfaces[3].comment = "relay lens, back"
+        with pytest.raises(ConversionError, match="surface 3 'relay lens, back'"):
+            fold_paths(imaging_optic(), illumination, _FOLD_IMAGING, 3)
 
 
 class TestEnergyFlow:

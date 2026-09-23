@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from optiland.nonsequential.convert import ConversionError
 from optiland.nonsequential.surface_conversion import is_blocking_absorber
 from optiland.optic import Optic
 
@@ -619,6 +620,11 @@ class NSQPanel(QWidget):
             return
         try:
             self.service.sync_active_path(self._active_optic_data())
+        except (ConversionError, ValueError) as exc:
+            # An inconsistent design (a fold index off the mirror, ...): the
+            # user is told; the log needs no traceback for it.
+            logger.warning("System not rebuilt from the active path: %s", exc)
+            self._notify(f"System not rebuilt: {exc}", "error")
         except Exception as exc:  # noqa: BLE001 -- surfaced to the user
             logger.exception("Rebuilding the system from the active path failed")
             self._notify(f"System not rebuilt: {exc}", "error")

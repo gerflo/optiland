@@ -6,7 +6,10 @@ kommt hierher.** Ein Eintrag bleibt, bis der Fix committet ist, und wird im
 selben Commit entfernt. Befund, Ursache, Fix und Tests stehen im Commit-Text
 (`git log --grep "O<n>"`). Kein Eintrag wird gelöscht, weil er unbequem ist.
 Nummern werden nie wiederverwendet; die nächste freie Nummer ist die höchste
-je vergebene plus 1 (Datei und `git log -p -- todo/_open_bugs.md` prüfen).
+je vergebene plus 1 (Datei, `git log -p -- todo/_open_bugs.md` und
+`git log --grep "O[0-9]"` prüfen; ein Eintrag, der in derselben Sitzung
+angelegt und behoben wurde, steht nur im Fix-Commit). Höchste vergebene
+Nummer: O11.
 
 Die Kennung ist `O<n>` (O wie Optiland), damit sie nicht mit den
 Fehlernummern `B<n>` von Optomal verwechselt wird; Optomal führt seine Liste

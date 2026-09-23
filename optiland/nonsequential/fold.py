@@ -177,6 +177,15 @@ def _index_at(material, wavelength: float) -> float:
     return _scalar(material.n(wavelength))
 
 
+def _medium_label(material) -> str:
+    """A short name of a sequential medium for messages (``N-BK7``, ``n=1``)."""
+    name = getattr(material, "name", None)
+    if name:
+        return str(name)
+    index = getattr(material, "index", None)
+    return "unknown medium" if index is None else f"n={_scalar(index):g}"
+
+
 def _surface_z(surface) -> float:
     return _scalar(surface.geometry.cs.position_in_gcs[2])
 
@@ -378,14 +387,20 @@ def fold_paths(
         raise ValueError(
             f"fold_illumination={fold_illumination} is not an inner surface."
         )
-    for label, surface in (
-        ("imaging", s_img[fold_imaging]),
-        ("illumination", s_ill[fold_illumination]),
+    for label, surface, index in (
+        ("imaging", s_img[fold_imaging], fold_imaging),
+        ("illumination", s_ill[fold_illumination], fold_illumination),
     ):
         if not _same_medium(surface.material_pre, surface.material_post):
+            comment = str(getattr(surface, "comment", "") or "").strip()
+            where = f"surface {index}" + (f" {comment!r}" if comment else "")
             raise ConversionError(
-                f"The {label} fold surface must be an air-to-air aperture; it "
-                "separates two different media."
+                f"The {label} fold surface must be an air-to-air aperture, but "
+                f"{where} separates two different media "
+                f"({_medium_label(surface.material_pre)} | "
+                f"{_medium_label(surface.material_post)}). If surfaces were "
+                "inserted or removed ahead of it, the fold index no longer "
+                "points at the mirror."
             )
 
     hole_ap = _aperture_of(s_img[fold_imaging], imaging, fold_imaging)

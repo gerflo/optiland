@@ -24,6 +24,7 @@ from optiland.nonsequential.system import (
     fold_system,
     optiland_version,
 )
+from optiland.physical_apertures import RadialAperture
 from tests.nonsequential.test_nsq_fold_paths import (
     _FOLD_ILLUMINATION,
     _FOLD_IMAGING,
@@ -127,6 +128,56 @@ class TestPathsEditing:
         assert after is not before
         assert report.tail_differences == []
         assert system.last_report is report
+
+    def test_fold_index_follows_insertions_and_removals_ahead_of_the_mirror(self):
+        """The fold stays at the mirror when surfaces are inserted or removed
+        before it in a path (O11)."""
+        system, _ = _system()
+        rim_before = system.last_report.rim_radius
+
+        # A Pilzblende between the stop (1) and the relay lens (2): the mirror
+        # moves from index 4 to 5.
+        optic = system.path("Ring illumination").build_optic()
+        optic.add_surface(
+            index=2, thickness=5.0, comment="Pilzblende", aperture=RadialAperture(3.0)
+        )
+        system.set_path_optic("Ring illumination", optic)
+        assert system.fold.fold_illumination == _FOLD_ILLUMINATION + 1
+        assert system.rebuild().rim_radius == rim_before
+
+        # Removing it again moves the mirror back.
+        optic = system.path("Ring illumination").build_optic()
+        optic.surfaces.remove(2)
+        system.set_path_optic("Ring illumination", optic)
+        assert system.fold.fold_illumination == _FOLD_ILLUMINATION
+        assert system.rebuild().rim_radius == rim_before
+
+        # An insertion behind the hole leaves the imaging fold index alone.
+        optic = system.path("Camera path").build_optic()
+        optic.add_surface(index=_FOLD_IMAGING + 1, thickness=0.0, comment="dummy")
+        system.set_path_optic("Camera path", optic)
+        assert system.fold.fold_imaging == _FOLD_IMAGING
+        system.rebuild()
+
+    def test_fold_index_survives_an_edit_of_the_mirror_itself(self):
+        """Changing the mirror surface (alone or together with an insertion
+        ahead of it) does not lose the fold (O11)."""
+        system, _ = _system()
+
+        optic = system.path("Ring illumination").build_optic()
+        optic.surfaces.surfaces[_FOLD_ILLUMINATION].aperture = RadialAperture(13.0, 2.0)
+        system.set_path_optic("Ring illumination", optic)
+        assert system.fold.fold_illumination == _FOLD_ILLUMINATION
+        assert system.rebuild().rim_radius == 13.0
+
+        optic = system.path("Ring illumination").build_optic()
+        optic.add_surface(index=1, thickness=2.0, comment="window")
+        optic.surfaces.surfaces[_FOLD_ILLUMINATION + 1].aperture = RadialAperture(
+            12.5, 2.0
+        )
+        system.set_path_optic("Ring illumination", optic)
+        assert system.fold.fold_illumination == _FOLD_ILLUMINATION + 1
+        assert system.rebuild().rim_radius == 12.5
 
     def test_rebuild_without_paths_raises(self):
         plain = MultiAxisSystem(NSQScene())

@@ -262,8 +262,12 @@ scene together with its named **optical paths** (``OpticalPath``: the
 sequential ``Optic`` as a dict, its role and the scene components, sources
 and detectors it traverses) and the ``FoldSettings`` that produced it.
 ``fold_system()`` builds one from two optics; ``rebuild()`` folds again
-after ``set_path_optic()``; ``rename_path()`` keeps the fold settings
-consistent; ``paths_for_component()`` answers a click on a drawn element.
+after ``set_path_optic()``, which tracks the fold surface through the edit
+(``track_surface_index``: surfaces are matched by comment, aperture,
+geometry and medium, so a surface inserted or removed ahead of the mirror
+moves the fold index with it and the fold stays at the mirror);
+``rename_path()`` keeps the fold settings consistent;
+``paths_for_component()`` answers a click on a drawn element.
 A system *without* fold settings is converted path by path instead
 (``MultiAxisSystem.from_optic()`` wraps a single sequential design):
 surfaces with rim baffles, one source per field -- aimed point sources for

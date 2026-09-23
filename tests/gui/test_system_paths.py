@@ -7,6 +7,7 @@ folds the system again; a click on a drawn element selects its path.
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -118,14 +119,15 @@ class TestService:
         ]["radius"] == pytest.approx(2.0 * r_old)
 
     def test_a_failed_rebuild_keeps_the_previous_scene(
-        self, qapp, monkeypatch, tmp_path
+        self, qapp, monkeypatch, tmp_path, caplog
     ):
         panel, connector, service = _loaded_panel(monkeypatch, tmp_path)
         service.activate_path("Camera path", connector)
         names_before = service.scene.component_names
         # Removing the fold surface makes the imaging design unfoldable.
         connector.remove_surface(3)
-        panel.flush_pending_rebuild()
+        with caplog.at_level(logging.WARNING, logger="optiland_gui.nsq_panel"):
+            panel.flush_pending_rebuild()
         assert service.scene.component_names == names_before
         message, severity = connector.toast_manager.notify.call_args.args[:2]
         assert severity == "error" and "not rebuilt" in message
@@ -133,6 +135,33 @@ class TestService:
         surfaces = service.system.path("Camera path").optic["surface_group"]
         assert len(surfaces["surfaces"]) == 6
         assert service.is_dirty
+        # O11: an inconsistent design is a warning in the log, not a traceback.
+        records = [r for r in caplog.records if r.name == "optiland_gui.nsq_panel"]
+        assert [r.levelname for r in records] == ["WARNING"]
+        assert records[0].exc_info is None
+
+    def test_inserting_a_surface_before_the_mirror_keeps_the_fold_there(
+        self, qapp, monkeypatch, tmp_path
+    ):
+        """The fold index follows an insertion in the lens data editor (O11)."""
+        panel, connector, service = _loaded_panel(monkeypatch, tmp_path)
+        service.activate_path("Ring illumination", connector)
+        changed = []
+        service.sceneChanged.connect(lambda: changed.append(True))
+
+        # A Pilzblende between the stop (1) and the relay lens (2).
+        connector.insert_surface_before(2, None, 5.0)
+        panel.flush_pending_rebuild()
+
+        assert service.system.fold.fold_illumination == _FOLD_ILLUMINATION + 1
+        assert changed == [True]
+        assert service.scene_outdated is None
+        assert all(
+            call.args[1] != "error"
+            for call in connector.toast_manager.notify.call_args_list
+        )
+        surfaces = service.system.path("Ring illumination").optic["surface_group"]
+        assert len(surfaces["surfaces"]) == 9
 
     def test_rename_keeps_the_active_path(self, qapp, monkeypatch, tmp_path):
         panel, connector, service = _loaded_panel(monkeypatch, tmp_path)

@@ -381,11 +381,16 @@ class NSQService(QObject):
         if self._system is None:
             raise RuntimeError("No system loaded.")
         previous = self.path(name).optic
+        fold = self._system.fold
+        indices = None if fold is None else (fold.fold_imaging, fold.fold_illumination)
         self._system.set_path_optic(name, optic)
         try:
             self._system.rebuild()
         except Exception:
             self._system.set_path_optic(name, previous)
+            if fold is not None and indices is not None:
+                # The tracked fold indices go back with the design.
+                fold.fold_imaging, fold.fold_illumination = indices
             raise
         self._scene = self._system.scene
         self._result = None
