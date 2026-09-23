@@ -86,7 +86,7 @@ When you first open the Optiland GUI, you'll see a main window containing severa
 
 *   **System Properties Panel**: Manage system-wide settings that are not tied to individual surfaces. This includes:
 
-    *   **Aperture**: Define the system aperture (e.g., Entrance Pupil Diameter, F-number).
+    *   **Aperture**: Define the system aperture (e.g., Entrance Pupil Diameter, F-number). A typed value is applied when you press Return, leave the field, or click *Apply Aperture Changes*, not on every keystroke; a value the system rejects is reported as a toast and the field shows the current value again.
     *   **Fields**: Set up field points for analysis.
     *   **Wavelengths**: Define the wavelengths and their weights for calculations.
     *   **Layout**: *Z origin* chooses where z = 0 lies on the z axis of the 2D layout and in its cursor readout: at surface 1 (Optiland's convention, a finite object sits at z = -object distance) or at the object, e.g. the light source of an illumination path. Only the displayed coordinate changes; the setting is saved with the design. An object at infinity always uses surface 1.

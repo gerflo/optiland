@@ -469,6 +469,10 @@ class ApertureEditor(PropertyEditorBase):
         self.spnApertureValue.setDecimals(4)
         self.spnApertureValue.setRange(-1e9, 1e9)
         self.spnApertureValue.setSingleStep(0.1)
+        # A typed value is applied when it is committed (Return, focus out,
+        # a step), not on every keystroke: typing 4.5 must not set 4 and 4.0
+        # on the way and retrace the system each time.
+        self.spnApertureValue.setKeyboardTracking(False)
         layout.addRow("Value:", self.spnApertureValue)
 
         self.btnApplyAperture = QPushButton("Apply Aperture Changes")
@@ -517,9 +521,12 @@ class ApertureEditor(PropertyEditorBase):
             try:
                 optic.set_aperture(ap_type, ap_value)
                 self.connector.opticChanged.emit()
-                print(f"Aperture updated: {ap_type}, {ap_value}")
+                logger.info("Aperture updated: %s, %s", ap_type, ap_value)
             except ValueError as e:
-                print(f"Aperture Error: {e}")
+                # A warning reaches the user as a toast.
+                logger.warning(
+                    "Aperture %s = %s was not applied: %s", ap_type, ap_value, e
+                )
                 self.load_data()
 
 
