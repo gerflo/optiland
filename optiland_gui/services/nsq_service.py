@@ -79,6 +79,8 @@ class NSQService(QObject):
         traceFinished (object): A trace completed; carries the
             :class:`~optiland.nonsequential.tracer.SimulationResult`.
         traceFailed (str): A trace raised; carries the error message.
+        sceneOutdated (str): A loaded file's scene could not be built again
+            from its paths; carries the reason. The stored scene is shown.
     """
 
     sceneChanged = Signal()
@@ -87,6 +89,7 @@ class NSQService(QObject):
     traceStarted = Signal()
     traceFinished = Signal(object)
     traceFailed = Signal(str)
+    sceneOutdated = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -99,6 +102,7 @@ class NSQService(QObject):
         self._result: SimulationResult | None = None
         self._active_path: str | None = None
         self._activating = False
+        self._scene_outdated: str | None = None
         self._thread: QThread | None = None
         self._worker: _Worker | None = None
 
@@ -152,6 +156,17 @@ class NSQService(QObject):
     def mark_clean(self) -> None:
         """Forget system-level changes (after saving elsewhere)."""
         self._dirty = False
+
+    @property
+    def scene_outdated(self) -> str | None:
+        """Why the shown scene is the stored one, or ``None`` when it fits.
+
+        A loaded file's scene is built again from its paths
+        (:meth:`load_file`); when that fails, the stored scene stays on
+        screen although it may not belong to the saved design, and this is
+        the error that stopped the rebuild.
+        """
+        return self._scene_outdated
 
     @property
     def is_tracing(self) -> bool:
@@ -208,6 +223,7 @@ class NSQService(QObject):
         self._dirty = False
         self._result = None
         self._active_path = None
+        self._scene_outdated = None
         self.pathsChanged.emit()
         self.activePathChanged.emit(None)
         self.sceneChanged.emit()
@@ -399,6 +415,12 @@ class NSQService(QObject):
     def load_file(self, path: str, connector=None) -> None:
         """Load a multi-axis system (``.olsys``) or a plain scene file.
 
+        A system with paths is built again from them, so a stored scene
+        that no longer belongs to its design is never shown -- a file saved
+        after a rebuild had failed, or one an older converter wrote. When
+        that rebuild fails, the stored scene stays, :attr:`scene_outdated`
+        says why and ``sceneOutdated`` is emitted.
+
         Args:
             path: Path to a file written by ``MultiAxisSystem.to_json`` or
                 ``NSQScene.to_json``.
@@ -408,7 +430,17 @@ class NSQService(QObject):
         from optiland.nonsequential.system import MultiAxisSystem  # noqa: PLC0415
 
         system = MultiAxisSystem.from_json(path)
+        outdated: str | None = None
+        if system.paths:
+            try:
+                system.rebuild()
+            except Exception as exc:  # noqa: BLE001 -- reported, file still opens
+                logger.exception("Rebuilding the scene of %s failed", path)
+                outdated = str(exc)
         self.set_system(system, os.path.basename(path), path)
+        self._scene_outdated = outdated
+        if outdated is not None:
+            self.sceneOutdated.emit(outdated)
         if connector is not None and system.paths:
             self.activate_path(system.paths[0].name, connector)
 

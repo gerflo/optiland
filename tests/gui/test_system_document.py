@@ -26,7 +26,7 @@ from optiland_gui.main_window import MainWindow
 from optiland_gui.nsq_panel import NSQPanel
 from optiland_gui.optiland_connector import OptilandConnector
 from optiland_gui.services.file_service import SpecialFloatEncoder, is_nsq_scene_file
-from optiland_gui.services.nsq_service import default_path_name
+from optiland_gui.services.nsq_service import NSQService, default_path_name
 from optiland_gui.widgets.path_choice_dialog import PathChoiceDialog
 from tests.nonsequential.test_nsq_fold_paths import (
     _FOLD_ILLUMINATION,
@@ -228,6 +228,69 @@ class TestOpenDesign:
         assert connector.get_surface_count() == 8
         assert panel.service.scene.component_names == []
         assert any("not shown in the System view" in m for m in _toasts(window))
+
+
+class TestOpenRebuildsTheScene:
+    """O3: a ``.olsys`` keeps the scene of its last successful rebuild, so a
+    file saved after a failed rebuild (or written by an older converter)
+    showed a scene that does not belong to its design. Opening builds the
+    scene again from the paths; when that fails the stored scene is shown
+    with a warning."""
+
+    @staticmethod
+    def _stale_file(tmp_path, replacement: Optic, name: str) -> str:  # noqa: ANN001
+        """A system whose stored scene is the Cooke triplet's while its path
+        holds *replacement* -- the state after a rebuild that failed."""
+        from optiland.nonsequential.system import MultiAxisSystem
+
+        system = MultiAxisSystem.from_optic(CookeTriplet(), "Design")
+        system.set_path_optic("Design", replacement)  # no rebuild: now stale
+        path = tmp_path / name
+        system.to_json(path)
+        return str(path)
+
+    @staticmethod
+    def _unconvertible() -> Optic:
+        optic = CookeTriplet()
+        optic.set_field_type(field_type="object_height")  # object at infinity
+        return optic
+
+    def test_open_builds_the_scene_from_the_paths(self, qapp, tmp_path):
+        from optiland.nonsequential.system import MultiAxisSystem
+
+        service = NSQService()
+        expected = MultiAxisSystem.from_optic(imaging_optic(), "Design")
+
+        service.load_file(self._stale_file(tmp_path, imaging_optic(), "stale.olsys"))
+
+        assert service.scene.component_names == expected.scene.component_names
+        assert service.scene_outdated is None
+        assert not service.is_dirty
+
+    def test_a_path_that_cannot_be_converted_keeps_the_stored_scene(
+        self, qapp, tmp_path
+    ):
+        service = NSQService()
+        reported: list[str] = []
+        service.sceneOutdated.connect(reported.append)
+
+        service.load_file(self._stale_file(tmp_path, self._unconvertible(), "b.olsys"))
+
+        assert {"S1", "S6", "S1.rim"} <= set(service.scene.component_names)
+        assert service.scene_outdated is not None
+        assert reported == [service.scene_outdated]
+
+    def test_the_panel_warns_and_marks_the_stored_scene(
+        self, qapp, monkeypatch, tmp_path
+    ):
+        window, _connector, panel = _window(monkeypatch)
+
+        window._open_nsq_scene_from_path(
+            self._stale_file(tmp_path, self._unconvertible(), "c.olsys")
+        )
+
+        assert any("could not be rebuilt" in message for message in _toasts(window))
+        assert "stored scene" in panel._layout_title()
 
 
 class TestOpenIntoFoldedSystem:

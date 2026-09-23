@@ -196,6 +196,7 @@ class NSQPanel(QWidget):
         self.service.traceStarted.connect(self._on_trace_started)
         self.service.traceFinished.connect(self._on_trace_finished)
         self.service.traceFailed.connect(self._on_trace_failed)
+        self.service.sceneOutdated.connect(self._on_scene_outdated)
         optic_changed = getattr(self.connector, "opticChanged", None)
         if optic_changed is not None:
             optic_changed.connect(self._on_optic_changed)
@@ -811,9 +812,25 @@ class NSQPanel(QWidget):
 
     def _layout_title(self) -> str:
         active = self.service.active_path
+        title = self.service.scene_label
         if active:
-            return f"{self.service.scene_label}  |  path: {active}"
-        return self.service.scene_label
+            title = f"{title}  |  path: {active}"
+        if self.service.scene_outdated is not None:
+            title = f"{title}  |  stored scene, not rebuilt"
+        return title
+
+    @Slot(str)
+    def _on_scene_outdated(self, reason: str) -> None:
+        """Warn that the shown scene is the stored one, not a rebuilt one.
+
+        Args:
+            reason: The error that stopped the rebuild.
+        """
+        self._notify(
+            f"The scene of {self.service.scene_label} could not be rebuilt from "
+            f"its paths and may not match the design: {reason}",
+            "warning",
+        )
 
     def _style_path_artists(self, ax) -> None:
         """Make drawn elements pickable and highlight the active path."""
