@@ -555,7 +555,8 @@ class NewtonRaphsonGeometry(StandardGeometry, ABC):
 
         **Non differentiable mode (numpy backend, or torch without grad):**
 
-        Returns the converged t directly.
+        Returns the converged t directly. A ray whose iteration did not
+        converge gets NaN, like a ray that misses the surface.
 
         Assumptions required for the implicit derivative to be exact:
 
@@ -572,7 +573,8 @@ class NewtonRaphsonGeometry(StandardGeometry, ABC):
         value and are never evaluated through a grad-attached residual, so a
         failed or singular root never carries a confident-looking but invalid
         gradient and never contaminates the gradients of valid rays in the
-        same batch. A grouped ``RuntimeWarning`` reports the rejections by
+        same batch. A ray that did not converge (1) has no forward value and
+        returns NaN. A grouped ``RuntimeWarning`` reports the rejections by
         category.
 
         Args:
@@ -595,8 +597,14 @@ class NewtonRaphsonGeometry(StandardGeometry, ABC):
             result = self._solve_distance_primal(rays)
             state = self._classify_final_roots(result, rays) if use_torch_diff else None
 
+        # A ray whose iteration did not converge has no intersection to
+        # report. It leaves as NaN, like a ray that misses the surface, so
+        # nothing downstream evaluates the surface at the absurd but finite
+        # position a runaway step can end at (O9).
+        t_forward = be.where(result.converged, result.t, be.full_like(result.t, be.nan))
+
         if not use_torch_diff:
-            return result.t
+            return t_forward
 
         # Give subclasses a chance to rebuild caches that must be attached to
         # the autograd graph before the differentiable correction runs.
@@ -614,7 +622,7 @@ class NewtonRaphsonGeometry(StandardGeometry, ABC):
         # Jacobian for a first derivative, so the denominator is detached --
         # and for regular rays it is used unclipped: regularity guarantees it
         # is safely above the singularity threshold.
-        t_out = result.t.detach()
+        t_out = t_forward.detach()
         regular = state.regular
 
         if bool(be.to_numpy(be.all(regular))):

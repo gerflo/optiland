@@ -465,6 +465,64 @@ class TestEvenAsphere:
         assert [str(w.message) for w in caught if "encountered" in str(w.message)] == []
         assert_allclose(-1.0 + t[1], geometry.sag(0.0, 3.0), atol=1e-6)
 
+    def test_runaway_ray_leaves_the_solve_as_nan(self, set_test_backend):
+        """O9: a dead ray whose Newton step ran away could leave the solve
+        with a finite, absurd distance (here -7.7e286). Propagated there,
+        the normal that the interaction model evaluates next overflowed,
+        and NumPy printed "overflow encountered in power" from
+        ``_surface_normal`` on every trace. Such a ray leaves ``distance``
+        as NaN like a ray that misses the surface, so nothing downstream
+        evaluates the surface at that position; a regular ray in the same
+        batch still lands on the sag."""
+        geometry = geometries.EvenAsphere(
+            CoordinateSystem(),
+            radius=11.65,
+            conic=-1.1,
+            tol=1e-6,
+            coefficients=[
+                3.6906721e-05,
+                -1.2854612e-08,
+                -1.4001677e-10,
+                -2.5131166e-13,
+                5.0178988e-16,
+                5.8558715e-18,
+                -1.1277944e-20,
+            ],
+        )
+        # A dead ray of the user's RCR-27 illumination 150 mm before the
+        # A18 asphere, 71 mm off-axis and 2 deg towards the axis, and a
+        # regular ray at 3 mm height.
+        h, angle, c45 = 71.0, np.deg2rad(2.0), np.cos(np.pi / 4)
+        rays = RealRays(
+            x=[float(-h * c45), 0.0],
+            y=[float(-h * c45), 3.0],
+            z=[-150.0, -1.0],
+            L=[float(np.sin(angle) * c45), 0.0],
+            M=[float(np.sin(angle) * c45), 0.0],
+            N=[float(np.cos(angle)), 1.0],
+            intensity=[0.0, 1.0],
+            wavelength=[0.55, 0.55],
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            t = geometry.distance(rays)
+            # What StandardSurface._trace_real does next: propagate, then
+            # the interaction model asks for the normal at the new position.
+            moved = RealRays(
+                x=rays.x + t * rays.L,
+                y=rays.y + t * rays.M,
+                z=rays.z + t * rays.N,
+                L=rays.L,
+                M=rays.M,
+                N=rays.N,
+                intensity=rays.i,
+                wavelength=rays.w,
+            )
+            geometry.surface_normal(moved)
+        assert [str(w.message) for w in caught if "encountered" in str(w.message)] == []
+        assert not bool(be.isfinite(t)[0])
+        assert_allclose(-1.0 + t[1], geometry.sag(0.0, 3.0), atol=1e-6)
+
 
 class TestPolynomialGeometry:
     def test_str(self, set_test_backend):

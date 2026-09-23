@@ -62,7 +62,9 @@ solve converged; every relevant quantity (root, residual, ray components,
 normal, denominator) is finite; :math:`|n_z|` is above a dtype-aware
 threshold, so the surface is a numerically valid local height function; and
 :math:`|F_t|` is above a dtype- and scale-aware threshold, so the root is
-simple. Rejected rays keep their detached primal forward value, are **never**
+simple. Rejected rays keep their detached primal forward value (a ray that
+did not converge has none and returns ``NaN``, like a ray that misses the
+surface), are **never**
 evaluated through a grad-attached residual branch — PyTorch can propagate
 ``NaN`` through the backward pass from an invalid branch even when it is
 later masked by ``where`` — and therefore contribute exactly zero gradient to
@@ -164,7 +166,10 @@ answer:
 - **Rejected rays** (non-converged, non-finite, tangent/grazing, or
   near-vertical surface) keep their *detached* primal forward value, are
   never evaluated through a grad-attached residual branch, and contribute
-  zero gradient. One grouped ``RuntimeWarning`` reports the counts,
+  zero gradient. A non-converged ray has no forward value: it returns
+  ``NaN`` like a ray that misses the surface, in every backend, so nothing
+  downstream evaluates the surface at the runaway position its last Newton
+  step reached. One grouped ``RuntimeWarning`` reports the counts,
   iteration count and worst residual by category. Regular rays in the same
   batch remain differentiable.
 - **Near-singular denominators** may be floored — sign-preserving, with the
