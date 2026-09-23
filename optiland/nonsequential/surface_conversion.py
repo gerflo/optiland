@@ -256,6 +256,9 @@ class _Aperture:
     blocked: tuple[float, float] | None = None
     #: The aperture's shape is enforced as its circumscribed circle.
     approximated: bool = False
+    #: The surface declares no clear edge (an infinite clear radius): it
+    #: gets no rim baffle, only the size its geometry needs.
+    unbounded: bool = False
 
 
 def _centred_radial(ap) -> tuple[float, float] | None:
@@ -274,12 +277,14 @@ def _aperture_of(surface, optic, index: int) -> _Aperture:
     if aperture is not None and math.isfinite(aperture.r_max):
         return aperture
     # No clear limit -- no aperture, or an unbounded clear part such as a
-    # mask with an infinite clear radius: the sequential engine clips
-    # nothing outside, so the surface is sized like one without aperture.
+    # mask with an infinite clear radius: the surface is as large as one
+    # without aperture. A declared infinite radius says there is no edge,
+    # so that surface gets no rim either (the sequential engine clips
+    # nothing there); a surface without any aperture keeps its rim.
     r, estimated = _surface_semi_diameter(surface, optic, index)
     if aperture is None:
         return _Aperture(float(r), 0.0, None, estimated)
-    return replace(aperture, r_max=float(r), estimated=estimated)
+    return replace(aperture, r_max=float(r), estimated=estimated, unbounded=True)
 
 
 def _declared_aperture(ap) -> _Aperture | None:
@@ -500,22 +505,28 @@ def add_optic_surfaces(
             if aperture.rectangular is not None:
                 report.notes.append(f"{name}: rectangular aperture, no baffle")
             continue
-        outer = max(2.0 * r_max, r_max + baffle_margin)
-        rim_name = f"{name}.rim"
-        scene.add_component(
-            rim_name,
-            AbsorbingComponent(
-                cs=cs,
-                geometry=AnnularPlaneGeometry(
-                    inner_radius=r_max,
-                    outer_radius=outer,
-                    z_offset=surface_sag(surface, r_max),
+        if aperture.unbounded:
+            # The surface declares no clear edge: a rim would absorb where
+            # the sequential design lets light pass, and at the estimated
+            # radius it would dwarf the scene.
+            report.notes.append(f"{name}: no clear edge, no rim")
+        else:
+            outer = max(2.0 * r_max, r_max + baffle_margin)
+            rim_name = f"{name}.rim"
+            scene.add_component(
+                rim_name,
+                AbsorbingComponent(
+                    cs=cs,
+                    geometry=AnnularPlaneGeometry(
+                        inner_radius=r_max,
+                        outer_radius=outer,
+                        z_offset=surface_sag(surface, r_max),
+                    ),
+                    material_front=materials.get(pre),
+                    name=f"{label} rim",
                 ),
-                material_front=materials.get(pre),
-                name=f"{label} rim",
-            ),
-        )
-        report.baffles.append(rim_name)
+            )
+            report.baffles.append(rim_name)
         if aperture.r_min > 0.0:
             disk_name = f"{name}{OBSCURATION_SUFFIX}"
             scene.add_component(

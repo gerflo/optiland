@@ -351,36 +351,43 @@ class TestUnboundedClearAperture:
     ``inf``) or a ring aperture without outer edge became a rim baffle with
     ``inner_radius == outer_radius == inf``; drawing the System view then
     computed ``inf * 0`` ("invalid value encountered in multiply"). Such a
-    surface clips nothing outside, so it is sized like one without
-    aperture."""
+    surface declares no clear edge: it gets no rim at all, unlike a surface
+    without any aperture, whose rim is estimated."""
 
-    @staticmethod
-    def _open_rim_radius() -> float:
-        scene = NSQScene()
-        add_optic_surfaces(scene, _masked_stop_optic(None))
-        return float(
-            scene.component_registry.get("S1.rim").component.geometry.inner_radius
-        )
-
-    def test_mask_is_sized_like_a_surface_without_aperture(self):
+    def test_a_mask_without_a_clear_edge_gets_no_rim(self):
         optic = _masked_stop_optic(TestMaskApertures._mask(np.inf, 2.0))
         scene = NSQScene()
         report = add_optic_surfaces(scene, optic)
 
-        rim = scene.component_registry.get("S1.rim").component.geometry
-        assert math.isfinite(float(rim.outer_radius))
-        assert float(rim.inner_radius) == pytest.approx(self._open_rim_radius())
+        assert "S1.rim" not in scene.component_names
+        assert any("S1: no clear edge, no rim" in note for note in report.notes)
         disk = scene.component_registry.get("S1.mask").component.geometry
         assert float(disk.aperture_radius) == pytest.approx(2.0)
-        assert any("S1: aperture estimated" in note for note in report.notes)
+        # A surface without any aperture keeps its estimated rim.
+        open_scene = NSQScene()
+        add_optic_surfaces(open_scene, _masked_stop_optic(None))
+        assert "S1.rim" in open_scene.component_names
+
+    def test_an_unbounded_surface_does_not_inflate_the_scene(self):
+        """Its estimated radius must not reach into the scene's extent."""
+        optic = _masked_stop_optic(TestMaskApertures._mask(np.inf, 2.0))
+        scene = NSQScene()
+        add_optic_surfaces(scene, optic)
+
+        corners = [
+            corner
+            for surface in scene.surfaces
+            for box in [surface.geometry.bounding_box(_get_transform(surface.cs))]
+            for corner in (box.min_corner, box.max_corner)
+        ]
+        assert np.max(np.abs(np.asarray(corners)[:, :2])) <= 6.0
 
     def test_ring_aperture_without_outer_edge_keeps_its_obscuration(self):
         optic = _masked_stop_optic(RadialAperture(r_max=np.inf, r_min=1.5))
         scene = NSQScene()
         add_optic_surfaces(scene, optic)
 
-        rim = scene.component_registry.get("S1.rim").component.geometry
-        assert float(rim.inner_radius) == pytest.approx(self._open_rim_radius())
+        assert "S1.rim" not in scene.component_names
         disk = scene.component_registry.get("S1.obscuration").component.geometry
         assert float(disk.aperture_radius) == pytest.approx(1.5)
 
