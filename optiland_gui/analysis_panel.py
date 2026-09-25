@@ -37,6 +37,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import (
     QColor,
     QIcon,
+    QImage,
     QKeySequence,
     QPainter,
     QPixmap,
@@ -90,6 +91,7 @@ from optiland.mtf import FFTMTF, GeometricMTF
 
 from . import gui_plot_utils
 from .config import CONTROL_HEIGHT_PX
+from .print_preview import PrintPage, show_print_preview
 from .registry import SURFACE_ANALYSES
 from .surface_indexing import disabled_surface_indices, effective_surface_index
 from .theme_manager import get_theme
@@ -2145,146 +2147,20 @@ class AnalysisPanel(QWidget):
         if self.active_mpl_canvas_widget is None:
             QMessageBox.information(self, "Print", "No analysis plot to print.")
             return
+        show_print_preview(
+            self,
+            f"Print Preview – {self.plotTitleLabel.text()}",
+            self._render_analysis_page,
+        )
 
-        try:
-            from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
-        except ImportError:
-            QMessageBox.warning(
-                self, "Print", "Print support is not available on this system."
-            )
-            return
+    def _render_analysis_page(self) -> PrintPage:
+        """Render the current analysis plot for print."""
+        return PrintPage(QImage.fromData(self._save_analysis_figure_print_friendly()))
 
-        from PySide6.QtWidgets import QStyleFactory
-
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        preview = QPrintPreviewDialog(printer, self)
-        preview.setWindowTitle(f"Print Preview – {self.plotTitleLabel.text()}")
-
-        fusion = QStyleFactory.create("Fusion")
-        if fusion:
-            preview.setStyle(fusion)
-            preview.setPalette(fusion.standardPalette())
-        preview.setStyleSheet("""
-            QWidget          { background-color: #f0f0f0; color: #202020; }
-            QToolBar         { background-color: #ececec; border: none; spacing: 2px; }
-            QToolBar::separator { width: 1px; background-color: #c8c8c8;
-                                  margin: 4px 2px; }
-            QToolButton      { color: #202020; background-color: transparent;
-                               border: 1px solid transparent; padding: 2px;
-                               border-radius: 2px; }
-            QToolButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
-            QToolButton:pressed,
-            QToolButton:checked  { background-color: #b8d0ea; border-color: #4e8cc0; }
-            QToolButton:disabled { color: #909090; }
-            QPushButton      { background-color: #e1e1e1; color: #202020;
-                               border: 1px solid #adadad; border-radius: 3px;
-                               padding: 4px 12px; }
-            QPushButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
-            QPushButton:pressed  { background-color: #b8d0ea; border-color: #4e8cc0; }
-            QPushButton:default  { border-color: #0078d7; }
-            QPushButton:disabled { background-color: #d4d4d4; color: #888888;
-                                   border-color: #d4d4d4; }
-            QLabel           { color: #202020; background-color: transparent; }
-            QCheckBox, QRadioButton, QGroupBox { color: #202020; }
-            QGroupBox        { border: 1px solid #b0b0b0; border-radius: 4px;
-                               margin-top: 8px; padding-top: 8px; }
-            QGroupBox::title { color: #202020; }
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-                background-color: #ffffff; color: #202020;
-                border: 1px solid #aaaaaa; border-radius: 2px; padding: 1px 4px; }
-            QComboBox::drop-down { background-color: #e1e1e1;
-                                   border-left: 1px solid #aaaaaa; }
-            QAbstractItemView{ background-color: #ffffff; color: #202020;
-                               border: 1px solid #aaaaaa; }
-            QScrollBar:vertical, QScrollBar:horizontal {
-                background-color: #e8e8e8; border: none; }
-            QScrollBar::handle:vertical {
-                background-color: #b0b0b0; border-radius: 3px; min-height: 20px; }
-            QScrollBar::handle:horizontal {
-                background-color: #b0b0b0; border-radius: 3px; min-width: 20px; }
-            QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-                background-color: #909090; }
-            QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
-        """)
-
-        preview.paintRequested.connect(self._render_analysis_for_print)
-        self._print_overlay = BusyOverlay(preview)
-
-        from PySide6.QtGui import QAction as _QAction
-        from PySide6.QtPrintSupport import QPrintDialog as _QPrintDialog
-
-        def _handle_print():
-            saved_layout = printer.pageLayout()
-            dlg = _QPrintDialog(printer, preview)
-            if dlg.exec():
-                printer.setPageLayout(saved_layout)
-                preview.paintRequested.emit(printer)
-
-        for _act in preview.findChildren(_QAction, "qt_print_action"):
-            with contextlib.suppress(RuntimeError):
-                _act.triggered.disconnect()
-            _act.triggered.connect(_handle_print)
-            break
-
-        preview.exec()
-
-        with contextlib.suppress(RuntimeError):
-            preview.paintRequested.disconnect(self._render_analysis_for_print)
-        self._print_overlay = None
-        preview.setParent(None)
-
-    def _render_analysis_for_print(self, printer) -> None:
-        """Render the current analysis figure onto *printer*."""
+    def _save_analysis_figure_print_friendly(self) -> bytes:
+        """Render the figure as PNG, with white background and black text."""
         import io
 
-        from PySide6.QtCore import QEventLoop
-        from PySide6.QtGui import QImage, QPixmap
-
-        overlay = getattr(self, "_print_overlay", None)
-
-        def _flush(value: float) -> None:
-            if overlay is not None:
-                overlay.set_progress(value)
-                QApplication.processEvents(
-                    QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
-                )
-
-        if overlay is not None:
-            overlay.show_busy()
-            _flush(0.02)
-
-        try:
-            buf = io.BytesIO()
-            _flush(0.05)
-            self._save_analysis_figure_print_friendly(buf, on_progress=_flush)
-            buf.seek(0)
-            image = QImage.fromData(buf.getvalue())
-            _flush(0.95)
-            if image.isNull():
-                return
-
-            painter = QPainter(printer)
-            if not painter.isActive():
-                return
-            viewport = painter.viewport()
-            pixmap = QPixmap.fromImage(image)
-            scaled = pixmap.scaled(
-                viewport.width(),
-                viewport.height(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            x = viewport.x() + (viewport.width() - scaled.width()) // 2
-            y = viewport.y() + (viewport.height() - scaled.height()) // 2
-            _flush(1.0)
-            painter.drawPixmap(x, y, scaled)
-            painter.end()
-        finally:
-            if overlay is not None:
-                overlay.hide_busy()
-
-    def _save_analysis_figure_print_friendly(self, buf, on_progress=None) -> None:
-        """Save the figure to *buf* as PNG, with white background and black text."""
         import matplotlib.colors as mcolors
 
         fig = self.active_mpl_canvas_widget.figure
@@ -2335,17 +2211,12 @@ class AnalysisPanel(QWidget):
                 if _is_light(text_obj.get_color()):
                     _remap(text_obj, text_obj.get_color, text_obj.set_color, "black")
 
-        if on_progress is not None:
-            on_progress(0.30)
-
+        buf = io.BytesIO()
         try:
-            if on_progress is not None:
-                on_progress(0.35)
             fig.savefig(
                 buf, format="png", dpi=300, bbox_inches="tight", facecolor="white"
             )
-            if on_progress is not None:
-                on_progress(0.85)
+            return buf.getvalue()
         finally:
             for setter, original in reversed(restores):
                 with contextlib.suppress(Exception):

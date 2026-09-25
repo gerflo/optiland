@@ -10,11 +10,15 @@ toast would re-enter the log and loop forever.
 from __future__ import annotations
 
 import logging
+import subprocess
+import sys
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 TOAST_LOGGER = "optiland_gui.widgets.toast"
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture()
@@ -165,3 +169,65 @@ def test_configure_logging_is_idempotent(tmp_path):
     assert first == second == tmp_path / "optiland_gui.log"
     assert len(installed) == 2  # one stream handler, one file handler
     assert logging_handler._installed_handlers == []
+
+
+# A hard crash (an access violation inside Qt) ends the process before any
+# log handler runs; the crash log keeps the Python stack of that moment.
+# faulthandler is process-wide and pytest uses it too, so each case runs in
+# a process of its own.
+_CRASH_SCRIPT = """
+import faulthandler
+import sys
+from pathlib import Path
+
+from optiland_gui.utils import logging_handler
+
+logging_handler.enable_crash_log(Path(sys.argv[1]))
+
+
+def the_function_that_crashed():
+    faulthandler._sigsegv()
+
+
+if sys.argv[2] == "crash":
+    the_function_that_crashed()
+"""
+
+
+def _start_gui_process(log_dir: Path, mode: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, "-c", _CRASH_SCRIPT, str(log_dir), mode],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+
+
+def test_crash_log_keeps_the_stack_of_a_hard_crash(tmp_path):
+    result = _start_gui_process(tmp_path, "crash")
+
+    text = (tmp_path / "crash.log").read_text(encoding="utf-8")
+    assert result.returncode != 0
+    assert "Optiland GUI started, pid" in text
+    assert "the_function_that_crashed" in text
+
+
+def test_crash_log_adds_a_line_per_start(tmp_path):
+    for _ in range(2):
+        assert _start_gui_process(tmp_path, "run").returncode == 0
+
+    lines = (tmp_path / "crash.log").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert all("Optiland GUI started, pid" in line for line in lines)
+
+
+def test_crash_log_past_its_size_limit_starts_afresh(tmp_path):
+    (tmp_path / "crash.log").write_text("x" * 1_000_001, encoding="utf-8")
+
+    assert _start_gui_process(tmp_path, "run").returncode == 0
+
+    lines = (tmp_path / "crash.log").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    assert "Optiland GUI started, pid" in lines[0]

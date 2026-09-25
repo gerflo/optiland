@@ -65,6 +65,9 @@ def main() -> None:
     # Log to stderr and to a rotating file in the app data folder. Toasts
     # write to the log as well, so what the user saw on screen is on record.
     _log_handler.configure_logging()
+    # A crash inside Qt kills the process without a log record; this at
+    # least leaves the Python stack of the moment behind.
+    _log_handler.enable_crash_log()
     app.setWindowIcon(QIcon(OPTILAND_ICON_PATH))
     QLocale.setDefault(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
 

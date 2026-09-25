@@ -36,6 +36,7 @@ from PySide6.QtGui import (
     QColor,
     QCursor,
     QIcon,
+    QImage,
     QKeySequence,
     QPainter,
     QPen,
@@ -81,6 +82,13 @@ from optiland.visualization.system.system import (
 from . import gui_plot_utils
 from .analysis_panel import CustomMatplotlibToolbar
 from .config import APPLICATION_NAME, ORGANIZATION_NAME
+from .layout_print import (
+    collect_layout_elements,
+    draw_callouts,
+    legend_label,
+    place_callouts,
+)
+from .print_preview import LegendEntry, PrintPage, show_print_preview
 from .surface_indexing import (
     disabled_surface_indices,
     editor_surface_index,
@@ -2695,187 +2703,59 @@ class MatplotlibViewer(QWidget):
         return []
 
     def _print_layout(self) -> None:
-        """Open a print preview dialog for the 2D layout.
+        """Open a print preview of the 2D layout.
 
-        The preview dialog contains toolbar buttons for printer selection,
-        paper format, orientation, zoom, and a Print button.  When the user
-        clicks Print, Qt's own (non-native) QPrintDialog opens so printer
-        settings can be configured before the job is sent.
+        The page shows the layout as it is on screen, but without the Lens
+        Data Editor selection (arrow and emphasis), with every visible
+        element numbered and the element names in a legend under the plot.
         """
+        show_print_preview(self, "Print Preview – 2D Layout", self._render_layout_page)
+
+    def _render_layout_page(self) -> PrintPage:
+        """Render the 2D layout for print, leaving the view on screen as it was."""
+        optic = self._layout_optic
+        numbered: list = []
+        callout_artists: list = []
+        self._clear_highlight()
         try:
-            from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
-        except ImportError:
-            from PySide6.QtWidgets import QMessageBox
-
-            QMessageBox.warning(
-                self, "Print", "Print support is not available on this system."
-            )
-            return
-
-        from PySide6.QtWidgets import QStyleFactory
-
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        preview = QPrintPreviewDialog(printer, self)
-        preview.setWindowTitle("Print Preview – 2D Layout")
-
-        # Force the Fusion style with its light palette so Qt's built-in toolbar
-        # icons (dark icons designed for light backgrounds) are visible.
-        # We also apply an explicit stylesheet that overrides any rules from the
-        # app's dark theme that would otherwise bleed into this dialog (e.g.
-        # QPushButton → dark-blue, QLabel → near-white text on a white bg).
-        fusion = QStyleFactory.create("Fusion")
-        if fusion:
-            preview.setStyle(fusion)
-            preview.setPalette(fusion.standardPalette())
-        preview.setStyleSheet("""
-            QWidget          { background-color: #f0f0f0; color: #202020; }
-            QToolBar         { background-color: #ececec; border: none; spacing: 2px; }
-            QToolBar::separator { width: 1px; background-color: #c8c8c8;
-                                  margin: 4px 2px; }
-            QToolButton      { color: #202020; background-color: transparent;
-                               border: 1px solid transparent; padding: 2px;
-                               border-radius: 2px; }
-            QToolButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
-            QToolButton:pressed,
-            QToolButton:checked  { background-color: #b8d0ea; border-color: #4e8cc0; }
-            QToolButton:disabled { color: #909090; }
-            QPushButton      { background-color: #e1e1e1; color: #202020;
-                               border: 1px solid #adadad; border-radius: 3px;
-                               padding: 4px 12px; }
-            QPushButton:hover    { background-color: #dce9f7; border-color: #7ab3e0; }
-            QPushButton:pressed  { background-color: #b8d0ea; border-color: #4e8cc0; }
-            QPushButton:default  { border-color: #0078d7; }
-            QPushButton:disabled { background-color: #d4d4d4; color: #888888;
-                                   border-color: #d4d4d4; }
-            QLabel           { color: #202020; background-color: transparent; }
-            QCheckBox, QRadioButton, QGroupBox { color: #202020; }
-            QGroupBox        { border: 1px solid #b0b0b0; border-radius: 4px;
-                               margin-top: 8px; padding-top: 8px; }
-            QGroupBox::title { color: #202020; }
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
-                background-color: #ffffff; color: #202020;
-                border: 1px solid #aaaaaa; border-radius: 2px; padding: 1px 4px; }
-            QComboBox::drop-down { background-color: #e1e1e1;
-                                   border-left: 1px solid #aaaaaa; }
-            QAbstractItemView{ background-color: #ffffff; color: #202020;
-                               border: 1px solid #aaaaaa; }
-            QScrollBar:vertical, QScrollBar:horizontal {
-                background-color: #e8e8e8; border: none; }
-            QScrollBar::handle:vertical   { background-color: #b0b0b0;
-                                            border-radius: 3px; min-height: 20px; }
-            QScrollBar::handle:horizontal { background-color: #b0b0b0;
-                                            border-radius: 3px; min-width:  20px; }
-            QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
-                background-color: #909090; }
-            QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
-        """)
-
-        preview.paintRequested.connect(self._render_for_print)
-
-        # Attach a progress overlay so the user sees activity during slow renders
-        self._print_overlay = BusyOverlay(preview)
-
-        # Intercept the preview's Print button to preserve the page layout
-        # (orientation, paper size) set in the preview toolbar.  On Windows,
-        # QPrintDialog re-reads the printer driver's DEVMODE when it opens,
-        # which resets the orientation to the driver default (usually portrait)
-        # regardless of what was selected in the preview.  We save the layout
-        # before the dialog and restore it after acceptance so the preview
-        # orientation is always honoured.
-        from PySide6.QtGui import QAction as _QAction
-        from PySide6.QtPrintSupport import QPrintDialog as _QPrintDialog
-
-        def _handle_print():
-            saved_layout = printer.pageLayout()
-            dlg = _QPrintDialog(printer, preview)
-            if dlg.exec():
-                printer.setPageLayout(saved_layout)
-                preview.paintRequested.emit(printer)
-
-        for _act in preview.findChildren(_QAction, "qt_print_action"):
-            with contextlib.suppress(RuntimeError):
-                _act.triggered.disconnect()
-            _act.triggered.connect(_handle_print)
-            break
-
-        preview.exec()
-
-        # Disconnect paintRequested and remove Qt parent so the C++ dialog is
-        # deleted immediately when 'preview' goes out of scope, before 'printer'
-        # is released.  Without this, the Qt parent-child chain keeps the dialog's
-        # C++ object alive while the Python-owned QPrinter (no Qt parent) is GC'd
-        # first, leaving the dialog with a dangling QPrinter*.
-        with contextlib.suppress(RuntimeError):
-            preview.paintRequested.disconnect(self._render_for_print)
-        self._print_overlay = None
-        preview.setParent(None)
-
-    def _render_for_print(self, printer) -> None:
-        """Render the current matplotlib figure onto *printer*.
-
-        Called by QPrintPreviewDialog whenever the preview needs to refresh
-        (e.g. after an orientation or paper-size change).
-        """
-        import io
-
-        from PySide6.QtCore import QEventLoop
-        from PySide6.QtGui import QImage, QPixmap
-        from PySide6.QtWidgets import QApplication
-
-        overlay = getattr(self, "_print_overlay", None)
-
-        def _flush(value: float) -> None:
-            if overlay is not None:
-                overlay.set_progress(value)
-                QApplication.processEvents(
-                    QEventLoop.ProcessEventsFlag.ExcludeUserInputEvents
+            if optic is not None:
+                elements = collect_layout_elements(self._layout_artists, optic)
+                numbered = place_callouts(self.ax, elements)
+                callout_artists = draw_callouts(
+                    self.ax, [callout for _, callout in numbered]
                 )
-
-        if overlay is not None:
-            overlay.show_busy()
-            _flush(0.02)
-
-        try:
-            buf = io.BytesIO()
-            _flush(0.05)
-            self._save_figure_print_friendly(buf, on_progress=_flush)
-            buf.seek(0)
-            image = QImage.fromData(buf.getvalue())
-            _flush(0.95)
-            if image.isNull():
-                return
-
-            painter = QPainter(printer)
-            if not painter.isActive():
-                return
-            viewport = painter.viewport()
-            pixmap = QPixmap.fromImage(image)
-            scaled = pixmap.scaled(
-                viewport.width(),
-                viewport.height(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            x = viewport.x() + (viewport.width() - scaled.width()) // 2
-            y = viewport.y() + (viewport.height() - scaled.height()) // 2
-            _flush(1.0)
-            painter.drawPixmap(x, y, scaled)
-            painter.end()
+            png = self._save_figure_print_friendly()
         finally:
-            if overlay is not None:
-                overlay.hide_busy()
+            for artist in callout_artists:
+                with contextlib.suppress(Exception):
+                    artist.remove()
+            self._apply_highlight()
+            self.canvas.draw_idle()
+        legend = tuple(
+            LegendEntry(
+                callout.number,
+                legend_label(
+                    element,
+                    optic,
+                    editor_rows_for_drawn_surfaces(
+                        self.connector, optic, element.surfaces, as_element=True
+                    ),
+                ),
+            )
+            for element, callout in numbered
+        )
+        return PrintPage(QImage.fromData(png), legend)
 
-    def _save_figure_print_friendly(self, buf, on_progress=None) -> None:
-        """Save the figure to *buf* as PNG with white background and black text/chrome.
+    def _save_figure_print_friendly(self) -> bytes:
+        """Render the figure as PNG with white background and black text/chrome.
 
         Temporarily remaps all light-colored UI elements (text, ticks, spines)
         to black so they are readable on white paper, then restores the original
         dark-theme colors.  Data artists (ray lines, lens outlines) keep their
         colors unchanged.
-
-        *on_progress* is an optional ``(fraction: float) -> None`` callback
-        called at key stages so callers can update a progress indicator.
         """
+        import io
+
         import matplotlib.colors as mcolors
 
         fig = self.figure
@@ -2939,17 +2819,12 @@ class MatplotlibViewer(QWidget):
                 if _is_light(c) and _luminance(c) > 0.75:
                     _remap(line, line.get_color, line.set_color, "#444444")
 
-        if on_progress is not None:
-            on_progress(0.30)
-
+        buf = io.BytesIO()
         try:
-            if on_progress is not None:
-                on_progress(0.35)
             fig.savefig(
                 buf, format="png", dpi=300, bbox_inches="tight", facecolor="white"
             )
-            if on_progress is not None:
-                on_progress(0.85)
+            return buf.getvalue()
         finally:
             for setter, original in reversed(restores):
                 with contextlib.suppress(Exception):

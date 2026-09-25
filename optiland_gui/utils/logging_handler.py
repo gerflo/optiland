@@ -9,14 +9,23 @@ Author: Manuel Fragata Mendes, 2025
 
 from __future__ import annotations
 
+import faulthandler
 import logging
+import os
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import TextIO
 
 from PySide6.QtCore import QObject, Signal
 
 _LOG_FORMAT = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
 _LOG_FILE_NAME = "optiland_gui.log"
+_CRASH_LOG_NAME = "crash.log"
+_CRASH_LOG_MAX_BYTES = 1_000_000
+
+# Open for the lifetime of the process: faulthandler writes to its descriptor.
+_crash_log_stream: TextIO | None = None
 
 # Handlers installed by configure_logging(); kept so tests can remove them.
 _installed_handlers: list[logging.Handler] = []
@@ -153,6 +162,47 @@ def configure_logging(
         _log_file = log_dir / _LOG_FILE_NAME
         logging.getLogger(__name__).info("Log file: %s", _log_file)
     return _log_file
+
+
+def enable_crash_log(log_dir: Path | None = None) -> Path | None:
+    """Write the Python stack of every thread to ``crash.log`` on a hard crash.
+
+    An access violation inside Qt ends the process before any logging
+    handler runs, and the packaged application has no console for
+    faulthandler's default output. Every start adds a line with its time and
+    process id, so a stack follows the start it belongs to; a file past
+    1 MB is started afresh. A second call is a no-op.
+
+    Args:
+        log_dir: Folder for the crash log. Defaults to ``logs`` in the
+            application data directory, next to the application log.
+
+    Returns:
+        The crash log path, or ``None`` if it could not be opened.
+    """
+    global _crash_log_stream
+    if _crash_log_stream is not None:
+        return Path(_crash_log_stream.name)
+    log_dir = default_log_dir() if log_dir is None else Path(log_dir)
+    path = log_dir / _CRASH_LOG_NAME
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        too_big = path.exists() and path.stat().st_size > _CRASH_LOG_MAX_BYTES
+        stream = path.open("w" if too_big else "a", encoding="utf-8")
+    except OSError:
+        logging.getLogger(__name__).warning(
+            "Could not open the crash log in %s.", log_dir
+        )
+        return None
+    stream.write(
+        f"--- {datetime.now():%Y-%m-%d %H:%M:%S} "
+        f"Optiland GUI started, pid {os.getpid()}\n"
+    )
+    stream.flush()
+    faulthandler.enable(file=stream, all_threads=True)
+    _crash_log_stream = stream
+    logging.getLogger(__name__).info("Crash log: %s", path)
+    return path
 
 
 def reset_logging() -> None:
