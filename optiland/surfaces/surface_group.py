@@ -577,13 +577,15 @@ class SurfaceGroup:
                     self._surfaces[:index] + [new_surface] + self._surfaces[index:],
                     "surface insertion into a relative-coordinate chain",
                 )
+            # A surface inserted at index 1 takes the place of surface 1.
+            first_z = self.first_surface_z()
 
             self._surfaces.insert(index, new_surface)
             self._update_surface_links()
 
             # Update coordinate systems if surface was inserted
             if will_rebuild:
-                self._update_coordinate_systems(start_index=index)
+                self._update_coordinate_systems(start_index=index, first_z=first_z)
 
         if new_surface.is_stop:
             for idx, surface in enumerate(self._surfaces):
@@ -625,11 +627,13 @@ class SurfaceGroup:
                 self._surfaces[:index] + self._surfaces[index + 1 :],
                 "surface removal from a relative-coordinate chain",
             )
+        # The surface behind a removed surface 1 moves into its place.
+        first_z = self.first_surface_z()
 
         del self._surfaces[index]
 
         if will_rebuild:
-            self._update_coordinate_systems(start_index=index)
+            self._update_coordinate_systems(start_index=index, first_z=first_z)
 
         self._update_surface_links()
 
@@ -697,7 +701,27 @@ class SurfaceGroup:
         z_first = be.atleast_1d(be.array(self._surfaces[1].geometry.cs.z)).ravel()[0]
         obj.thickness = float(z_first) - float(z_obj)
 
-    def _update_coordinate_systems(self, start_index):
+    def first_surface_z(self) -> float:
+        """Returns the global z of surface 1 as a plain float.
+
+        Relative-coordinate rebuilds start the chain here. Optiland places
+        surface 1 at z = 0, but a loaded or absolutely positioned system may
+        put it elsewhere (e.g. the object at z = 0); re-anchoring at 0 would
+        move every surface and leave the object behind. A plain float makes
+        a rebuilt chain start from a fresh value, so no autograd graph of an
+        earlier iteration is carried along (see #569).
+
+        Returns:
+            float: The z of surface 1, or 0.0 if the group has no surface 1.
+        """
+        if len(self._surfaces) < 2:
+            return 0.0
+        z_first = self._surfaces[1].geometry.cs.z
+        if hasattr(z_first, "item"):
+            z_first = z_first.item()
+        return float(z_first)
+
+    def _update_coordinate_systems(self, start_index, first_z: float = 0.0):
         """Updates the coordinate systems of surfaces from start_index.
 
         This method is called when a surface is added, removed, or modified
@@ -715,6 +739,9 @@ class SurfaceGroup:
                             not the object surface (index 0) and has a predecessor.
                             If `start_index` is 0, updates effectively begin
                             for surface 1 based on surface 0.
+            first_z (float, optional): The z given to surface 1 when it is
+                rebuilt, i.e. where the chain lay before the change.
+                Defaults to 0.0, Optiland's placement of surface 1.
 
         Raises:
             UnsupportedParaxialGeometryError: If the current chain's beam
@@ -745,8 +772,8 @@ class SurfaceGroup:
         for i in range(effective_start_index, len(self._surfaces)):
             current_surface = self._surfaces[i]
 
-            if i == 1:  # first surface lies at z=0.0 by definition
-                new_z = 0.0
+            if i == 1:  # the chain stays where surface 1 lay
+                new_z = first_z
             else:
                 prev_surface = self._surfaces[i - 1]
                 thickness = prev_surface.thickness

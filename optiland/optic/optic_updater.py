@@ -80,11 +80,9 @@ class OpticUpdater:
         # along global +z. Guard before touching any geometry.
         require_global_z_geometry(self.optic.surfaces, "set_thickness")
 
-        # The chain stays anchored where surface 1 lies. Optiland places it
-        # at z = 0, but a loaded or absolutely positioned system may put it
-        # elsewhere (e.g. the object at z = 0); re-anchoring at 0 would move
-        # every surface and leave the object behind.
-        z_first = self._first_surface_z()
+        # The chain stays anchored where surface 1 lies, which need not be
+        # z = 0 (see SurfaceGroup.first_surface_z).
+        z_first = self.optic.surfaces.first_surface_z()
 
         if surface_number == 0:
             # First surface thickness sets the object distance.
@@ -121,21 +119,6 @@ class OpticUpdater:
                 t_prev = surfaces[k - 1].thickness
                 z = z + (t_prev if hasattr(t_prev, "detach") else be.array(t_prev))
                 surfaces[k].geometry.cs.z = be.array(z)
-
-    def _first_surface_z(self) -> float:
-        """Returns the global z of surface 1 as a plain float.
-
-        A plain float makes the rebuilt chain start from a fresh value, so no
-        autograd graph of an earlier iteration is carried along (see #569).
-        Without a surface 1 the anchor is Optiland's default of z = 0.
-        """
-        surfaces = self.optic.surfaces
-        if len(surfaces) < 2:
-            return 0.0
-        z_first = surfaces[1].geometry.cs.z
-        if hasattr(z_first, "item"):
-            z_first = z_first.item()
-        return float(z_first)
 
     def set_index(self, value: float, surface_number: int) -> None:
         """Set the index of refraction of a surface.
