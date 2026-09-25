@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
 import optiland.backend as be
 from optiland.analysis.jones_pupil import JonesPupil
 from optiland.samples.objectives import CookeTriplet
+
+matplotlib.use("Agg")  # use non-interactive backend for testing
 
 
 def test_jones_pupil_initialization(set_test_backend):

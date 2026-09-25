@@ -5,9 +5,12 @@ Kramer Harrison, 2026
 
 from __future__ import annotations
 
+import matplotlib
 import pytest
 
 from optiland.visualization.base import BaseViewer2D, BaseViewer3D
+
+matplotlib.use("Agg")  # use non-interactive backend for testing
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures

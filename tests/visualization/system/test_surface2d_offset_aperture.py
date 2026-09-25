@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -8,6 +9,8 @@ from optiland import physical_apertures
 from optiland.optic import Optic
 from optiland.visualization.system.optic_viewer import OpticViewer
 from optiland.visualization.system.system import OpticalSystem
+
+matplotlib.use("Agg")  # use non-interactive backend for testing
 
 
 def _build_optic_with_offset_aperture() -> Optic:

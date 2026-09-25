@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
@@ -11,6 +12,8 @@ from matplotlib.figure import Figure
 import optiland.backend as be
 from optiland.analysis import MTFvsField
 from optiland.samples.objectives import CookeTriplet
+
+matplotlib.use("Agg")  # use non-interactive backend for testing
 
 
 class TestMTFvsField:

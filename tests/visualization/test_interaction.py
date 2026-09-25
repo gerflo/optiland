@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import matplotlib
 import matplotlib.pyplot as plt
 import pytest
 from matplotlib.backend_bases import MouseEvent
@@ -9,6 +10,8 @@ from matplotlib.backend_bases import MouseEvent
 from optiland.samples import CookeTriplet
 from optiland.visualization.system.optic_viewer import OpticViewer
 from optiland.visualization.system.surface import Surface2D
+
+matplotlib.use("Agg")  # use non-interactive backend for testing
 
 
 @pytest.fixture

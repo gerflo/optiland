@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import warnings
 
+import matplotlib
 import pytest
 
 import optiland.backend as be
@@ -38,6 +39,8 @@ from .test_folded_paraxial import (
     straight,
 )
 from .utils import assert_allclose, assert_array_equal
+
+matplotlib.use("Agg")  # use non-interactive backend for testing
 
 # ---------------------------------------------------------------------------
 # Builders

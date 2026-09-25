@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import matplotlib
 import matplotlib.pyplot as plt
 import pytest
 from matplotlib.axes import Axes
@@ -7,6 +8,8 @@ from matplotlib.figure import Figure
 
 from optiland.analysis import ThroughFocusMTF
 from optiland.samples.objectives import CookeTriplet
+
+matplotlib.use("Agg")  # use non-interactive backend for testing
 
 
 class TestThroughFocusMTF:

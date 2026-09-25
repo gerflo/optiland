@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import matplotlib
 import matplotlib.pyplot as plt
 import pytest
 from matplotlib.colors import to_rgb
@@ -14,6 +15,8 @@ from optiland.visualization.themes import (
     set_theme,
     theme_context,
 )
+
+matplotlib.use("Agg")  # use non-interactive backend for testing
 
 
 def test_set_theme():

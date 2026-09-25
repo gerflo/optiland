@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
@@ -8,6 +9,8 @@ from matplotlib.axes import Axes
 from optiland.optic import Optic
 from optiland.samples import CookeTriplet
 from optiland.visualization.system.optic_viewer import OpticViewer
+
+matplotlib.use("Agg")  # use non-interactive backend for testing
 
 
 @pytest.fixture
