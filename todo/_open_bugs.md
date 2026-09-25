@@ -9,7 +9,7 @@ Nummern werden nie wiederverwendet; die nächste freie Nummer ist die höchste
 je vergebene plus 1 (Datei, `git log -p -- todo/_open_bugs.md` und
 `git log --grep "O[0-9]"` prüfen; ein Eintrag, der in derselben Sitzung
 angelegt und behoben wurde, steht nur im Fix-Commit). Höchste vergebene
-Nummer: O14.
+Nummer: O15.
 
 Die Kennung ist `O<n>` (O wie Optiland), damit sie nicht mit den
 Fehlernummern `B<n>` von Optomal verwechselt wird; Optomal führt seine Liste

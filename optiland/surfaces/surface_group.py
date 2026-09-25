@@ -668,9 +668,34 @@ class SurfaceGroup:
             SurfaceGroup: The surface group created from the dictionary.
 
         """
-        return cls(
+        group = cls(
             [Surface.from_dict(surface_data) for surface_data in data["surfaces"]],
         )
+        group._restore_object_thickness()
+        return group
+
+    def _restore_object_thickness(self) -> None:
+        """Sets the object thickness to the object's axial gap to surface 1.
+
+        ``ObjectSurface`` does not serialize its thickness; the object
+        distance lives in the positions. Without this, every loaded system
+        reports an object thickness of 0 to the readers of the attribute
+        (CODE V and OSLO writers, prescription, diagnostics). The gap is
+        measured along global z, as the Zemax writer measures it.
+        """
+        from optiland.surfaces.object_surface import ObjectSurface
+
+        if len(self._surfaces) < 2:
+            return
+        obj = self._surfaces[0]
+        if not isinstance(obj, ObjectSurface):
+            return
+        if obj.is_infinite:
+            obj.thickness = be.inf
+            return
+        z_obj = be.atleast_1d(be.array(obj.geometry.cs.z)).ravel()[0]
+        z_first = be.atleast_1d(be.array(self._surfaces[1].geometry.cs.z)).ravel()[0]
+        obj.thickness = float(z_first) - float(z_obj)
 
     def _update_coordinate_systems(self, start_index):
         """Updates the coordinate systems of surfaces from start_index.

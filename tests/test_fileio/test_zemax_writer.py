@@ -641,7 +641,9 @@ class TestSavedDesignExport:
         object".
         """
         optic = _saved_design()
-        assert optic.surfaces[0].thickness == 0.0  # the stale attribute
+        # Loading restores the attribute since O15; an absolutely placed
+        # object still leaves it at 0, so the writer must not rely on it.
+        optic.surfaces[0].thickness = 0.0
 
         model = OpticToZemaxConverter(optic).convert()
         assert model.surfaces[0]["DISZ"] == pytest.approx(25.0)

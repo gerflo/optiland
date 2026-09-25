@@ -331,8 +331,9 @@ class OpticToZemaxConverter:
 
         The object surface is the exception. Its position lives in its
         coordinate system, and its ``thickness`` attribute is not kept in step
-        with it: a finite object restored from a saved design reads
-        ``thickness == 0``. Writing that put the object on top of the first
+        with it: an absolutely placed finite object reads ``thickness == 0``
+        (so did every saved design before loading restored it). Writing that
+        put the object on top of the first
         surface, which Zemax rejects ("Entrance pupil cannot be located at
         object"), so the object's DISZ is its axial gap to the first surface.
         """
