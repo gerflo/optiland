@@ -263,8 +263,13 @@ class TestFieldPoints:
         ring = _ring(field_count=4)
         points = ring.field_points()
         assert len(points) == 6
-        assert points[0] == (ring.inner_radius, 0.0)
-        assert points[-1] == (ring.outer_radius, 0.0)
+        assert points[0] == (pytest.approx(ring.inner_radius, abs=5e-5), 0.0)
+        assert points[-1] == (pytest.approx(ring.outer_radius, abs=5e-5), 0.0)
+        # Heights are rounded to 0.1 um, so a tool that rounds them the same
+        # way never normalizes a field to slightly more than 1.
+        heights = [y for y, _ in points]
+        assert heights == [round(y, 4) for y in heights]
+        assert round(max(heights), 4) / max(heights) <= 1.0
         heights = [y for y, _ in points]
         assert heights == sorted(heights)
         assert all(weight == 1.0 for _, weight in points[1:-1])
@@ -281,7 +286,7 @@ class TestFieldPoints:
         edges = np.sqrt(r_in**2 + np.arange(count + 1) / count * (r_out**2 - r_in**2))
         expected = (2.0 / 3.0) * np.diff(edges**3) / np.diff(edges**2)
         heights = np.array([y for y, _ in ring.field_points()])
-        assert np.allclose(heights, expected, atol=1e-6)
+        assert np.allclose(heights, expected, atol=6e-5)
 
     def test_single_discrete_node_is_the_mean_chip_radius(self):
         ring = _ring(field_count=1, field_edges=False)
@@ -292,7 +297,7 @@ class TestFieldPoints:
         x = cells * _H + 0.5 * _PITCH
         y = cells * _W
         radius = np.hypot(*np.meshgrid(x, y))
-        assert height == pytest.approx(radius.mean(), abs=1e-6)
+        assert height == pytest.approx(radius.mean(), abs=6e-5)
 
 
 class TestApplyToOptic:

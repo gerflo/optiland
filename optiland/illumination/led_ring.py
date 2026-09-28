@@ -41,6 +41,9 @@ EMITTER_MODELS: tuple[str, ...] = ("discrete", "annulus")
 #: Type key of an LED ring in a serialized optic's ``"light_source"``.
 LED_RING_TYPE = "led_ring"
 
+#: Decimals (mm) the generated field heights are rounded to: 0.1 um.
+_FIELD_DECIMALS = 4
+
 #: Radial samples of the emitting-area density the field points come from.
 #: The density of a chip rises like a square root at its inner edge; this
 #: many samples keep the field points within 1e-7 mm of their exact place.
@@ -221,16 +224,22 @@ class LEDRing:
         ``field_count`` points cut the emitting zone into radial bands of
         equal emitting area; each sits at its band's area centroid and has
         weight 1. With ``field_edges`` the inner and outer edge of the zone
-        follow as weight-0 fields.
+        follow as weight-0 fields. Heights are rounded to 0.1 um: readable
+        in a field table, and tools that round field heights themselves
+        then never see a normalized field coordinate above 1.
 
         Returns:
             ``(y, weight)`` pairs, increasing in ``y``.
         """
         r = np.linspace(self.inner_radius, self.outer_radius, _RADIAL_SAMPLES)
         nodes = equal_share_nodes(r, self.emitting_length(r), self.field_count)
-        points = [(float(y), 1.0) for y in nodes]
+        points = [(round(float(y), _FIELD_DECIMALS), 1.0) for y in nodes]
         if self.field_edges:
-            points = [(self.inner_radius, 0.0), *points, (self.outer_radius, 0.0)]
+            points = [
+                (round(self.inner_radius, _FIELD_DECIMALS), 0.0),
+                *points,
+                (round(self.outer_radius, _FIELD_DECIMALS), 0.0),
+            ]
         return points
 
     def to_dict(self) -> dict[str, Any]:
