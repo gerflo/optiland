@@ -1,9 +1,9 @@
 """Regression tests: disabling the aperture stop surface is refused.
 
-Found via a real user file: the pinhole mirror ("Lochspiegel") was the
-aperture stop. Disabling it spliced the stop out of the traced optic,
-Optiland raised "No stop surface found", the viewer turned that into a
-one-off toast and drew the layout without rays, and nothing was logged.
+Found via a real user file: a perforated mirror was the aperture stop.
+Disabling it spliced the stop out of the traced optic, Optiland raised
+"No stop surface found", the viewer turned that into a one-off toast and
+drew the layout without rays, and nothing was logged.
 """
 
 from __future__ import annotations

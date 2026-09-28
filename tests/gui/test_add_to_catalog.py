@@ -272,7 +272,7 @@ class TestIdealMaterialRoundtrip:
     glass-catalog lookup instead of being recognized as an ideal index.
     """
 
-    def _make_mouse_eye_optic(self):
+    def _make_schematic_eye_optic(self):
         import optiland.backend as be
         from optiland.materials import IdealMaterial
         from optiland.optic import Optic
@@ -310,15 +310,15 @@ class TestIdealMaterialRoundtrip:
         from optiland_gui.catalogs.insertion import record_to_insert_specs
         from optiland_gui.catalogs.schema import CatalogLensRecord
 
-        source = self._make_mouse_eye_optic()
+        source = self._make_schematic_eye_optic()
         draft = self._make_service(source).get_element_catalog_draft(1)
         assert draft["surfaces"][0]["material"].startswith("Ideal n=")
 
         record = CatalogLensRecord.from_dict(
             {
-                "manufacturer": "Imedos",
-                "part_number": "xx-001",
-                "product_name": "Mouse model",
+                "manufacturer": "Example Optics",
+                "part_number": "EYE-001",
+                "product_name": "Schematic eye",
                 "surfaces": draft["surfaces"],
                 "stop_surface_offset": draft["stop_surface_offset"],
             }
@@ -339,7 +339,7 @@ class TestIdealMaterialRoundtrip:
         target.updater.update()
 
         service = self._make_service(target)
-        service.insert_surface_sequence(2, specs, stop_offset, "xx-001", "stock_part")
+        service.insert_surface_sequence(2, specs, stop_offset, "EYE-001", "stock_part")
 
         assert target.surfaces.num_surfaces == 5
         inserted = target.surfaces.surfaces[2]

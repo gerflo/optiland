@@ -1,9 +1,8 @@
 """Even-asphere geometry for non-sequential tracing.
 
-The A18-15HPX ophthalmoscope lens of the RCR-03 fundus camera is an even
-asphere with seven coefficients; without this geometry the NSQ scene could
-only carry its base conic and the imaging path would not match the
-sequential design.
+A strongly curved objective lens with an even-asphere face and seven
+coefficients; without this geometry the NSQ scene could only carry its base
+conic and the imaging path would not match the sequential design.
 
 Kramer Harrison, 2026
 """
@@ -28,8 +27,8 @@ from optiland.nonsequential import (
 from optiland.nonsequential.ir.lower import lower
 from optiland.nonsequential.serialization import scene_from_dict, scene_to_dict
 
-# A18-15HPX-U-S as stored in the user's design file (coefficients[0] -> r^2).
-_A18 = {
+# An even asphere with a leading r^2 coefficient (coefficients[0] -> r^2).
+_ASPHERE = {
     "radius": -11.65,
     "conic": -1.1,
     "coefficients": [
@@ -66,8 +65,8 @@ def _rays(n: int, seed: int = 1, oblique: bool = False):
 
 class TestSagAndNormal:
     def test_sag_matches_the_sequential_even_asphere(self):
-        geom = EvenAsphereGeometry(aperture_radius=9.0, **_A18)
-        seq = EvenAsphere(CoordinateSystem(), **_A18)
+        geom = EvenAsphereGeometry(aperture_radius=9.0, **_ASPHERE)
+        seq = EvenAsphere(CoordinateSystem(), **_ASPHERE)
         r = np.linspace(0.0, 8.5, 40)
         nsq = be.to_numpy(geom._sag(r, np.zeros_like(r)))
         ref = be.to_numpy(seq.sag(r, np.zeros_like(r)))
@@ -75,8 +74,8 @@ class TestSagAndNormal:
 
     @pytest.mark.parametrize("oblique", [False, True])
     def test_hits_lie_on_the_surface_with_the_sequential_normal(self, oblique):
-        geom = EvenAsphereGeometry(aperture_radius=9.0, **_A18)
-        seq = EvenAsphere(CoordinateSystem(), **_A18)
+        geom = EvenAsphereGeometry(aperture_radius=9.0, **_ASPHERE)
+        seq = EvenAsphere(CoordinateSystem(), **_ASPHERE)
         origins, dirs = _rays(2000, oblique=oblique)
         t, normals, hit, n_geom = geom.ray_intersect(origins, dirs)
         hit = be.to_numpy(hit)
@@ -102,14 +101,14 @@ class TestSagAndNormal:
         assert np.abs(be.to_numpy(ta)[ha] - be.to_numpy(tc)[hc]).max() < 1e-9
 
     def test_rays_outside_the_aperture_miss(self):
-        geom = EvenAsphereGeometry(aperture_radius=3.0, **_A18)
+        geom = EvenAsphereGeometry(aperture_radius=3.0, **_ASPHERE)
         origins = np.array([[0.0, 0.0, 5.0], [4.0, 0.0, 5.0], [0.0, 2.9, 5.0]])
         dirs = np.tile([0.0, 0.0, -1.0], (3, 1))
         _, _, hit, _ = geom.ray_intersect(origins, dirs)
         assert be.to_numpy(hit).tolist() == [True, False, True]
 
     def test_bounding_box_contains_the_sampled_sag(self):
-        geom = EvenAsphereGeometry(aperture_radius=9.0, **_A18)
+        geom = EvenAsphereGeometry(aperture_radius=9.0, **_ASPHERE)
         box = geom.bounding_box((np.zeros(3), np.eye(3)))
         assert box.xmin == pytest.approx(-9.0) and box.xmax == pytest.approx(9.0)
         assert box.zmin <= geom.sag_float(9.0) <= box.zmax
@@ -128,10 +127,10 @@ class TestIntegration:
                 aperture_radius=6.0,
             ),
         )
-        # Convex asphere facing the beam: the front face of an A18 used
+        # Convex asphere facing the beam: the front face of an objective used
         # plane-side-to-focus, so the beam is focused behind the lens.
         scene.add_lens(
-            "A18",
+            "objective",
             CoordinateSystem(),
             LensConfig(
                 r1=11.65,
@@ -154,13 +153,12 @@ class TestIntegration:
 
     def test_lens_config_coefficients_build_an_asphere_face(self):
         scene = self._plano_asphere_scene([0.0, -1e-5])
-        front = scene.component_registry.get("A18").surfaces[0]
+        front = scene.component_registry.get("objective").surfaces[0]
         assert isinstance(front.geometry, EvenAsphereGeometry)
         assert be.to_numpy(front.geometry.coefficients[1]) == pytest.approx(-1e-5)
         conic_only = self._plano_asphere_scene([])
-        assert type(conic_only.component_registry.get("A18").surfaces[0].geometry) is (
-            ConicGeometry
-        )
+        conic_face = conic_only.component_registry.get("objective").surfaces[0]
+        assert type(conic_face.geometry) is ConicGeometry
 
     def test_coefficients_change_the_trace_and_round_trip(self):
         aspheric = self._plano_asphere_scene([0.0, -2e-4])
@@ -170,7 +168,7 @@ class TestIntegration:
         assert flux_aspheric.num_rays_hit != flux_conic.num_rays_hit
 
         restored = scene_from_dict(scene_to_dict(aspheric))
-        cfg = restored.component_registry.get("A18")._config
+        cfg = restored.component_registry.get("objective")._config
         assert list(cfg.coefficients1) == pytest.approx([0.0, -2e-4])
         again = restored.trace(num_rays=2000, seed=3).detectors["focus"]
         assert again.total_flux_float == pytest.approx(flux_aspheric.total_flux_float)
@@ -179,8 +177,8 @@ class TestIntegration:
         scene = self._plano_asphere_scene([0.0, -1e-5])
         ir = lower(scene)
         kinds = {p.name: p.kind for p in ir.primitives}
-        assert kinds["A18.front"] == "even_asphere"
-        params = next(p for p in ir.primitives if p.name == "A18.front").params
+        assert kinds["objective.front"] == "even_asphere"
+        params = next(p for p in ir.primitives if p.name == "objective.front").params
         assert [float(c) for c in params["coefficients"]] == pytest.approx([0.0, -1e-5])
 
     def test_torch_backend_agrees_with_numpy(self):

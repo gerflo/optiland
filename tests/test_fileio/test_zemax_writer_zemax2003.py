@@ -129,11 +129,11 @@ class TestZemax2003Header:
         ]
 
     def test_windows_1252_with_crlf_line_ends(self, tmp_path):
-        path = _export(_singlet(name="Mausauge Beleuchtung ü"), tmp_path)
+        path = _export(_singlet(name="Prüfaufbau Beleuchtung ü"), tmp_path)
 
         data = path.read_bytes()
         assert data.count(b"\n") == data.count(b"\r\n")
-        assert b"NAME Mausauge Beleuchtung \xfc" in data
+        assert b"NAME Pr\xfcfaufbau Beleuchtung \xfc" in data
 
 
 class TestZemax2003Surfaces:

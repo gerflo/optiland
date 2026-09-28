@@ -1,9 +1,9 @@
 """The fold builds its illumination emitter from the path's LED ring (O14).
 
 Before, the emitter was the span of the illumination field radii. When the
-fields are quadrature nodes inside the luminous ring (RCR07: 36 nodes at
-r 2.811..3.734 in a ring r 2.65..3.85), the emitter came out too narrow
-without a word, and its inner edge sets the dark core at the cornea. An
+fields are quadrature nodes inside the luminous ring, the emitter came out
+too narrow without a word, and in a ring illuminator its inner edge sets
+the dark core of the beam. An
 illumination optic that declares its LED ring
 (:attr:`~optiland.optic.Optic.light_source`) now gets exactly that emitter:
 its chips (or annulus), radiation pattern, spectrum and flux.
@@ -54,7 +54,7 @@ def _ring(**kwargs) -> LEDRing:
 
 def _fold_with(ring: LEDRing | None, **kwargs):
     illumination = illumination_optic()
-    # Declared, not applied: the fields stay inside the ring, as in RCR07.
+    # Declared, not applied: the fields stay inside the ring.
     illumination.light_source = ring
     return fold_paths(
         imaging_optic(), illumination, _FOLD_IMAGING, _FOLD_ILLUMINATION, **kwargs

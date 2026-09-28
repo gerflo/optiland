@@ -135,11 +135,11 @@ class TestPathsEditing:
         system, _ = _system()
         rim_before = system.last_report.rim_radius
 
-        # A Pilzblende between the stop (1) and the relay lens (2): the mirror
-        # moves from index 4 to 5.
+        # A central obscuration between the stop (1) and the relay lens (2):
+        # the mirror moves from index 4 to 5.
         optic = system.path("Ring illumination").build_optic()
         optic.add_surface(
-            index=2, thickness=5.0, comment="Pilzblende", aperture=RadialAperture(3.0)
+            index=2, thickness=5.0, comment="Obscuration", aperture=RadialAperture(3.0)
         )
         system.set_path_optic("Ring illumination", optic)
         assert system.fold.fold_illumination == _FOLD_ILLUMINATION + 1

@@ -1,8 +1,8 @@
 """JSON round trip of constant-index media, annular mirrors and aspheres.
 
-The folded fundus-camera scene needs all three: the eye model is made of
-``IdealMaterial`` media, the perforated fold mirror is an annulus with an
-elliptical hole, and the ophthalmoscope lens is an even asphere. Before
+A folded ophthalmic scene needs all three: an eye model is made of
+``IdealMaterial`` media, a perforated fold mirror is an annulus with an
+elliptical hole, and an objective lens may be an even asphere. Before
 this, ``NSQScene.to_json`` rejected the media and the geometries.
 
 Kramer Harrison, 2026

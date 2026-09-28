@@ -8,10 +8,10 @@ Markdown report and PNG plots.
 
 Examples::
 
-    # Fold the RCR-03 paths at their Lochspiegel (surface 7 in the
-    # observation file, surface 12 in the illumination file):
+    # Fold two paths at their perforated mirror (surface 7 in the
+    # imaging file, surface 12 in the illumination file):
     python tools/merge_optic_paths.py \\
-        --imaging "RCR-03 Beobachtung.json" --illumination "RCR-03 Beleuchtung.json" \\
+        --imaging "imaging.json" --illumination "illumination.json" \\
         --fold-imaging 7 --fold-illumination 12 --out merged.olsys
 
     # ... and trace 200 000 rays per source, writing a report and plots:

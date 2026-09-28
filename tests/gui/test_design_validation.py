@@ -113,7 +113,7 @@ class TestValidateDesign:
             _surface(20.0, 4.0, radius=60.0, material=_glass(), aperture=12.7,
                      group_id="doublet", comment="S1"),
             _surface(24.0, 22.9, material=_glass(), aperture=1.75,
-                     comment="Lochspiegel"),
+                     comment="Fold mirror"),
             _surface(46.9, 2.5, radius=-45.0, material=_glass("SF5"),
                      aperture=12.7, group_id="doublet", comment="S2"),
             _surface(49.4, 0.0, comment="Image"),

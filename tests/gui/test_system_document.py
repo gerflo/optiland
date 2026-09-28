@@ -133,8 +133,8 @@ def test_default_path_name():
     assert default_path_name("New Untitled System", None) == "Path 1"
     assert default_path_name("Default System", None) == "Path 1"
     assert default_path_name("", None) == "Path 1"
-    source = "C:/a/RCR-03 Beobachtung.json"
-    assert default_path_name("x", source) == "RCR-03 Beobachtung"
+    source = "C:/a/Kamera Beobachtung.json"
+    assert default_path_name("x", source) == "Kamera Beobachtung"
 
 
 class TestStartup:

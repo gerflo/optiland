@@ -35,8 +35,8 @@ nachgesehen, **gelesen** = nur aus einem Bericht, vor dem Fix reproduzieren.
 ### O22 – Frisches Dokument gilt nach dem JSON-Export als geändert
 - **Gefunden:** 2026-09-28 (Tests zu O19; Nutzer sah den Speichern-Dialog
   in den Testläufen) · **Status:** ausgeführt (nur im Test, mit frischem
-  `Untitled.olsys`; mit der geöffneten Datei RCR-27 Optikrechnung.olsys
-  tritt es nicht auf)
+  `Untitled.olsys`; mit einer geöffneten, gespeicherten Datei tritt es
+  nicht auf)
 - **Ort:** `optiland_gui/services/file_service.py::FileService.save`
   (`aboutToSave`), `optiland_gui/system_properties_panel.py::_apply_changes`,
   `optiland_gui/nsq_panel.py::_rebuild_from_active_path`,

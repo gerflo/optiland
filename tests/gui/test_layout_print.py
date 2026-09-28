@@ -23,13 +23,13 @@ from optiland_gui.layout_print import (
 from optiland_gui.viewer_panel import HIGHLIGHT_MARKER_LABEL, MatplotlibViewer
 from tests.gui.test_layout_selection_highlight import _ConnectorStub, _make_viewer
 
-GROUP = "LA1951-A"
+GROUP = "LENS-01"
 
 
 def _grouped_optic() -> Optic:
-    """Retina, a grouped catalog lens, a field stop, an ungrouped lens, a sensor."""
+    """Target, a grouped catalog lens, a field stop, an ungrouped lens, a sensor."""
     optic = Optic()
-    optic.surfaces.add(index=0, radius=be.inf, thickness=20.0, comment="Retina")
+    optic.surfaces.add(index=0, radius=be.inf, thickness=20.0, comment="Target")
     optic.surfaces.add(
         index=1,
         radius=50.0,
@@ -63,7 +63,7 @@ def _grouped_optic() -> Optic:
 
 
 EXPECTED_LEGEND = [
-    (1, "Retina (S0)"),
+    (1, "Target (S0)"),
     (2, f"{GROUP} (S1{ROW_SPAN_DASH}S2)"),
     (3, "Field stop (S3)"),
     (4, f"Lens (S4{ROW_SPAN_DASH}S5)"),
@@ -233,7 +233,7 @@ class TestElementNumbers:
         page = viewer._render_layout_page()
 
         assert [e.label for e in page.legend] == [
-            "Retina (S0)",
+            "Target (S0)",
             f"{GROUP} (S1{ROW_SPAN_DASH}S2)",
             f"Lens (S4{ROW_SPAN_DASH}S5)",
             "Sensor (S6)",
@@ -268,7 +268,7 @@ class TestElements:
         assert elements[1].surfaces == [surfaces[1], surfaces[2]]
         assert elements[3].surfaces == [surfaces[4], surfaces[5]]
         assert [element_label(e, optic) for e in elements] == [
-            "Retina",
+            "Target",
             GROUP,
             "Field stop",
             "Lens",

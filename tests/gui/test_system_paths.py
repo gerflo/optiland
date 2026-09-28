@@ -149,7 +149,7 @@ class TestService:
         changed = []
         service.sceneChanged.connect(lambda: changed.append(True))
 
-        # A Pilzblende between the stop (1) and the relay lens (2).
+        # A central obscuration between the stop (1) and the relay lens (2).
         connector.insert_surface_before(2, None, 5.0)
         panel.flush_pending_rebuild()
 

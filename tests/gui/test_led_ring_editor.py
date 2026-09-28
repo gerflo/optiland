@@ -240,27 +240,27 @@ class TestEditor:
 
     def test_digitized_curves_read_back_as_applied(self, connector, library):
         """A ring with digitized curves (many decimals) showed as not applied:
-        the tables rounded the values to six digits (RCR-27, 2026-09-28)."""
+        the tables rounded the values to six digits."""
         angles = np.linspace(0.0, 90.0, 91)
         pattern = RadiationPattern(
             "table",
             angles_deg=angles,
-            intensities=np.cos(np.radians(angles)) ** 0.9337 + 1e-7 * angles,
+            intensities=np.cos(np.radians(angles)) ** 0.8713 + 1e-7 * angles,
         )
-        waves = np.arange(0.5121, 0.5599, 0.0005)
+        waves = np.arange(0.6013, 0.6491, 0.0005)
         spectrum = LEDSpectrum(
             "table",
             wavelengths_um=waves,
-            powers=np.exp(-0.5 * ((waves - 0.5145) / 0.0071) ** 2) + 1e-6,
+            powers=np.exp(-0.5 * ((waves - 0.6237) / 0.0083) ** 2) + 1e-6,
         )
         ring = _ring(
             led=LEDType(
                 name="Digitized",
                 chip_width=1.0,
-                chip_height=1.16,
+                chip_height=1.23,
                 radiation=pattern,
                 spectrum=spectrum,
-                flux=0.0674117565,
+                flux=0.0512348761,
             )
         )
         connector.set_light_source(ring)

@@ -277,8 +277,8 @@ class TestMediumStackPushPop:
 class TestDeepNestingTrace:
     """O18: a trace through more media than the stack holds completes.
 
-    Found with the RCR-27 fundus camera (2026-09-28): rays reflected
-    between the faces of the mouse eye lens re-enter the same media until
+    Found with a folded scene that ends in an eye model: rays reflected
+    between the faces of the eye lens re-enter the same media until
     the diagnostic medium stack was full, and the whole 200 000-ray trace
     died with MediumStackOverflowError. The stack never feeds the physics,
     so an overflow is a diagnostic count, not an abort.

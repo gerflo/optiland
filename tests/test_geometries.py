@@ -447,8 +447,8 @@ class TestEvenAsphere:
                 -1.1277944e-20,
             ],
         )
-        # A dead ray of the user's RCR-27 illumination 150 mm before the
-        # A18 asphere, 17 deg off-axis, and a regular ray at 3 mm height.
+        # A dead ray of a folded illumination path 150 mm before the
+        # asphere, 17 deg off-axis, and a regular ray at 3 mm height.
         rays = RealRays(
             x=[-6.060249612342408, 0.0],
             y=[-5.210996708529664, 3.0],
@@ -489,8 +489,8 @@ class TestEvenAsphere:
                 -1.1277944e-20,
             ],
         )
-        # A dead ray of the user's RCR-27 illumination 150 mm before the
-        # A18 asphere, 71 mm off-axis and 2 deg towards the axis, and a
+        # A dead ray of a folded illumination path 150 mm before the
+        # asphere, 71 mm off-axis and 2 deg towards the axis, and a
         # regular ray at 3 mm height.
         h, angle, c45 = 71.0, np.deg2rad(2.0), np.cos(np.pi / 4)
         rays = RealRays(

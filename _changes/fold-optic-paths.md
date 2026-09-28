@@ -24,7 +24,7 @@ Branch: `feat/fold-optic-paths` (stacked on `feat/beam-splitter-paths`)
 
 ## What it does for the user
 
-- a fundus camera (observation through the Lochspiegel hole, ring illumination reflected by the mirror) becomes one scene: arm powers per source, spot positions on the chip, illumination footprint on the retina, stray light between the arms
+- a fundus camera (observation through the hole of the fold mirror, ring illumination reflected by the mirror) becomes one scene: arm powers per source, spot positions on the chip, illumination footprint on the retina, stray light between the arms
 - drift between the two design files (a different working distance, a different mirror distance) is listed instead of silently absorbed
 - the merged system opens in the GUI's System view; each path can be activated in the Lens Data Editor, edited and folded again
 

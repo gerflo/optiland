@@ -74,14 +74,14 @@ LEGEND = tuple(
     LegendEntry(number, label)
     for number, label in enumerate(
         [
-            "Inner retinal surface, vessel-focus preset; R1.643 (S0)",
-            "Mouse equivalent eye 550 nm (literature) (S1⁠–⁠S4)",
-            "A18-15HPX-U-S (S5⁠–⁠S6)",
-            "Fold mirror projected camera hole D2.320; 45-degree physical "
-            "elliptical hole, outer diameter 40 mm (S7)",
-            "G322323000 (S8⁠–⁠S10)",
-            "312319000 (S11⁠–⁠S12)",
-            "Image IMX548 (6.708 x 5.612 mm) (S13)",
+            "Curved object surface, focus preset for the test; R2.500 (S0)",
+            "Equivalent model lens 550 nm (literature) (S1⁠–⁠S4)",
+            "ASPHERE-18-TEST (S5⁠–⁠S6)",
+            "Fold mirror projected camera hole D2.000; 45-degree physical "
+            "elliptical hole, outer diameter 30 mm (S7)",
+            "ACHROMAT-01 (S8⁠–⁠S10)",
+            "PCX-LENS-02 (S11⁠–⁠S12)",
+            "Image sensor (6.000 x 5.000 mm) (S13)",
         ],
         start=1,
     )

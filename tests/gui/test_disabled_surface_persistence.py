@@ -113,16 +113,16 @@ def test_pending_metadata_is_committed_on_save(qapp, monkeypatch, tmp_path) -> N
     connector = OptilandConnector()
     editor = MetadataEditor(connector)
 
-    editor.txtName.setText("Variante ohne Lochspiegelblende")
-    editor.txtDescription.setPlainText("Lochspiegel deaktiviert.")
+    editor.txtName.setText("Variante ohne Blende")
+    editor.txtDescription.setPlainText("Blende deaktiviert.")
     # No btnApply click here — saving alone must commit the pending edits.
 
     filepath = str(tmp_path / "metadata.json")
     connector.save_optic_to_file(filepath)
 
     payload = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
-    assert payload["name"] == "Variante ohne Lochspiegelblende"
-    assert payload["description"] == "Lochspiegel deaktiviert."
+    assert payload["name"] == "Variante ohne Blende"
+    assert payload["description"] == "Blende deaktiviert."
 
 
 def test_set_metadata_is_noop_for_unchanged_values(qapp, monkeypatch) -> None:
