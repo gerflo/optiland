@@ -15,6 +15,7 @@ their central wavelength, without a flux the trace is normalised.
 from __future__ import annotations
 
 import logging
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -129,6 +130,33 @@ def _select(combo: QComboBox, key: str) -> None:
         combo.setCurrentIndex(index)
 
 
+def _values_match(a: object, b: object) -> bool:
+    """Whether two serialized values agree, floats to within rounding.
+
+    The page shows wavelengths in nm and stores them in um, so a value can
+    come back a rounding step away from the applied one.
+    """
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_values_match(a[k], b[k]) for k in a)
+    if isinstance(a, list | tuple) and isinstance(b, list | tuple):
+        return len(a) == len(b) and all(
+            _values_match(x, y) for x, y in zip(a, b, strict=True)
+        )
+    if isinstance(a, float) or isinstance(b, float):
+        try:
+            return math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-12)
+        except (TypeError, ValueError):
+            return False
+    return a == b
+
+
+def _rings_match(a: LEDRing | None, b: LEDRing | None) -> bool:
+    """Whether two rings (or both ``None``) describe the same light source."""
+    if a is None or b is None:
+        return a is b
+    return _values_match(a.to_dict(), b.to_dict())
+
+
 class _CurveTable(QWidget):
     """Two-column table of a digitized curve with row and import buttons."""
 
@@ -156,11 +184,16 @@ class _CurveTable(QWidget):
         self.btnRemove.clicked.connect(self._remove_row)
 
     def set_values(self, xs: list[float], ys: list[float]) -> None:
-        """Fill the table with the pairs ``(xs[i], ys[i])``."""
+        """Fill the table with the pairs ``(xs[i], ys[i])``.
+
+        The cells keep the full precision of the values: a digitized curve
+        read back from the table must equal the applied one, or the page
+        would report an applied ring as not applied.
+        """
         self.table.setRowCount(len(xs))
         for row, (x, y) in enumerate(zip(xs, ys, strict=True)):
-            self.table.setItem(row, 0, QTableWidgetItem(f"{x:g}"))
-            self.table.setItem(row, 1, QTableWidgetItem(f"{y:g}"))
+            self.table.setItem(row, 0, QTableWidgetItem(repr(float(x))))
+            self.table.setItem(row, 1, QTableWidgetItem(repr(float(y))))
 
     def values(self) -> tuple[list[float], list[float]]:
         """The pairs of the filled rows; empty rows are skipped.
@@ -212,6 +245,9 @@ class LEDRingEditor(PropertyEditorBase):
         library: LEDLibrary | None = None,
     ) -> None:
         self._library = library or LEDLibrary(default_library_root())
+        # The applied ring as the widgets reproduce it (their precision), so
+        # "not applied yet" means edited since loading, not display rounding.
+        self._shown: LEDRing | None = None
         super().__init__(connector, parent)
         self.load_data()
 
@@ -541,6 +577,7 @@ class LEDRingEditor(PropertyEditorBase):
             self.chkEnabled.setChecked(ring is not None)
             if ring is not None:
                 self.show_ring(ring)
+            self._shown = self.build_ring() if ring is not None else None
         finally:
             self.is_loading = False
         self._refresh()
@@ -683,8 +720,7 @@ class LEDRingEditor(PropertyEditorBase):
         except ValueError as exc:
             self._show_status(str(exc), error=True)
             return
-        applied = self.connector.get_light_source()
-        pending = "" if ring == applied else " (not applied yet)"
+        pending = "" if _rings_match(ring, self._shown) else " (not applied yet)"
         if ring is None:
             text = "No LED ring: the path's object is an ordinary object."
             self._show_status(text + pending)

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 from PySide6.QtCore import QCoreApplication
 from PySide6.QtWidgets import QMessageBox
@@ -236,6 +237,41 @@ class TestEditor:
         page = LEDRingEditor(connector, library=library)
         assert page.chkEnabled.isChecked()
         assert page.build_ring() == ring
+
+    def test_digitized_curves_read_back_as_applied(self, connector, library):
+        """A ring with digitized curves (many decimals) showed as not applied:
+        the tables rounded the values to six digits (RCR-27, 2026-09-28)."""
+        angles = np.linspace(0.0, 90.0, 91)
+        pattern = RadiationPattern(
+            "table",
+            angles_deg=angles,
+            intensities=np.cos(np.radians(angles)) ** 0.9337 + 1e-7 * angles,
+        )
+        waves = np.arange(0.5121, 0.5599, 0.0005)
+        spectrum = LEDSpectrum(
+            "table",
+            wavelengths_um=waves,
+            powers=np.exp(-0.5 * ((waves - 0.5145) / 0.0071) ** 2) + 1e-6,
+        )
+        ring = _ring(
+            led=LEDType(
+                name="Digitized",
+                chip_width=1.0,
+                chip_height=1.16,
+                radiation=pattern,
+                spectrum=spectrum,
+                flux=0.0674117565,
+            )
+        )
+        connector.set_light_source(ring)
+        page = LEDRingEditor(connector, library=library)
+        rebuilt = page.build_ring()
+        assert np.allclose(rebuilt.led.spectrum.wavelengths_um, waves, rtol=1e-12)
+        assert np.allclose(rebuilt.led.spectrum.powers, spectrum.powers, rtol=1e-12)
+        assert np.allclose(
+            rebuilt.led.radiation.intensities, pattern.intensities, rtol=1e-12
+        )
+        assert "not applied" not in page.lblStatus.text()
 
     def test_invalid_ring_is_reported_not_applied(self, connector, editor):
         editor.chkEnabled.setChecked(True)
