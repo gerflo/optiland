@@ -60,6 +60,11 @@ def _make_window_stub():
             self.restored_states.append(state)
             return True
 
+        def _restore_dock_state(self, state) -> bool:  # noqa: ANN001
+            # The real one also re-applies the window chrome (O21); that is
+            # covered with the real window in test_window_start.py.
+            return self.restoreState(state)
+
         def _normalize_all_docks(self) -> None:
             return None
 
@@ -82,7 +87,8 @@ def test_save_layout_to_slot_persists_name_and_updates_actions() -> None:
 
     assert window.settings.value("Layouts/Config2Geometry") == b"geometry"
     assert window.settings.value("Layouts/Config2State") == b"state"
-    assert window.settings.value("Layouts/Config2Name", type=str) == "Bench Setup Alpha Be"
+    saved_name = window.settings.value("Layouts/Config2Name", type=str)
+    assert saved_name == "Bench Setup Alpha Be"
     assert window.settings.value("Layouts/NextSaveSlot") == 2
     assert window.next_save_slot_index == 2
     window.toast_manager.notify.assert_called_with(
@@ -94,7 +100,7 @@ def test_save_layout_to_slot_persists_name_and_updates_actions() -> None:
     load_action.setText.assert_called_with("2: Bench Setup Alpha Be")
 
 
-def test_update_layout_slot_actions_uses_saved_names_and_fallback_slot_numbers() -> None:
+def test_update_layout_slot_actions_uses_saved_names_and_fallback_numbers() -> None:
     window = _make_window_stub()
     window.settings.setValue("Layouts/Config1Geometry", b"geometry")
     window.settings.setValue("Layouts/Config1Name", "Optik Lab")

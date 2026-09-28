@@ -35,12 +35,20 @@ You can launch the Optiland GUI in a couple of ways:
 
     This command will start the main application window. If you have installed Optiland correctly, this should work seamlessly.
 
+    A file named on the command line is opened right away, the way *File > Open* would open it (a ``.olsys`` system, or a ``.json`` or ``.zmx`` design). This is also what happens when you open a design from the Windows Explorer with *Open with* and pick Optiland:
+
+    .. code-block:: bash
+
+       optiland my_design.olsys
+
 2.  **From Python (useful for development or troubleshooting):**
     Open your terminal or console and type:
 
     .. code-block:: bash
 
        python -m optiland_gui.run_gui
+
+The window starts in full screen, with the main menu in its own title bar. The full-screen button in that title bar (or *View > Toggle Full Screen*) leaves full screen and brings back the normal window frame with the menu bar under it, as the last session left it: maximized or with its last size. To start windowed instead, set ``Window/StartFullScreen`` to ``false`` in the application settings (on Windows: the registry key ``HKEY_CURRENT_USER\Software\OptilandProject\OptilandGUI``).
 
 Main Interface Components
 -------------------------

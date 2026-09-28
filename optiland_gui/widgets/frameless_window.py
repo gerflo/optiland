@@ -53,6 +53,7 @@ class FramelessWindow(QMainWindow):
         was_visible = self.isVisible()
         was_maximized = self.isMaximized()
         was_fullscreen = self.isFullScreen()
+        window_state = self.windowState()
         geometry = self.geometry()
 
         self._frameless_enabled = enabled
@@ -63,6 +64,13 @@ class FramelessWindow(QMainWindow):
             flags &= ~Qt.FramelessWindowHint
         flags |= Qt.Window
         self.setWindowFlags(flags)
+
+        if not was_visible:
+            # A hidden window keeps its geometry and state for the show()
+            # that follows; showing it here would flash it up.
+            self.setGeometry(geometry)
+            self.setWindowState(window_state)
+            return
 
         if was_fullscreen:
             self.showFullScreen()
@@ -88,11 +96,18 @@ class FramelessWindow(QMainWindow):
             if event.type() == QEvent.MouseMove:
                 local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
                 self.updateCursorShape(local_pos)
-                if self.is_resizing and not self.isMaximized() and not self.isFullScreen():
+                if (
+                    self.is_resizing
+                    and not self.isMaximized()
+                    and not self.isFullScreen()
+                ):
                     self._perform_resize(event.globalPosition().toPoint())
                     return True
 
-            if event.type() == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+            if (
+                event.type() == QEvent.MouseButtonPress
+                and event.button() == Qt.LeftButton
+            ):
                 local_pos = self.mapFromGlobal(event.globalPosition().toPoint())
                 resize_area = self._get_resize_area(local_pos)
                 if resize_area and not self.isMaximized() and not self.isFullScreen():
@@ -102,12 +117,15 @@ class FramelessWindow(QMainWindow):
                     self.start_pos = event.globalPosition().toPoint()
                     return True
 
-            if event.type() == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
-                if self.is_resizing:
-                    self.is_resizing = False
-                    self.resize_area = None
-                    self.setCursor(Qt.ArrowCursor)
-                    return True
+            if (
+                event.type() == QEvent.MouseButtonRelease
+                and event.button() == Qt.LeftButton
+                and self.is_resizing
+            ):
+                self.is_resizing = False
+                self.resize_area = None
+                self.setCursor(Qt.ArrowCursor)
+                return True
         except Exception:
             return False
 
@@ -269,7 +287,11 @@ class FramelessWindow(QMainWindow):
 
     def _perform_resize(self, global_pos: QPoint) -> None:
         """Resize the frameless window using the active edge grip."""
-        if not self.resize_area or self.start_geometry is None or self.start_pos is None:
+        if (
+            not self.resize_area
+            or self.start_geometry is None
+            or self.start_pos is None
+        ):
             return
 
         diff = global_pos - self.start_pos

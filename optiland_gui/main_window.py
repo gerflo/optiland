@@ -306,6 +306,10 @@ class MainWindow(FramelessWindow):
         self.title_bar_as_toolbar.addWidget(self.custom_title_bar_widget)
         self.addToolBar(Qt.TopToolBarArea, self.title_bar_as_toolbar)
         self.title_bar_as_toolbar.hide()
+        # The chrome of fullscreen, not a toolbar the user picks: off the
+        # toolbar context menu. A restored dock layout must not bring it
+        # back either, see _restore_dock_state.
+        self.title_bar_as_toolbar.toggleViewAction().setVisible(False)
 
         # Quick Actions Toolbar
         self.quick_actions_toolbar = QToolBar("QuickActionsToolbar")
@@ -602,6 +606,19 @@ class MainWindow(FramelessWindow):
             return
         self._open_system_from_path(filepath)
 
+    def open_file_from_command_line(self, filepath: str) -> None:
+        """Open the file the application was started with (Explorer's "Open with").
+
+        Anything File > Open accepts: a ``.olsys`` system, a ``.json`` or
+        ``.zmx`` design. A missing file is reported (the warning becomes a
+        toast) and the empty document stays.
+        """
+        filepath = os.path.abspath(filepath)
+        if not os.path.isfile(filepath):
+            logger.warning("File from the command line not found: %s", filepath)
+            return
+        self._open_system_from_path(filepath)
+
     def _open_system_from_path(self, filepath: str) -> None:
         """Open a file as the document, or into one of its optical paths.
 
@@ -734,13 +751,29 @@ class MainWindow(FramelessWindow):
         else:
             self.showMaximized()
 
+    def show_at_start(self) -> None:
+        """Show the window as the application starts: in fullscreen by default.
+
+        The setting ``Window/StartFullScreen`` (default true) turns this off;
+        the window then comes up maximized or with its last normal geometry,
+        as the last session left it. Leaving fullscreen gives that window too.
+        """
+        if self.settings.value("Window/StartFullScreen", True, type=bool):
+            self._enter_fullscreen()
+        else:
+            self.show()
+
     def _toggle_fullscreen(self) -> None:
         """Toggle fullscreen while preserving the last normal window placement."""
         if self.isFullScreen():
             self._exit_fullscreen_to_previous_state()
-            return
+        else:
+            self._enter_fullscreen()
 
-        self._capture_normal_window_geometry()
+    def _enter_fullscreen(self) -> None:
+        """Go fullscreen with the frameless chrome, remembering what lies beneath."""
+        if self.isVisible():
+            self._capture_normal_window_geometry()
         self._was_maximized_before_fullscreen = self.isMaximized()
         self._apply_window_chrome(True)
         self.showFullScreen()
@@ -790,7 +823,12 @@ class MainWindow(FramelessWindow):
             self.restoreGeometry(self._last_normal_geometry)
 
     def _restore_window_placement(self) -> None:
-        """Restore the last normal geometry and maximized state from settings."""
+        """Restore the last normal geometry and maximized state from settings.
+
+        The window is not shown here: the state waits for the show() of
+        :meth:`show_at_start` (or a caller's), so nothing flashes up before
+        fullscreen.
+        """
         self._last_normal_geometry = self.settings.value("Window/NormalGeometry")
         if (
             isinstance(self._last_normal_geometry, QByteArray)
@@ -798,12 +836,14 @@ class MainWindow(FramelessWindow):
         ):
             self.restoreGeometry(self._last_normal_geometry)
         if self.settings.value("Window/WasMaximized", False, type=bool):
-            self.showMaximized()
+            self.setWindowState(Qt.WindowState.WindowMaximized)
 
     def _save_window_placement(self) -> None:
         """Persist the last normal geometry and whether the window was maximized."""
         if self.isFullScreen():
-            was_maximized = False
+            # Fullscreen lies over a maximized or normal window; that is
+            # what the next session gets back when it leaves fullscreen.
+            was_maximized = self._was_maximized_before_fullscreen
         else:
             self._capture_normal_window_geometry()
             was_maximized = self.isMaximized()
@@ -824,10 +864,26 @@ class MainWindow(FramelessWindow):
         state = self.settings.value("Layouts/CurrentState")
         if not isinstance(state, QByteArray) or state.isEmpty():
             return
-        if not self.restoreState(state):
+        if not self._restore_dock_state(state):
             logger.warning("Failed to restore the last session dock layout.")
             return
         self._normalize_all_docks()
+
+    def _restore_dock_state(self, state: QByteArray) -> bool:
+        """Restore a dock/toolbar state, keeping the menu bar of the current chrome.
+
+        ``restoreState`` restores toolbar visibility too. The title-bar
+        toolbar (the menu bar of fullscreen) must follow the chrome instead:
+        a layout saved in fullscreen must not put a second menu bar under the
+        native one, and one saved windowed must not take the only menu bar
+        away in fullscreen (O21).
+
+        Returns:
+            What ``restoreState`` returned.
+        """
+        restored = self.restoreState(state)
+        self._apply_window_chrome(self.isFullScreen())
+        return restored
 
     def _save_current_layout_state(self) -> None:
         """Persist the current dock layout, including docking and visibility.
@@ -1794,7 +1850,7 @@ class MainWindow(FramelessWindow):
                         "Failed to restore window geometry from slot %d.",
                         slot_number,
                     )
-                if not self.restoreState(dock_toolbar_state):
+                if not self._restore_dock_state(dock_toolbar_state):
                     logger.warning(
                         "Failed to restore dock/toolbar state from slot %d.",
                         slot_number,

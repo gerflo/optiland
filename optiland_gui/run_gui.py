@@ -47,6 +47,21 @@ def _patch_matplotlib_show_event() -> None:
         pass
 
 
+def _startup_file(argv: list[str]) -> str | None:
+    """The file named on the command line, as an absolute path, or ``None``.
+
+    Explorer's "Open with" (and a file association) start the application
+    with the file as its only argument. Options such as Qt's ``-style`` are
+    skipped; of the other arguments, the first that exists is the file, else
+    the first at all, so that a wrong path is reported rather than ignored.
+    """
+    candidates = [arg for arg in argv[1:] if not arg.startswith("-")]
+    for arg in candidates:
+        if os.path.isfile(arg):
+            return os.path.abspath(arg)
+    return os.path.abspath(candidates[0]) if candidates else None
+
+
 def main() -> None:
     """Application entry point."""
     _patch_matplotlib_show_event()
@@ -92,10 +107,15 @@ def main() -> None:
     # Initialize the main window while splash is visible.  The time taken
     # here is the actual loading time the user experiences.
     window = MainWindow()
-    window.show()
+    window.show_at_start()
 
     # Close the splash screen once the main window is ready.
     splash.finish(window)
+
+    # Explorer's "Open with" hands the file over on the command line.
+    startup_file = _startup_file(sys.argv)
+    if startup_file is not None:
+        window.open_file_from_command_line(startup_file)
 
     sys.exit(app.exec())
 
