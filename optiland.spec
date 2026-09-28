@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 import debugpy
+from matplotlib.backend_bases import FigureCanvasBase, get_registered_canvas_class
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
@@ -41,6 +42,15 @@ hiddenimports += collect_submodules("optiland")
 hiddenimports += collect_submodules("qtconsole")
 hiddenimports += collect_submodules("ipykernel")
 hiddenimports += collect_submodules("debugpy")
+# The toolbar's save dialog offers every savefig format (pdf, svg, eps, ...).
+# Matplotlib imports the canvas of a format only when a file is written, so
+# PyInstaller's backend scan misses them and saving fails in the frozen app.
+hiddenimports += sorted(
+    {
+        get_registered_canvas_class(fmt).__module__
+        for fmt in FigureCanvasBase.get_supported_filetypes()
+    }
+)
 
 analysis = Analysis(
     [str(ROOT / "tools" / "optiland_gui_entry.py")],
