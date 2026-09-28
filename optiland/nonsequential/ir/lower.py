@@ -359,6 +359,11 @@ def _lower_spectrum(spectrum: object) -> dict[str, Any]:
     }
 
 
+def _lower_radiation(radiation: object) -> dict[str, Any] | None:
+    """Lower an optional angular emission pattern to a plain dict."""
+    return None if radiation is None else radiation.to_dict()
+
+
 def _lower_source(
     idx: int, source: object, media: _MediumRegistry, *, strict: bool = True
 ) -> EmitterIR:
@@ -380,6 +385,7 @@ def _lower_source(
         CollimatedSource,  # noqa: PLC0415
     )
     from optiland.nonsequential.sources.extended import ExtendedSource  # noqa: PLC0415
+    from optiland.nonsequential.sources.led_ring import LEDRingSource  # noqa: PLC0415
     from optiland.nonsequential.sources.point import PointSource  # noqa: PLC0415
 
     common: dict[str, Any] = {
@@ -407,6 +413,19 @@ def _lower_source(
             "inner_radius": source.inner_radius,
             "half_angle_deg": source.half_angle_deg,
             "lambertian_cone": source.lambertian_cone,
+            "radiation": _lower_radiation(source.radiation),
+        }
+    elif isinstance(source, LEDRingSource):
+        kind = "led_ring"
+        params = {
+            **common,
+            "count": source.count,
+            "pitch_radius": source.pitch_radius,
+            "chip_width": source.chip_width,
+            "chip_height": source.chip_height,
+            "first_angle_deg": source.first_angle_deg,
+            "half_angle_deg": source.half_angle_deg,
+            "radiation": _lower_radiation(source.radiation),
         }
     else:
         raise TypeError(

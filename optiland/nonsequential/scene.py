@@ -449,9 +449,11 @@ def _build_source(cs: CoordinateSystem, config) -> object:
     from optiland.nonsequential.sources.configs import (  # noqa: PLC0415
         CollimatedSourceConfig,
         ExtendedSourceConfig,
+        LEDRingSourceConfig,
         PointSourceConfig,
     )
     from optiland.nonsequential.sources.extended import ExtendedSource  # noqa: PLC0415
+    from optiland.nonsequential.sources.led_ring import LEDRingSource  # noqa: PLC0415
     from optiland.nonsequential.sources.point import PointSource  # noqa: PLC0415
 
     if isinstance(config, PointSourceConfig):
@@ -483,11 +485,27 @@ def _build_source(cs: CoordinateSystem, config) -> object:
             inner_radius=config.inner_radius,
             half_angle_deg=config.half_angle_deg,
             lambertian_cone=config.lambertian_cone,
+            radiation=config.radiation,
+            medium=getattr(config, "medium", None),
+        )
+    if isinstance(config, LEDRingSourceConfig):
+        return LEDRingSource(
+            cs=cs,
+            spectrum=config.spectrum,
+            total_flux=_resolve_total_flux(config),
+            count=config.count,
+            pitch_radius=config.pitch_radius,
+            chip_width=config.chip_width,
+            chip_height=config.chip_height,
+            first_angle_deg=config.first_angle_deg,
+            half_angle_deg=config.half_angle_deg,
+            radiation=config.radiation,
             medium=getattr(config, "medium", None),
         )
     raise TypeError(
         f"Unrecognised source config type: {type(config).__name__}. "
-        "Expected PointSourceConfig, CollimatedSourceConfig, or ExtendedSourceConfig."
+        "Expected PointSourceConfig, CollimatedSourceConfig, ExtendedSourceConfig "
+        "or LEDRingSourceConfig."
     )
 
 

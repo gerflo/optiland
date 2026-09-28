@@ -27,7 +27,7 @@ PrimitiveKind = Literal[
 # field would become redundant -- it has not been folded in yet.
 ComponentKind = Literal["refractive", "reflective", "absorbing"]
 
-EmitterKind = Literal["point", "collimated", "extended"]
+EmitterKind = Literal["point", "collimated", "extended", "led_ring"]
 
 SensorKind = Literal["irradiance", "spectral", "far_field", "ray_database"]
 

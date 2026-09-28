@@ -1,6 +1,7 @@
 """Extended source for Non-Sequential Raytracing.
 
-Uniform area source (rectangular or circular) with Lambertian or cone emission.
+Uniform area source (rectangular or circular) with Lambertian, cone or
+tabulated (:class:`~optiland.illumination.RadiationPattern`) emission.
 
 Kramer Harrison, 2026
 """
@@ -19,7 +20,126 @@ from optiland.nonsequential.sources.base import BaseNSQSource, Spectrum
 
 if TYPE_CHECKING:
     from optiland.coordinate_system import CoordinateSystem
+    from optiland.illumination import RadiationPattern
     from optiland.nonsequential.rng import NSQRng
+
+
+def sample_emission_cos_theta(
+    u: np.ndarray,
+    half_angle_deg: float,
+    lambertian_cone: bool,
+    radiation: RadiationPattern | None = None,
+) -> np.ndarray:
+    """Polar-angle cosines of an area emitter about its normal.
+
+    Args:
+        u: Uniform numbers in [0, 1).
+        half_angle_deg: Cone half angle [deg]; 90 or more is the whole
+            hemisphere.
+        lambertian_cone: Below 90 deg, cosine-weighted inside the cone
+            instead of uniform in solid angle.
+        radiation: Angular pattern; replaces the Lambertian or uniform
+            distribution, the cone still limits it.
+
+    Returns:
+        ``cos(theta)`` per sample.
+    """
+    if radiation is not None:
+        return radiation.sample_cos_theta(u, half_angle_deg)
+    cos_max = np.cos(np.radians(half_angle_deg))
+    if half_angle_deg >= 90.0:
+        # Cosine-weighted hemisphere (Lambertian)
+        return np.sqrt(u)
+    if lambertian_cone:
+        # Cosine-weighted within the cone: sin^2(theta) uniform in
+        # [0, sin^2(theta_max)] (Malley's method restricted to a cap).
+        sin2_max = 1.0 - cos_max * cos_max
+        return np.sqrt(1.0 - u * sin2_max)
+    return 1.0 - u * (1.0 - cos_max)
+
+
+def emission_directions(cos_theta: np.ndarray, u_phi: np.ndarray) -> np.ndarray:
+    """Local unit directions from polar cosines and uniform azimuths.
+
+    Args:
+        cos_theta: Polar-angle cosines about local +z.
+        u_phi: Uniform numbers in [0, 1) for the azimuth.
+
+    Returns:
+        Directions, shape (N, 3).
+    """
+    sin_theta = np.sqrt(np.maximum(1.0 - cos_theta**2, 0.0))
+    phi_dir = 2.0 * np.pi * u_phi
+    return np.stack(
+        [sin_theta * np.cos(phi_dir), sin_theta * np.sin(phi_dir), cos_theta], axis=1
+    )
+
+
+def emitted_bundle(
+    source: BaseNSQSource,
+    ray_id: np.ndarray,
+    rng: NSQRng,
+    pos_local: np.ndarray,
+    dirs_local: np.ndarray,
+) -> NSQRayBundle:
+    """Ray bundle of an area emitter from local positions and directions.
+
+    Transforms into the global frame, samples wavelengths from the source
+    spectrum, splits ``total_flux`` evenly and starts the rays in the
+    source medium.
+
+    Args:
+        source: The emitting source (``cs``, ``spectrum``, ``total_flux``,
+            optional ``medium``).
+        ray_id: Ray identifiers, shape (N,).
+        rng: Keyed PCG32 RNG.
+        pos_local: Positions in the source frame, shape (N, 3).
+        dirs_local: Directions in the source frame, shape (N, 3).
+
+    Returns:
+        The bundle, all rays alive.
+    """
+    num_rays = len(ray_id)
+    bounce0 = np.zeros(num_rays, dtype=np.int32)
+    translation, rot = _get_transform(source.cs)
+
+    # Transform to global frame
+    # pos_global = pos_local @ R^T + t
+    pos_global = pos_local @ rot.T + translation
+    dirs_global = dirs_local @ rot.T
+
+    # Sample wavelengths [µm]
+    wavelengths = source.spectrum.sample(ray_id, bounce0, rng)
+    flux_per_ray = source.total_flux / num_rays
+
+    # Initialize n_current/k_current from medium if provided
+    medium = getattr(source, "medium", None)
+    if medium is not None:
+        n_init = np.asarray(medium.n(wavelengths), dtype=float)
+        if np.ndim(n_init) == 0:
+            n_init = np.full(num_rays, float(n_init))
+        k_init = np.asarray(medium.k(wavelengths), dtype=float)
+        if np.ndim(k_init) == 0:
+            k_init = np.full(num_rays, float(k_init))
+    else:
+        n_init = np.ones(num_rays)
+        k_init = np.zeros(num_rays)
+
+    return NSQRayBundle(
+        x=pos_global[:, 0].copy(),
+        y=pos_global[:, 1].copy(),
+        z=pos_global[:, 2].copy(),
+        L=dirs_global[:, 0].copy(),
+        M=dirs_global[:, 1].copy(),
+        N=dirs_global[:, 2].copy(),
+        flux=np.full(num_rays, flux_per_ray),
+        wavelength=wavelengths,
+        n_current=n_init,
+        bounce=bounce0,
+        alive=np.ones(num_rays, dtype=bool),
+        ray_id=ray_id,
+        k_current=k_init,
+    )
 
 
 class ExtendedSource(BaseNSQSource):
@@ -43,6 +163,8 @@ class ExtendedSource(BaseNSQSource):
             90 = Lambertian hemisphere.
         lambertian_cone: Cosine-weighted emission restricted to the cone
             (see :class:`~optiland.nonsequential.sources.configs.ExtendedSourceConfig`).
+        radiation: Angular emission pattern inside the cone; ``None`` for
+            the Lambertian or uniform distribution above.
         medium: Medium the source is embedded in.
     """
 
@@ -58,6 +180,7 @@ class ExtendedSource(BaseNSQSource):
         medium=None,
         inner_radius: float | None = None,
         lambertian_cone: bool = False,
+        radiation: RadiationPattern | None = None,
     ) -> None:
         """Initialize ExtendedSource.
 
@@ -74,6 +197,9 @@ class ExtendedSource(BaseNSQSource):
             inner_radius: Inner radius [mm] of an annular emitter; needs
                 ``aperture_radius``. None = full disk.
             lambertian_cone: Cosine-weighted emission within the cone.
+            radiation: Angular emission pattern within the cone; overrides
+                ``lambertian_cone``. ``total_flux`` is then the flux inside
+                the cone, as with ``lambertian_cone``.
 
         Raises:
             ValueError: If ``inner_radius`` is given without
@@ -107,6 +233,7 @@ class ExtendedSource(BaseNSQSource):
             half_angle_deg, "half_angle_deg", "ExtendedSource"
         )
         self.lambertian_cone = bool(lambertian_cone)
+        self.radiation = radiation
         self.medium = medium
 
     def generate(self, ray_id: np.ndarray, rng: NSQRng) -> NSQRayBundle:
@@ -121,7 +248,6 @@ class ExtendedSource(BaseNSQSource):
         """
         num_rays = len(ray_id)
         bounce0 = np.zeros(num_rays, dtype=np.int32)
-        translation, rot = _get_transform(self.cs)
 
         # Sample positions on source surface (local x-y plane)
         if self.aperture_radius is not None:
@@ -142,66 +268,12 @@ class ExtendedSource(BaseNSQSource):
 
         lz_pos = np.zeros(num_rays)
 
-        # Sample emission directions (Lambertian or cone)
-        cos_max = np.cos(np.radians(self.half_angle_deg))
+        # Sample emission directions (Lambertian, cone or pattern)
         u1d = rng.uniform(ray_id, bounce0, EventSlot.SOURCE_U3)
         u2d = rng.uniform(ray_id, bounce0, EventSlot.SOURCE_U4)
-
-        if self.half_angle_deg >= 90.0:
-            # Cosine-weighted hemisphere (Lambertian)
-            cos_theta = np.sqrt(u1d)
-        elif self.lambertian_cone:
-            # Cosine-weighted within the cone: sin^2(theta) uniform in
-            # [0, sin^2(theta_max)] (Malley's method restricted to a cap).
-            sin2_max = 1.0 - cos_max * cos_max
-            cos_theta = np.sqrt(1.0 - u1d * sin2_max)
-        else:
-            cos_theta = 1.0 - u1d * (1.0 - cos_max)
-
-        sin_theta = np.sqrt(np.maximum(1.0 - cos_theta**2, 0.0))
-        phi_dir = 2.0 * np.pi * u2d
-
-        dl_x = sin_theta * np.cos(phi_dir)
-        dl_y = sin_theta * np.sin(phi_dir)
-        dl_z = cos_theta
-
-        dirs_local = np.stack([dl_x, dl_y, dl_z], axis=1)
-        pos_local = np.stack([lx, ly, lz_pos], axis=1)
-
-        # Transform to global frame
-        # pos_global = pos_local @ R^T + t
-        pos_global = pos_local @ rot.T + translation
-        dirs_global = dirs_local @ rot.T
-
-        # Sample wavelengths [µm]
-        wavelengths = self.spectrum.sample(ray_id, bounce0, rng)
-        flux_per_ray = self.total_flux / num_rays
-
-        # Initialize n_current/k_current from medium if provided
-        medium = getattr(self, "medium", None)
-        if medium is not None:
-            n_init = np.asarray(medium.n(wavelengths), dtype=float)
-            if np.ndim(n_init) == 0:
-                n_init = np.full(num_rays, float(n_init))
-            k_init = np.asarray(medium.k(wavelengths), dtype=float)
-            if np.ndim(k_init) == 0:
-                k_init = np.full(num_rays, float(k_init))
-        else:
-            n_init = np.ones(num_rays)
-            k_init = np.zeros(num_rays)
-
-        return NSQRayBundle(
-            x=pos_global[:, 0].copy(),
-            y=pos_global[:, 1].copy(),
-            z=pos_global[:, 2].copy(),
-            L=dirs_global[:, 0].copy(),
-            M=dirs_global[:, 1].copy(),
-            N=dirs_global[:, 2].copy(),
-            flux=np.full(num_rays, flux_per_ray),
-            wavelength=wavelengths,
-            n_current=n_init,
-            bounce=bounce0,
-            alive=np.ones(num_rays, dtype=bool),
-            ray_id=ray_id,
-            k_current=k_init,
+        cos_theta = sample_emission_cos_theta(
+            u1d, self.half_angle_deg, self.lambertian_cone, self.radiation
         )
+        dirs_local = emission_directions(cos_theta, u2d)
+        pos_local = np.stack([lx, ly, lz_pos], axis=1)
+        return emitted_bundle(self, ray_id, rng, pos_local, dirs_local)

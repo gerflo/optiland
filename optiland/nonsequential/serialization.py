@@ -889,6 +889,9 @@ def _serialize_source(name: str, source: Any) -> dict:
     from optiland.nonsequential.sources.extended import (  # noqa: PLC0415
         ExtendedSource,
     )
+    from optiland.nonsequential.sources.led_ring import (  # noqa: PLC0415
+        LEDRingSource,
+    )
     from optiland.nonsequential.sources.point import PointSource  # noqa: PLC0415
 
     cs_d = _serialize_cs(source.cs)
@@ -941,13 +944,46 @@ def _serialize_source(name: str, source: Any) -> dict:
             ),
             "half_angle_deg": _to_float(source.half_angle_deg),
             "lambertian_cone": bool(source.lambertian_cone),
+            "radiation": _serialize_radiation(source.radiation),
+            "medium": medium,
+        }
+
+    if isinstance(source, LEDRingSource):
+        return {
+            "type": "led_ring",
+            "name": name,
+            "cs": cs_d,
+            "spectrum": spectrum_d,
+            "total_flux": total_flux,
+            "count": int(source.count),
+            "pitch_radius": _to_float(source.pitch_radius),
+            "chip_width": _to_float(source.chip_width),
+            "chip_height": _to_float(source.chip_height),
+            "first_angle_deg": _to_float(source.first_angle_deg),
+            "half_angle_deg": _to_float(source.half_angle_deg),
+            "radiation": _serialize_radiation(source.radiation),
             "medium": medium,
         }
 
     raise TypeError(
         f"Cannot serialize source '{name}' of type '{type(source).__name__}'. "
-        "Only PointSource, CollimatedSource, and ExtendedSource are supported."
+        "Only PointSource, CollimatedSource, ExtendedSource and LEDRingSource "
+        "are supported."
     )
+
+
+def _serialize_radiation(radiation) -> dict | None:
+    """Serialize an optional :class:`~optiland.illumination.RadiationPattern`."""
+    return None if radiation is None else radiation.to_dict()
+
+
+def _deserialize_radiation(d: dict | None):
+    """Inverse of :func:`_serialize_radiation`."""
+    if not d:
+        return None
+    from optiland.illumination import RadiationPattern  # noqa: PLC0415
+
+    return RadiationPattern.from_dict(d)
 
 
 def _deserialize_source(d: dict, scene: NSQScene) -> None:
@@ -963,6 +999,7 @@ def _deserialize_source(d: dict, scene: NSQScene) -> None:
     from optiland.nonsequential.sources.configs import (  # noqa: PLC0415
         CollimatedSourceConfig,
         ExtendedSourceConfig,
+        LEDRingSourceConfig,
         PointSourceConfig,
     )
 
@@ -1003,6 +1040,22 @@ def _deserialize_source(d: dict, scene: NSQScene) -> None:
             inner_radius=d.get("inner_radius"),
             half_angle_deg=d.get("half_angle_deg", 90.0),
             lambertian_cone=d.get("lambertian_cone", False),
+            radiation=_deserialize_radiation(d.get("radiation")),
+            medium=medium,
+        )
+        scene.add_source(name, cs, config)
+
+    elif stype == "led_ring":
+        config = LEDRingSourceConfig(
+            spectrum=spectrum,
+            total_flux=total_flux,
+            count=d.get("count", 1),
+            pitch_radius=d.get("pitch_radius", 0.0),
+            chip_width=d.get("chip_width", 1.0),
+            chip_height=d.get("chip_height", 1.0),
+            first_angle_deg=d.get("first_angle_deg", 0.0),
+            half_angle_deg=d.get("half_angle_deg", 90.0),
+            radiation=_deserialize_radiation(d.get("radiation")),
             medium=medium,
         )
         scene.add_source(name, cs, config)
@@ -1010,7 +1063,7 @@ def _deserialize_source(d: dict, scene: NSQScene) -> None:
     else:
         raise ValueError(
             f"Unknown source type '{stype}' in NSQ JSON. "
-            "Expected 'point', 'collimated', or 'extended'."
+            "Expected 'point', 'collimated', 'extended' or 'led_ring'."
         )
 
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from optiland.illumination import RadiationPattern
     from optiland.nonsequential.materials.nsq_material import NSQMaterial
     from optiland.nonsequential.sources.base import Spectrum
 
@@ -90,6 +91,9 @@ class ExtendedSourceConfig:
             restricted to the cone instead of a uniform one. ``total_flux``
             is then the flux *inside* the cone, i.e. ``sin^2(half_angle)``
             times the flux of the full Lambertian emitter.
+        radiation: Angular emission pattern inside the cone (e.g. from an
+            LED datasheet); overrides ``lambertian_cone``, and
+            ``total_flux`` is then the flux inside the cone as well.
         medium: Medium the source is embedded in (default: vacuum).
     """
 
@@ -102,4 +106,39 @@ class ExtendedSourceConfig:
     inner_radius: float | None = None
     half_angle_deg: float = 90.0
     lambertian_cone: bool = False
+    radiation: RadiationPattern | None = None
+    medium: NSQMaterial | None = field(default=None)
+
+
+@dataclass
+class LEDRingSourceConfig:
+    """Configuration for an LEDRingSource.
+
+    Attributes:
+        spectrum: Wavelength distribution.
+        total_flux: Flux of all chips together inside the cone [W].
+            Ignored (with a warning) when ``total_flux_lumens`` is also set.
+        total_flux_lumens: The same in lumens, converted to watts via
+            ``spectrum`` -- see :attr:`PointSourceConfig.total_flux_lumens`.
+        count: Number of chips.
+        pitch_radius: Radius of the circle through the chip centres [mm].
+        chip_width: Tangential chip size [mm].
+        chip_height: Radial chip size [mm].
+        first_angle_deg: Azimuth of chip 0 from the local x axis [deg].
+        half_angle_deg: Half angle of the emission cone [deg]; 90 is the
+            hemisphere.
+        radiation: Angular emission pattern; ``None`` is Lambertian.
+        medium: Medium the source is embedded in (default: vacuum).
+    """
+
+    spectrum: Spectrum
+    total_flux: float = 1.0
+    total_flux_lumens: float | None = None
+    count: int = 1
+    pitch_radius: float = 0.0
+    chip_width: float = 1.0
+    chip_height: float = 1.0
+    first_angle_deg: float = 0.0
+    half_angle_deg: float = 90.0
+    radiation: RadiationPattern | None = None
     medium: NSQMaterial | None = field(default=None)
