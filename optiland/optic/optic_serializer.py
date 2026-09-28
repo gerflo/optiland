@@ -14,6 +14,7 @@ from optiland.aberrations import Aberrations
 from optiland.aperture import BaseSystemAperture
 from optiland.apodization import BaseApodization
 from optiland.fields import BaseFieldDefinition, FieldGroup
+from optiland.illumination import light_source_from_dict
 from optiland.paraxial import Paraxial
 from optiland.pickup import PickupManager
 from optiland.raytrace.real_ray_tracer import RealRayTracer
@@ -59,6 +60,9 @@ class OpticSerializer:
             data["sequences"] = {
                 name: seq.raw_steps for name, seq in optic.sequences.items()
             }
+
+        if getattr(optic, "light_source", None) is not None:
+            data["light_source"] = optic.light_source.to_dict()
 
         return data
 
@@ -112,5 +116,7 @@ class OpticSerializer:
 
         for name, steps in data.get("sequences", {}).items():
             optic.add_sequence(name, steps)
+
+        optic.light_source = light_source_from_dict(data.get("light_source"))
 
         return optic

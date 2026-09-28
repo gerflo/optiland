@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     )
     from optiland.apodization import BaseApodization
     from optiland.distribution import BaseDistribution
+    from optiland.illumination import LEDRing
     from optiland.materials.base import BaseMaterial
     from optiland.rays import RealRays
     from optiland.sequences.sequenced_optic import SequencedOptic
@@ -105,6 +106,10 @@ class Optic:
             surface properties to meet certain constraints.
         obj_space_telecentric (bool): If True, the system is object-space
             telecentric. Defaults to False.
+        light_source (LEDRing | None): The light source in the object plane
+            of an illumination path (see :func:`optiland.illumination.
+            apply_led_ring`); the non-sequential fold builds its emitter from
+            it. ``None`` for an ordinary object.
 
 
     """
@@ -141,6 +146,7 @@ class Optic:
         self.pickups: PickupManager = PickupManager(self)
         self.solves: SolveManager = SolveManager(self)
         self.obj_space_telecentric: bool = False
+        self.light_source: LEDRing | None = None
         self.updater: OpticUpdater = OpticUpdater(self)
         self.sequences: dict[str, SequencedOptic] = {}
 
