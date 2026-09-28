@@ -323,7 +323,7 @@ class TestFileVersions:
             "application",
             "optiland_version",
         ]
-        assert data["olsys_format_version"] == OLSYS_FORMAT_VERSION == 1
+        assert data["olsys_format_version"] == OLSYS_FORMAT_VERSION == 2
         assert data["application"] == {"name": "Optiland GUI", "version": "0.3.0"}
         assert data["optiland_version"] == optiland_version()
         back = MultiAxisSystem.from_json(path)

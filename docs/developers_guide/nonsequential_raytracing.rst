@@ -247,9 +247,18 @@ shared tail), and compares the two copies of the tail surface by surface
 the mirror plane by default (``hole="projected"``: it appears as the
 imaging file's circular aperture along the axis) or a circle of that
 diameter (``hole="physical"``). ``AnnularPlaneGeometry(inner_radius_y=...)``
-provides the elliptical hole. The illumination object becomes an annular
-``ExtendedSource`` (``inner_radius``) emitting a Lambertian distribution
-restricted to a cone (``lambertian_cone=True``; ``total_flux`` is then
+provides the elliptical hole. When the illumination optic declares its LED
+ring (``Optic.light_source``, an :class:`~optiland.illumination.LEDRing`),
+the emitter is built from it: an ``LEDRingSource`` with one rectangular
+chip per LED (``emitter_model="discrete"``) or an annular
+``ExtendedSource`` over the chips' radial extent (``"annulus"``), with the
+LED's radiation pattern and spectrum; a known LED flux is emitted as
+``count x flux x`` the pattern's share inside the cone, an unknown one as
+``illumination_flux``. Without an LED ring the illumination object becomes
+an annular ``ExtendedSource`` (``inner_radius``) spanning the illumination
+field radii -- too narrow when the fields are quadrature nodes inside the
+luminous ring, so declare the ring for radiometry. Either way the emission
+is restricted to a cone (``lambertian_cone=True``; ``total_flux`` is then
 the flux inside the cone, ``sin^2`` of the half angle times the full
 Lambertian flux), so the relay's acceptance cone is sampled instead of the
 whole hemisphere. ``trace_per_source`` traces the scene once per source so

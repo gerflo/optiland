@@ -68,7 +68,10 @@ if TYPE_CHECKING:
 #: under a new Optiland (GUI) version. Additions that older readers ignore
 #: (new optional keys) keep the number. Readers refuse files with a higher
 #: number than they know.
-OLSYS_FORMAT_VERSION = 1
+#:
+#: History: 2 -- the scene may hold an ``"led_ring"`` source (the emitter of
+#: an illumination path's LED ring), which version-1 readers do not know.
+OLSYS_FORMAT_VERSION = 2
 
 #: Name used in the ``"application"`` key when no application is given.
 LIBRARY_APPLICATION = "optiland"

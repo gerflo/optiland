@@ -23,9 +23,12 @@ passes through its hole, the illumination reflects off its ring.
   it surface by surface so that any drift between the two designs is
   reported, never silently absorbed;
 - the imaging fields become aimed point sources on the sample, the
-  illumination object becomes an annular (or disk) Lambertian emitter, and
-  detectors sit at the camera, the sample, behind the hole and behind the
-  illumination source.
+  illumination object becomes the emitter of the illumination path's LED
+  ring (:attr:`~optiland.optic.Optic.light_source`: discrete chips or an
+  annulus, with its radiation pattern, spectrum and flux) or, without one,
+  an annular (or disk) Lambertian emitter spanning the illumination field
+  radii, and detectors sit at the camera, the sample, behind the hole and
+  behind the illumination source.
 
 Kramer Harrison, 2026
 """
@@ -59,7 +62,12 @@ from optiland.nonsequential.surface_conversion import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from optiland.illumination import LEDRing
     from optiland.nonsequential.scene import NSQScene
+    from optiland.nonsequential.sources.configs import (
+        ExtendedSourceConfig,
+        LEDRingSourceConfig,
+    )
     from optiland.optic import Optic
 
 HoleShape = Literal["projected", "physical"]
@@ -188,6 +196,100 @@ def _medium_label(material) -> str:
 
 def _surface_z(surface) -> float:
     return _scalar(surface.geometry.cs.position_in_gcs[2])
+
+
+def _led_ring_emitter(
+    ring: LEDRing, cone_deg: float, normalised_flux: float
+) -> tuple[ExtendedSourceConfig | LEDRingSourceConfig, str]:
+    """Source config and report note of an illumination path's LED ring.
+
+    Args:
+        ring: The LED ring of the illumination optic.
+        cone_deg: Half angle of the emission cone [deg].
+        normalised_flux: Flux inside the cone [W] when the LED flux is not
+            known.
+
+    Returns:
+        ``(config, note)``: discrete chips (``LEDRingSourceConfig``) or a
+        homogeneous annulus (``ExtendedSourceConfig``), with the ring's
+        radiation pattern and LED spectrum. A known LED flux is emitted as
+        ``count x flux x`` (share of the pattern inside the cone).
+    """
+    from optiland.nonsequential.sources.base import Spectrum  # noqa: PLC0415
+    from optiland.nonsequential.sources.configs import (  # noqa: PLC0415
+        ExtendedSourceConfig,
+        LEDRingSourceConfig,
+    )
+    from optiland.nonsequential.units import lumens_to_watts  # noqa: PLC0415
+
+    led = ring.led
+    spectrum = Spectrum(*led.spectrum.density())
+    pattern = led.radiation
+    radiation = None if pattern.kind == "lambertian" else pattern
+    if led.flux is None:
+        flux = normalised_flux
+        flux_text = f"{flux:g} W inside the cone (LED flux unknown, normalised)"
+    else:
+        per_led = (
+            led.flux if led.flux_unit == "W" else lumens_to_watts(led.flux, spectrum)
+        )
+        share = pattern.flux_fraction(cone_deg)
+        flux = ring.count * per_led * share
+        flux_text = (
+            f"{ring.count} x {led.flux:g} {led.flux_unit}, {share:.1%} inside the "
+            f"cone: {flux:g} W"
+        )
+    if ring.emitter_model == "discrete":
+        config = LEDRingSourceConfig(
+            spectrum=spectrum,
+            total_flux=flux,
+            count=ring.count,
+            pitch_radius=ring.pitch_radius,
+            chip_width=led.chip_width,
+            chip_height=led.chip_height,
+            first_angle_deg=ring.first_angle_deg,
+            half_angle_deg=cone_deg,
+            radiation=radiation,
+        )
+        shape = (
+            f"{ring.count} chips {led.chip_width:g} x {led.chip_height:g} mm on "
+            f"pitch diameter {ring.pitch_diameter:g} mm"
+        )
+    else:
+        config = ExtendedSourceConfig(
+            spectrum=spectrum,
+            total_flux=flux,
+            aperture_radius=ring.outer_radius,
+            inner_radius=ring.inner_radius,
+            half_angle_deg=cone_deg,
+            lambertian_cone=True,
+            radiation=radiation,
+        )
+        shape = (
+            f"annulus {ring.inner_radius:g}..{ring.outer_radius:g} mm "
+            f"({ring.count} LEDs smeared)"
+        )
+    if pattern.kind == "lambertian":
+        pattern_text = "Lambertian"
+    elif pattern.kind == "half_angle":
+        pattern_text = (
+            f"cos^{pattern.cos_power:.2f} (half angle {pattern.half_angle_deg:g} deg)"
+        )
+    else:
+        pattern_text = f"tabulated pattern ({len(pattern.angles_deg)} angles)"
+    spec = led.spectrum
+    if spec.kind == "line":
+        spectrum_text = f"{spec.center_um * 1000:g} nm"
+    elif spec.kind == "gaussian":
+        spectrum_text = f"{spec.center_um * 1000:g} nm, FWHM {spec.fwhm_um * 1000:g} nm"
+    else:
+        spectrum_text = f"tabulated spectrum, peak {spec.peak_um * 1000:g} nm"
+    label = f" {led.name}" if led.name else ""
+    note = (
+        f"illumination emitter from the LED ring{label}: {shape}, {pattern_text}, "
+        f"{spectrum_text}, cone {cone_deg:.1f} deg, {flux_text}"
+    )
+    return config, note
 
 
 def compare_tails(
@@ -339,7 +441,9 @@ def fold_paths(
             :func:`~optiland.nonsequential.surface_conversion.add_optic_surfaces`.
             The default coats catalog glass and leaves constant-index media
             (an eye model) with Fresnel reflection.
-        illumination_flux: Flux of the illumination source [W].
+        illumination_flux: Flux of the illumination source inside its cone
+            [W]; not used when the illumination path's LED ring states the
+            flux of its LEDs.
         object_flux: Flux of each sample point source [W].
         illumination_half_angle_deg: Cone half angle of the illumination
             emitter; ``None`` derives it from the illumination entrance
@@ -522,10 +626,16 @@ def fold_paths(
             half_angle_deg=object_half_angle_deg,
         )
     )
-    ill_points = object_field_points(illumination)
-    radii = [math.hypot(x, y) for x, y, _ in ill_points]
-    r_outer = max(radii)
-    r_inner = min(radii)
+    # The emitter comes from the illumination path's LED ring when it has
+    # one; otherwise the ring is guessed from the span of its field radii.
+    led_ring = getattr(illumination, "light_source", None)
+    if led_ring is not None:
+        r_inner, r_outer = led_ring.inner_radius, led_ring.outer_radius
+    else:
+        ill_points = object_field_points(illumination)
+        radii = [math.hypot(x, y) for x, y, _ in ill_points]
+        r_outer = max(radii)
+        r_inner = min(radii)
     z_pupil, epd = entrance_pupil(illumination)
     obj_z = _surface_z(s_ill[0])
     if illumination_half_angle_deg is None:
@@ -538,23 +648,30 @@ def fold_paths(
             "The illumination fields are all on axis; an extended emitter needs "
             "a non-zero object height."
         )
-    scene.add_source(
-        ILLUMINATION,
-        flat_coordinate_system(s_ill[0].geometry.cs, frame_ill),
-        ExtendedSourceConfig(
+    if led_ring is not None:
+        emitter, emitter_note = _led_ring_emitter(led_ring, cone_ill, illumination_flux)
+    else:
+        emitter = ExtendedSourceConfig(
             spectrum=_build_spectrum(illumination),
             total_flux=illumination_flux,
             aperture_radius=r_outer,
             inner_radius=r_inner if 0.0 < r_inner < r_outer else None,
             half_angle_deg=cone_ill,
             lambertian_cone=True,
-        ),
+        )
+        emitter_note = (
+            f"illumination emitter: ring {r_inner:g}..{r_outer:g} mm, the span of "
+            f"the illumination field radii, Lambertian cone {cone_ill:.1f} deg, "
+            f"{illumination_flux:g} W inside the cone (declare the LED ring of "
+            "the illumination path for the true emitter)"
+        )
+    scene.add_source(
+        ILLUMINATION,
+        flat_coordinate_system(s_ill[0].geometry.cs, frame_ill),
+        emitter,
     )
     report.sources.append(ILLUMINATION)
-    report.notes.append(
-        f"illumination emitter: ring {r_inner:g}..{r_outer:g} mm, Lambertian cone "
-        f"{cone_ill:.1f} deg, {illumination_flux:g} W inside the cone"
-    )
+    report.notes.append(emitter_note)
 
     # Detectors.
     add_image_detector(scene, imaging, CAMERA, num_pixels=camera_pixels)

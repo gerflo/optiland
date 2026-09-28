@@ -6,4 +6,4 @@ from __future__ import annotations
 #: Raise it whenever the ``.olsys`` format version
 #: (``optiland.nonsequential.system.OLSYS_FORMAT_VERSION``) is raised: a file
 #: an older GUI cannot open must come from a newer GUI version.
-__version__ = "0.3.0"
+__version__ = "0.4.0"
