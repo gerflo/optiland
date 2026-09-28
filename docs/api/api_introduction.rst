@@ -31,6 +31,7 @@ The following sections provide detailed information about the various modules an
    api_fields
    api_fileio
    api_geometries
+   api_illumination
    api_interactions
    api_materials
    api_ml

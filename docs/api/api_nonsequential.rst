@@ -292,6 +292,66 @@ Sources
      - Emission cone half-angle [deg]. Rays are uniform within the cone
        below 90; at 90 and above they are cosine-weighted over the full
        hemisphere (Lambertian), and values above 90 behave as 90.
+   * - ``radiation``
+     - ``RadiationPattern`` | None
+     - ``None``
+     - Angular emission pattern inside the cone
+       (:class:`optiland.illumination.RadiationPattern`: Lambertian,
+       ``cos^m`` from a half-intensity angle, or a table); replaces the
+       Lambertian/uniform distribution, and ``total_flux`` is then the flux
+       inside the cone.
+   * - ``medium``
+     - ``NSQMaterial`` | None
+     - ``None``
+     - Embedding medium (default vacuum).
+
+**LEDRingSourceConfig** — identical rectangular chips evenly spaced on a
+circle (the emitter the fold builds from an illumination path's
+:class:`optiland.illumination.LEDRing`). Chip ``k`` sits at azimuth
+``first_angle_deg + 360 k / count``, height radial, width tangential; ray
+``i`` leaves chip ``i mod count``, so every chip carries exactly
+``1/count`` of the flux.
+
+.. list-table::
+   :widths: 22 22 12 44
+   :header-rows: 1
+
+   * - Field
+     - Type
+     - Default
+     - Meaning
+   * - ``spectrum``
+     - ``Spectrum``
+     - *(required)*
+     - Wavelength distribution (µm).
+   * - ``total_flux``
+     - float
+     - ``1.0``
+     - Flux of all chips together inside the cone [W].
+   * - ``count``
+     - int
+     - ``1``
+     - Number of chips.
+   * - ``pitch_radius``
+     - float
+     - ``0.0``
+     - Radius of the circle through the chip centres [mm].
+   * - ``chip_width`` / ``chip_height``
+     - float
+     - ``1.0``
+     - Tangential / radial chip size [mm].
+   * - ``first_angle_deg``
+     - float
+     - ``0.0``
+     - Azimuth of chip 0 from the local x axis [deg].
+   * - ``half_angle_deg``
+     - float
+     - ``90.0``
+     - Emission cone half-angle [deg]; 90 is the hemisphere.
+   * - ``radiation``
+     - ``RadiationPattern`` | None
+     - ``None``
+     - Angular emission pattern; ``None`` is Lambertian.
    * - ``medium``
      - ``NSQMaterial`` | None
      - ``None``
