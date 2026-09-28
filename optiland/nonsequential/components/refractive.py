@@ -24,7 +24,6 @@ from optiland.nonsequential.materials.nsq_material import medium_stack_id
 from optiland.nonsequential.ray_bundle import (
     MEDIUM_STACK_EMPTY,
     MEDIUM_STACK_MAX_DEPTH,
-    MediumStackOverflowError,
 )
 from optiland.nonsequential.rng import EventSlot
 from optiland.nonsequential.sampling import resolve_reflect_prob
@@ -405,16 +404,18 @@ class RefractiveComponent(BaseComponent):
                     rays.medium_stack[pr, rays.medium_depth[pr]] = MEDIUM_STACK_EMPTY
                 if push_mask.any():
                     pr = na_rows[push_mask]
-                    if (rays.medium_depth[pr] >= MEDIUM_STACK_MAX_DEPTH).any():
-                        raise MediumStackOverflowError(
-                            f"Medium stack exceeded MEDIUM_STACK_MAX_DEPTH="
-                            f"{MEDIUM_STACK_MAX_DEPTH} at surface "
-                            f"{self.name or type(self).__name__!r}. This "
-                            "indicates either pathologically deep volume "
-                            "nesting or a geometry defect that pushes "
-                            "without popping."
-                        )
-                    rays.medium_stack[pr, rays.medium_depth[pr]] = na_mat2[push_mask]
+                    # A push past MEDIUM_STACK_MAX_DEPTH is dropped and
+                    # counted, never raised: the stack is a diagnostic and
+                    # must not abort a trace (a ray reflected between the
+                    # faces of an eye lens re-enters them again and again,
+                    # O18). It shows up in Diagnostics.medium_stack_overflows.
+                    room = rays.medium_depth[pr] < MEDIUM_STACK_MAX_DEPTH
+                    if not room.all():
+                        rays.medium_stack_overflows[pr[~room]] += 1
+                    pr = pr[room]
+                    rays.medium_stack[pr, rays.medium_depth[pr]] = na_mat2[push_mask][
+                        room
+                    ]
                     rays.medium_depth[pr] += 1
 
         # Update bounce count

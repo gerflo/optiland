@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from optiland.nonsequential.ray_bundle import MEDIUM_STACK_MAX_DEPTH
+
 if TYPE_CHECKING:
     from optiland.nonsequential.scene import NSQScene
 
@@ -127,6 +129,7 @@ class Diagnostics:
     unreached_geometry: tuple[str, ...] = ()
     detectors: tuple[DetectorDiagnostic, ...] = field(default_factory=tuple)
     medium_stack_underflows: int = 0
+    medium_stack_overflows: int = 0
     split_budget_saturated: bool = False
 
     def warnings(self) -> list[str]:
@@ -181,6 +184,15 @@ class Diagnostics:
                 "detected -- a ray exited a volume it never entered; this "
                 "indicates a geometry defect."
             )
+        if self.medium_stack_overflows:
+            msgs.append(
+                f"{self.medium_stack_overflows} medium-stack overflow(s) "
+                "detected -- a ray entered more than "
+                f"{MEDIUM_STACK_MAX_DEPTH} media without leaving one "
+                "(deep nesting, or reflections inside a volume re-entering "
+                "its faces); the traced result is unaffected, the stack of "
+                "those rays is incomplete."
+            )
         if self.split_budget_saturated:
             msgs.append(
                 "Bounded splitting hit its split_budget cap at least once "
@@ -205,6 +217,7 @@ class Diagnostics:
             f"  unreached_geometry:            "
             f"{list(self.unreached_geometry) if self.unreached_geometry else 'none'}",
             f"  medium_stack_underflows:       {self.medium_stack_underflows}",
+            f"  medium_stack_overflows:        {self.medium_stack_overflows}",
             f"  split_budget_saturated:        {self.split_budget_saturated}",
         ]
         if self.detectors:
@@ -305,6 +318,7 @@ def build_diagnostics(
     split_budget_saturated: bool,
     detector_results: dict[str, object],
     medium_stack_underflows: int = 0,
+    medium_stack_overflows: int = 0,
 ) -> Diagnostics:
     """Assemble a :class:`Diagnostics` from one trace's bookkeeping.
 
@@ -326,6 +340,8 @@ def build_diagnostics(
             ``scene.detectors`` order.
         medium_stack_underflows: Total medium-stack pop-on-empty events
             across the trace (see :class:`Diagnostics`).
+        medium_stack_overflows: Total pushes past the stack depth across
+            the trace (see :class:`Diagnostics`).
 
     Returns:
         The assembled diagnostics.
@@ -349,5 +365,6 @@ def build_diagnostics(
         unreached_geometry=unreached,
         detectors=detector_diags,
         medium_stack_underflows=medium_stack_underflows,
+        medium_stack_overflows=medium_stack_overflows,
         split_budget_saturated=split_budget_saturated,
     )

@@ -192,6 +192,7 @@ class ArrayBackend(TracerBackend):
         hit_component_ids: set[int] = set()
         split_budget_saturated = False
         total_medium_stack_underflows = 0
+        total_medium_stack_overflows = 0
 
         # Distribute ray budget across sources proportional to flux
         rays_per_source = distribute_ray_budget(
@@ -439,6 +440,10 @@ class ArrayBackend(TracerBackend):
                         rays.medium_stack_underflows.sum()
                     )
                     rays.medium_stack_underflows[:] = 0
+                    total_medium_stack_overflows += int(
+                        rays.medium_stack_overflows.sum()
+                    )
+                    rays.medium_stack_overflows[:] = 0
 
                     rays = self._maybe_compact(rays)
                     if rays.num_rays == 0:
@@ -507,6 +512,7 @@ class ArrayBackend(TracerBackend):
             split_budget_saturated,
             detector_results,
             medium_stack_underflows=total_medium_stack_underflows,
+            medium_stack_overflows=total_medium_stack_overflows,
         )
 
         return SimulationResult(

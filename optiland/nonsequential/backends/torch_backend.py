@@ -220,6 +220,7 @@ class TorchBackend(TracerBackend):
         total_flux_rr_killed = 0.0
         hit_component_ids: set[int] = set()
         total_medium_stack_underflows = 0
+        total_medium_stack_overflows = 0
 
         # Distribute ray budget across sources proportional to flux
         rays_per_source = distribute_ray_budget(
@@ -381,6 +382,10 @@ class TorchBackend(TracerBackend):
                         rays.medium_stack_underflows.sum()
                     )
                     rays.medium_stack_underflows[:] = 0
+                    total_medium_stack_overflows += int(
+                        rays.medium_stack_overflows.sum()
+                    )
+                    rays.medium_stack_overflows[:] = 0
 
                     # Kill escaped rays
                     no_hit_np = ~any_comp_hit_np & ~any_det_hit_np
@@ -511,6 +516,7 @@ class TorchBackend(TracerBackend):
             False,
             detector_results,
             medium_stack_underflows=total_medium_stack_underflows,
+            medium_stack_overflows=total_medium_stack_overflows,
         )
 
         return SimulationResult(

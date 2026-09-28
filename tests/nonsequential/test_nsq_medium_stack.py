@@ -9,11 +9,14 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import optiland.backend as be
 from optiland.coordinate_system import CoordinateSystem
+from optiland.nonsequential.backends.torch_backend import TorchBackend
 from optiland.nonsequential.components.geometry.analytic.plane import (
     FinitePlaneGeometry,
 )
 from optiland.nonsequential.components.refractive import RefractiveComponent
+from optiland.nonsequential.detectors.configs import IrradianceDetectorConfig
 from optiland.nonsequential.ir.scene_ir import BsdfIR
 from optiland.nonsequential.materials.nsq_material import (
     VACUUM,
@@ -23,10 +26,12 @@ from optiland.nonsequential.materials.nsq_material import (
 from optiland.nonsequential.ray_bundle import (
     MEDIUM_STACK_EMPTY,
     MEDIUM_STACK_MAX_DEPTH,
-    MediumStackOverflowError,
     NSQRayBundle,
 )
 from optiland.nonsequential.rng import NSQRng
+from optiland.nonsequential.scene import NSQScene
+from optiland.nonsequential.sources.base import Spectrum
+from optiland.nonsequential.sources.configs import CollimatedSourceConfig
 
 GREEN = 0.55
 
@@ -234,7 +239,8 @@ class TestMediumStackPushPop:
         assert rays.medium_stack[0, 1] == medium_stack_id(oil)
         assert rays.medium_stack_underflows[0] == 0
 
-    def test_overflow_raises(self):
+    def test_overflow_is_counted_not_raised(self):
+        """O18: a push on a full stack is dropped and counted; the ray goes on."""
         deep = [i + 1 for i in range(MEDIUM_STACK_MAX_DEPTH)]
         glass = NSQMaterial.from_glass("N-BK7")
         other = NSQMaterial.from_glass("N-SF5")
@@ -245,8 +251,14 @@ class TestMediumStackPushPop:
             other,
         )
         rays = self._rays(depth=MEDIUM_STACK_MAX_DEPTH, stack=deep)
-        with pytest.raises(MediumStackOverflowError):
-            self._interact(comp, rays)
+        self._interact(comp, rays)
+        assert rays.medium_depth[0] == MEDIUM_STACK_MAX_DEPTH
+        np.testing.assert_array_equal(rays.medium_stack[0], deep)
+        assert rays.medium_stack_overflows[0] == 1
+        assert rays.medium_stack_underflows[0] == 0
+        # The physics went on: the ray refracted into the second medium.
+        assert rays.n_current[0] == pytest.approx(float(other.n(GREEN)))
+        assert bool(rays.alive[0])
 
     def test_reflection_never_touches_the_stack(self):
         glass = NSQMaterial.from_glass("N-BK7")
@@ -260,3 +272,78 @@ class TestMediumStackPushPop:
         self._interact(comp, rays, forced_branch="reflect")
         assert rays.medium_depth[0] == 0
         assert rays.medium_stack_underflows[0] == 0
+
+
+class TestDeepNestingTrace:
+    """O18: a trace through more media than the stack holds completes.
+
+    Found with the RCR-27 fundus camera (2026-09-28): rays reflected
+    between the faces of the mouse eye lens re-enter the same media until
+    the diagnostic medium stack was full, and the whole 200 000-ray trace
+    died with MediumStackOverflowError. The stack never feeds the physics,
+    so an overflow is a diagnostic count, not an abort.
+    """
+
+    @staticmethod
+    def _scene() -> NSQScene:
+        # Nine abutting slabs of nine distinct media: every crossing pushes
+        # (no medium repeats, none is ambient), the ninth push overflows.
+        media = [VACUUM] + [
+            NSQMaterial.from_glass("N-BK7") for _ in range(MEDIUM_STACK_MAX_DEPTH + 1)
+        ]
+        scene = NSQScene()
+        for k in range(MEDIUM_STACK_MAX_DEPTH + 1):
+            scene.add_component(
+                f"slab_{k}",
+                RefractiveComponent(
+                    CoordinateSystem(z=1.0 + k),
+                    FinitePlaneGeometry(20, 20),
+                    media[k],
+                    media[k + 1],
+                ),
+            )
+        scene.add_source(
+            "src",
+            CoordinateSystem(),
+            CollimatedSourceConfig(
+                spectrum=Spectrum.monochromatic(GREEN),
+                total_flux=1.0,
+                aperture_radius=1.0,
+            ),
+        )
+        scene.add_detector(
+            "det",
+            CoordinateSystem(z=15.0),
+            IrradianceDetectorConfig(
+                width=10.0, height=10.0, num_pixels_x=8, num_pixels_y=8
+            ),
+        )
+        return scene
+
+    @staticmethod
+    def _check(result) -> None:
+        # Every ray either reached the detector through all nine media
+        # (one overflow at the ninth push) or was Fresnel-reflected at the
+        # first vacuum-glass face and escaped; none was lost to an abort.
+        hit = result.detectors["det"].num_rays_hit
+        assert hit + result.num_rays_escaped == 64
+        assert hit >= 50
+        assert result.diagnostics.medium_stack_overflows == hit
+        assert result.diagnostics.medium_stack_underflows == 0
+
+    def test_numpy_backend_counts_the_overflow(self):
+        result = self._scene().trace(num_rays=64, max_depth=20, seed=1)
+        self._check(result)
+        assert any("overflow" in w for w in result.diagnostics.warnings())
+        hit = result.detectors["det"].num_rays_hit
+        assert f"medium_stack_overflows:        {hit}" in result.diagnostics.report()
+
+    def test_torch_backend_counts_the_overflow(self):
+        be.set_backend("torch")
+        try:
+            result = self._scene().trace(
+                num_rays=64, max_depth=20, seed=1, backend=TorchBackend(seed=1)
+            )
+        finally:
+            be.set_backend("numpy")
+        self._check(result)
