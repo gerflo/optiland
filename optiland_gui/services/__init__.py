@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from optiland_gui.services.analysis_runner import AnalysisRunner
     from optiland_gui.services.file_service import FileService
+    from optiland_gui.services.light_source_service import LightSourceService
     from optiland_gui.services.optimization_service import OptimizationService
     from optiland_gui.services.surface_service import SurfaceService
     from optiland_gui.services.system_service import SystemService
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
 _EXPORTS: dict[str, str] = {
     "AnalysisRunner": "analysis_runner",
     "FileService": "file_service",
+    "LightSourceService": "light_source_service",
     "OptimizationService": "optimization_service",
     "SurfaceService": "surface_service",
     "SystemService": "system_service",
@@ -35,6 +37,7 @@ _EXPORTS: dict[str, str] = {
 __all__ = [
     "AnalysisRunner",
     "FileService",
+    "LightSourceService",
     "OptimizationService",
     "SurfaceService",
     "SystemService",

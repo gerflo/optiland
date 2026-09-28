@@ -288,10 +288,13 @@ class SystemPropertiesPanel(QWidget):
     def _create_editor_pages(self):
         """Creates and adds all the property editor pages to the
         navigation tree and stacked widget."""
+        from .led_ring_editor import LEDRingEditor  # noqa: PLC0415
+
         self.metadataEditor = MetadataEditor(self.connector)
         self.apertureEditor = ApertureEditor(self.connector)
         self.fieldsEditor = FieldsEditor(self.connector)
         self.wavelengthsEditor = WavelengthsEditor(self.connector)
+        self.ledRingEditor = LEDRingEditor(self.connector)
         self.polarizationEditor = PolarizationEditor(self.connector)
         self.rayAimingEditor = RayAimingEditor(self.connector)
         self.layoutEditor = LayoutEditor(self.connector)
@@ -300,6 +303,7 @@ class SystemPropertiesPanel(QWidget):
         self.add_nav_item("Aperture", self.apertureEditor)
         self.add_nav_item("Fields", self.fieldsEditor)
         self.add_nav_item("Wavelengths", self.wavelengthsEditor)
+        self.add_nav_item("LED Ring", self.ledRingEditor)
         self.add_nav_item("Polarization", self.polarizationEditor)
         self.add_nav_item("Ray Aiming", self.rayAimingEditor)
         self.add_nav_item("Layout", self.layoutEditor)
@@ -336,6 +340,7 @@ class SystemPropertiesPanel(QWidget):
         self.apertureEditor.load_data()
         self.fieldsEditor.load_data()
         self.wavelengthsEditor.load_data()
+        self.ledRingEditor.load_data()
         self.polarizationEditor.load_data()
         self.rayAimingEditor.load_data()
         self.layoutEditor.load_data()
@@ -540,6 +545,13 @@ class FieldsEditor(PropertyEditorBase):
         main_layout.setSpacing(10)
 
         self._create_type_selector(main_layout)
+        self.lblLightSource = QLabel(
+            "These fields were generated from the LED ring of this path. "
+            "Apply on the LED Ring page generates them again."
+        )
+        self.lblLightSource.setWordWrap(True)
+        self.lblLightSource.setVisible(False)
+        main_layout.addWidget(self.lblLightSource)
         self._create_fields_table(main_layout)
         self._create_control_buttons(main_layout)
 
@@ -566,9 +578,9 @@ class FieldsEditor(PropertyEditorBase):
     def _create_fields_table(self, parent_layout):
         """Creates the table for editing field points."""
         self.tableFields = QTableWidget()
-        self.tableFields.setColumnCount(4)
+        self.tableFields.setColumnCount(5)
         self.tableFields.setHorizontalHeaderLabels(
-            ["X-Field", "Y-Field", "Vignette X", "Vignette Y"]
+            ["X-Field", "Y-Field", "Vignette X", "Vignette Y", "Weight"]
         )
         self.tableFields.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
@@ -619,6 +631,10 @@ class FieldsEditor(PropertyEditorBase):
                 self.tableFields.setItem(i, 1, QTableWidgetItem(str(field_obj.y)))
                 self.tableFields.setItem(i, 2, QTableWidgetItem(str(field_obj.vx)))
                 self.tableFields.setItem(i, 3, QTableWidgetItem(str(field_obj.vy)))
+                self.tableFields.setItem(
+                    i, 4, QTableWidgetItem(f"{field_obj.weight:g}")
+                )
+        self.lblLightSource.setVisible(getattr(optic, "light_source", None) is not None)
         self.is_loading = False
 
     @Slot()
@@ -676,17 +692,27 @@ class FieldsEditor(PropertyEditorBase):
         Raises:
             ValueError: If a cell of the row is not a number.
         """
-        x, y, vx, vy = _parse_table_numbers(
-            self.tableFields, row_index, (0, 1, 2, 3), "Fields"
+        x, y, vx, vy, weight = _parse_table_numbers(
+            self.tableFields, row_index, (0, 1, 2, 3, 4), "Fields"
         )
+        if weight < 0.0:
+            logger.warning(
+                "Fields table row %d: weight %g is negative; the change was not "
+                "applied.",
+                row_index + 1,
+                weight,
+            )
+            raise ValueError("negative field weight")
         field_obj = self.connector.get_optic().fields.fields[row_index]
         if (
             field_obj.x != x
             or field_obj.y != y
             or field_obj.vx != vx
             or field_obj.vy != vy
+            or field_obj.weight != weight
         ):
             field_obj.x, field_obj.y, field_obj.vx, field_obj.vy = x, y, vx, vy
+            field_obj.weight = weight
             return True
         return False
 

@@ -35,6 +35,7 @@ def _run(code: str) -> subprocess.CompletedProcess[str]:
     [
         "optiland_gui.services.surface_service",
         "optiland_gui.services.system_service",
+        "optiland_gui.services.light_source_service",
         "optiland_gui.registry",
     ],
 )

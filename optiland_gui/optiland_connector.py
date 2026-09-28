@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Signal
 
@@ -29,6 +30,7 @@ from optiland_gui.services.file_service import (
     SpecialFloatEncoder,  # re-exported for backward compat
     json_inf_nan_hook,  # re-exported for backward compat
 )
+from optiland_gui.services.light_source_service import LightSourceService
 from optiland_gui.services.material_catalog_service import (
     MaterialCatalogImportResult,
     MaterialCatalogService,
@@ -37,6 +39,9 @@ from optiland_gui.services.optimization_service import OptimizationService
 from optiland_gui.services.surface_service import SurfaceService
 from optiland_gui.services.system_service import SystemService
 from optiland_gui.undo_redo_manager import UndoRedoManager
+
+if TYPE_CHECKING:
+    from optiland.illumination import LEDRing
 
 __all__ = [
     "OptilandConnector",
@@ -125,6 +130,7 @@ class OptilandConnector(QObject):
         self._file_service = FileService(self)
         self._surface_service = SurfaceService(self)
         self._system_service = SystemService(self)
+        self._light_source_service = LightSourceService(self)
         self._analysis_runner = AnalysisRunner(self)
         self._optimization_service = OptimizationService(self)
         self._catalog_service = CatalogService(self)
@@ -886,6 +892,27 @@ class OptilandConnector(QObject):
             description: The new description text.
         """
         self._system_service.set_metadata(name, description)
+
+    def get_light_source(self) -> LEDRing | None:
+        """Return the LED ring of the active optic, or ``None``."""
+        return self._light_source_service.get_light_source()
+
+    def set_light_source(
+        self, ring: LEDRing | None, *, fields: bool = True, wavelengths: bool = True
+    ) -> None:
+        """Set the LED ring of the active optic as one undoable edit.
+
+        Args:
+            ring: The LED ring; ``None`` removes it.
+            fields: Replace the fields by the ring's field points.
+            wavelengths: Replace the wavelengths by the LED spectrum's.
+
+        Raises:
+            ValueError: If the object is at infinity.
+        """
+        self._light_source_service.set_light_source(
+            ring, fields=fields, wavelengths=wavelengths
+        )
 
     def get_aperture_types(self) -> list[str]:
         """Return all aperture type keys registered with BaseSystemAperture.
