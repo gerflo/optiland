@@ -846,6 +846,58 @@ def test_viewer_bottom_margin_keeps_its_height_when_the_viewer_grows(
     assert 0.0 <= viewer.ax.xaxis.label.get_window_extent(renderer).y0 <= 15.0
 
 
+def _crowded_optic():  # noqa: ANN202
+    """A 3 mm lens, a 0.3 mm gap, a flat surface, 40 mm to the image.
+
+    The labels "3.00" and "0.30" are too close for one row.
+    """
+    from optiland.optic import Optic
+
+    optic = Optic()
+    optic.surfaces.add(index=0, radius=be.inf, thickness=be.inf)
+    optic.surfaces.add(index=1, radius=20.0, thickness=3.0, material="N-BK7")
+    optic.surfaces.add(index=2, radius=-20.0, thickness=0.3, is_stop=True)
+    optic.surfaces.add(index=3, radius=be.inf, thickness=40.0)
+    optic.surfaces.add(index=4, radius=be.inf, thickness=0.0)
+    optic.set_aperture(aperture_type="EPD", value=5.0)
+    optic.fields.set_type("angle")
+    optic.fields.add(y=0.0)
+    optic.wavelengths.add(value=0.55, is_primary=True)
+    optic.updater.update()
+    return optic
+
+
+def test_viewer_dimension_labels_are_a_third_larger_than_before(
+    qapp, minimal_optic, monkeypatch
+) -> None:
+    # User request (2026-09-29): the distance labels under the optic were
+    # set in 6.5 pt, about 30 % larger was wanted.
+    viewer = _make_2d_viewer_with_dimensions(monkeypatch, minimal_optic)
+    _, labels = _dimension_artists(viewer)
+
+    assert len(labels) == 2
+    for label in labels:
+        assert label.get_fontsize() == pytest.approx(1.3 * 6.5, rel=0.05)
+
+
+def test_viewer_larger_dimension_labels_do_not_overlap(qapp, monkeypatch) -> None:
+    viewer = _make_2d_viewer_with_dimensions(monkeypatch, _crowded_optic())
+    viewer.canvas.draw()
+    renderer = viewer.canvas.get_renderer()
+    labels = [
+        text
+        for text in viewer.ax.texts
+        if text.get_text() in {"3.00", "0.30", "40.00"}
+    ]
+    boxes = [label.get_window_extent(renderer) for label in labels]
+
+    assert len(labels) == 3
+    assert len({round(box.y1) for box in boxes}) == 2  # the second row is used
+    for i, first in enumerate(boxes):
+        for second in boxes[i + 1 :]:
+            assert not first.overlaps(second)
+
+
 # ---------------------------------------------------------------------------
 # The 3D layout follows the 2D "Rays Reach Image" setting
 # ---------------------------------------------------------------------------

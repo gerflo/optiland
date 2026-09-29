@@ -894,6 +894,11 @@ class _MeasureOverlay(QWidget):
         painter.end()
 
 
+# Z-spacing labels under the 2D layout (6.5 pt until 2026-09-29, the user
+# asked for about 30 % more); their two rows are spaced in proportion.
+DIMENSION_LABEL_FONT_PT = 8.5
+DIMENSION_ROW_SPACING = 10.0 / 6.5
+
 # Lens Data Editor selection mirrored in the 2D layout.
 _LAYOUT_PROJECTION = "YZ"
 HIGHLIGHT_EMPHASIS_AMOUNT = 0.5
@@ -2709,7 +2714,12 @@ class MatplotlibViewer(QWidget):
         Data Editor selection (arrow and emphasis), with every visible
         element numbered and the element names in a legend under the plot.
         """
-        show_print_preview(self, "Print Preview – 2D Layout", self._render_layout_page)
+        show_print_preview(
+            self,
+            "Print Preview – 2D Layout",
+            self._render_layout_page,
+            window_key="2D Layout",
+        )
 
     def _render_layout_page(self) -> PrintPage:
         """Render the 2D layout for print, leaving the view on screen as it was."""
@@ -2872,9 +2882,13 @@ class MatplotlibViewer(QWidget):
 
         text_color = matplotlib.rcParams.get("text.color", "white")
         dim_color = "#8A9BAD"
-        label_size = 6.5
+        label_size = DIMENSION_LABEL_FONT_PT
         line_pts = 10.0  # below the optic
-        row_pts = (line_pts + 6.0, line_pts + 16.0)  # tops of the two label rows
+        first_row_pts = line_pts + 6.0
+        row_pts = (  # tops of the two label rows
+            first_row_pts,
+            first_row_pts + DIMENSION_ROW_SPACING * label_size,
+        )
         fig = ax.get_figure()
 
         def below_anchor(points: float):
@@ -2895,13 +2909,13 @@ class MatplotlibViewer(QWidget):
         if not dims:
             return
 
-        # Estimate label width in data coords (approx 6 chars × ~0.55 em at 6.5pt)
+        # Estimate label width in data coords (approx 6 chars × ~0.55 em)
         # Use the axis data range to convert points → data units.
         fig_width_in = ax.get_figure().get_figwidth()
         ax_width_frac = ax.get_position().width
         ax_data_width = ax.get_xlim()[1] - ax.get_xlim()[0]
         pts_per_data = (fig_width_in * ax_width_frac * 72.0) / max(ax_data_width, 1e-9)
-        char_width_data = (6.5 * 0.55) / pts_per_data  # approx width of one char
+        char_width_data = (label_size * 0.55) / pts_per_data  # one char, approx
         label_half_w = [len(f"{d[2]:.2f}") * char_width_data * 0.5 for d in dims]
 
         # Assign rows: put label on row 1 if it overlaps previous label on row 0

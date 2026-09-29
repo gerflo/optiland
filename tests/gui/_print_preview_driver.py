@@ -124,6 +124,11 @@ def _analysis_print():  # noqa: ANN202
 
 
 def main() -> int:
+    import optiland_gui.print_preview as print_preview
+
+    # The preview remembers its place and orientation; not in the user's
+    # settings from a test run.
+    print_preview.QSettings = _DefaultSettings
     app = QApplication.instance() or QApplication(sys.argv[:1])
     widget, open_preview = {"layout": _layout_print, "analysis": _analysis_print}[
         sys.argv[1]

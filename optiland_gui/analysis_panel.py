@@ -2147,10 +2147,14 @@ class AnalysisPanel(QWidget):
         if self.active_mpl_canvas_widget is None:
             QMessageBox.information(self, "Print", "No analysis plot to print.")
             return
+        analysis_name = self.plotTitleLabel.text()
+        # Each analysis has a preview window of its own (place, size,
+        # orientation), apart from the 2D layout's.
         show_print_preview(
             self,
-            f"Print Preview – {self.plotTitleLabel.text()}",
+            f"Print Preview – {analysis_name}",
             self._render_analysis_page,
+            window_key=f"Analysis {analysis_name}",
         )
 
     def _render_analysis_page(self) -> PrintPage:

@@ -8,6 +8,9 @@ Nothing here may process events while Qt regenerates the preview: opening a
 ``QPainter`` on the printer deletes the pages the preview widget still
 shows, and a repaint in that window reads freed memory. A progress display
 that did so crashed the application whenever the orientation was switched.
+
+Every preview window (the 2D layout, each analysis) reopens where it was
+closed, with the size and page orientation it had then.
 """
 
 from __future__ import annotations
@@ -19,9 +22,19 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import shiboken6
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QFontMetricsF, QImage, QPainter, QPen
+from PySide6.QtCore import QByteArray, QPointF, QRectF, QSettings, Qt
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QImage,
+    QPageLayout,
+    QPainter,
+    QPen,
+)
 from PySide6.QtWidgets import QApplication, QMessageBox, QStyleFactory, QWidget
+
+from .config import APPLICATION_NAME, ORGANIZATION_NAME
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -41,6 +54,13 @@ LEGEND_MARKER_SCALE = 1.3
 LEGEND_ROW_GAP = 0.35
 LEGEND_COLUMN_GAP = 2.0
 LEGEND_TOP_GAP = 1.0
+
+# Settings group of the preview windows' place, size and page orientation.
+PREVIEW_SETTINGS_GROUP = "PrintPreview"
+_ORIENTATIONS = {
+    "portrait": QPageLayout.Orientation.Portrait,
+    "landscape": QPageLayout.Orientation.Landscape,
+}
 
 # Qt's toolbar icons are dark and made for light backgrounds, so the preview
 # uses the light Fusion palette; the rules below override those of the app's
@@ -334,7 +354,10 @@ def paint_page(printer, page: PrintPage) -> None:
 
 
 def show_print_preview(
-    parent: QWidget, title: str, render: Callable[[], PrintPage]
+    parent: QWidget,
+    title: str,
+    render: Callable[[], PrintPage],
+    window_key: str,
 ) -> None:
     """Render a page once, then show it in a print preview dialog.
 
@@ -343,6 +366,8 @@ def show_print_preview(
         title: The dialog's window title.
         render: Builds the page; called once, under a wait cursor, before
             the dialog opens.
+        window_key: Names the preview window whose place, size and page
+            orientation are remembered from one opening to the next.
     """
     try:
         from PySide6.QtPrintSupport import QPrinter, QPrintPreviewDialog
@@ -364,7 +389,16 @@ def show_print_preview(
         logger.error("Could not render the plot for printing.")
         return
 
+    settings = QSettings(ORGANIZATION_NAME, APPLICATION_NAME)
+    prefix = _settings_prefix(window_key)
     printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+    # Before the dialog exists, so that it opens with the matching
+    # orientation button checked.
+    orientation = _ORIENTATIONS.get(
+        str(settings.value(f"{prefix}/orientation", "") or "")
+    )
+    if orientation is not None:
+        printer.setPageOrientation(orientation)
     preview = QPrintPreviewDialog(printer, parent)
     try:
         preview.setWindowTitle(title)
@@ -375,10 +409,26 @@ def show_print_preview(
         preview.setStyleSheet(_PREVIEW_STYLESHEET)
         preview.paintRequested.connect(lambda device: paint_page(device, page))
         _print_with_preview_page_layout(preview, printer)
+        geometry = settings.value(f"{prefix}/geometry")
+        if isinstance(geometry, QByteArray) and not geometry.isEmpty():
+            preview.restoreGeometry(geometry)
         preview.exec()
+        settings.setValue(f"{prefix}/geometry", preview.saveGeometry())
+        landscape = (
+            printer.pageLayout().orientation() == QPageLayout.Orientation.Landscape
+        )
+        settings.setValue(
+            f"{prefix}/orientation", "landscape" if landscape else "portrait"
+        )
     finally:
         # Delete the dialog while the printer it points to still exists.
         shiboken6.delete(preview)
+
+
+def _settings_prefix(window_key: str) -> str:
+    """Settings key prefix of one preview window; "/" would open a subgroup."""
+    name = window_key.replace("/", "_").replace("\\", "_")
+    return f"{PREVIEW_SETTINGS_GROUP}/{name}"
 
 
 def _print_with_preview_page_layout(preview, printer) -> None:
