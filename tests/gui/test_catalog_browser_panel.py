@@ -523,6 +523,42 @@ def test_catalog_browser_restores_saved_column_widths_and_sort(monkeypatch, qapp
     assert second_panel.results_table.horizontalHeaderItem(1).text() == "Manufacturer"
 
 
+def test_catalog_browser_searches_the_catalog_once_when_built(monkeypatch, qapp) -> None:
+    """Restoring the saved sort order must not run a search of its own.
+
+    The panel is built during the GUI start-up and searches the whole catalog
+    afterwards anyway; the extra search from the sort-indicator signal cost a
+    second pass over every record.
+    """
+    monkeypatch.setattr("optiland_gui.catalog_browser_panel.QSettings", _FakeSettings)
+    monkeypatch.setattr(
+        _FakeSettings,
+        "_store",
+        {"CatalogBrowser/Table/SortColumn": 5, "CatalogBrowser/Table/SortOrder": 1},
+    )
+
+    class _CountingConnector(_DummyConnector):
+        def __init__(self) -> None:
+            super().__init__()
+            self.search_calls = 0
+
+        def search_catalog_lenses(self, query: dict) -> list[dict]:
+            self.search_calls += 1
+            return []
+
+    connector = _CountingConnector()
+    panel = CatalogBrowserPanel(connector)
+    header = panel.results_table.horizontalHeader()
+
+    assert header.sortIndicatorSection() == 5
+    assert header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
+    assert connector.search_calls == 1
+
+    header.setSortIndicator(2, Qt.SortOrder.AscendingOrder)
+
+    assert connector.search_calls == 2
+
+
 def test_catalog_browser_updates_sorted_column_header_label_with_arrow(qapp) -> None:
     panel = CatalogBrowserPanel(_ResultConnector())
     header = panel.results_table.horizontalHeader()

@@ -12,12 +12,18 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 
 ROOT = Path(SPECPATH).resolve()
-ONEFILE = os.environ.get("OPTILAND_ONEFILE", "").lower() in {
-    "1",
-    "true",
-    "yes",
-    "on",
-}
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+ONEFILE = _env_flag("OPTILAND_ONEFILE")
+# The GUI never uses the PyTorch backend and optiland.backend falls back to
+# NumPy without it. Leaving torch out saves about 2 s of every start (far
+# more on a cold one) and 310 MB in 2000 files; OPTILAND_WITH_TORCH=1 keeps
+# it, e.g. for the torch backend in the built-in IPython console.
+WITH_TORCH = _env_flag("OPTILAND_WITH_TORCH")
 
 
 datas = []
@@ -66,6 +72,7 @@ analysis = Analysis(
         "matplotlib.tests",
         "PySide6.scripts",
         "scipy._lib.array_api_compat.dask",
+        *([] if WITH_TORCH else ["torch"]),
     ],
     noarchive=False,
     optimize=0,

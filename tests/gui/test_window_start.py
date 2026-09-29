@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import subprocess
 import sys
 import uuid
 from unittest.mock import MagicMock
@@ -343,7 +344,7 @@ class TestCommandLineFile:
             def exec(self) -> int:
                 return 0
 
-        monkeypatch.setattr(run_gui, "MainWindow", _window)
+        monkeypatch.setattr("optiland_gui.main_window.MainWindow", _window)
         monkeypatch.setattr(run_gui, "QApplication", _App)
         monkeypatch.setattr(run_gui, "QSplashScreen", lambda _pixmap: MagicMock())
         monkeypatch.setattr(run_gui._log_handler, "configure_logging", lambda: None)
@@ -359,3 +360,31 @@ class TestCommandLineFile:
         assert window.isFullScreen()
         _assert_one_menu_bar(window)
         assert window.panel_manager.nsq_panel.service.document_name == "design.olsys"
+
+
+class TestSplashFirst:
+    """The splash screen is up before the long imports of the main window."""
+
+    def test_entry_point_imports_neither_the_main_window_nor_optiland(self) -> None:
+        """Importing ``run_gui`` stays light, so ``main()`` shows the splash at once.
+
+        The main window pulls in Optiland, VTK, torch and the analysis stack:
+        several seconds, far longer on a cold start of the packaged
+        application. Imported at the top of ``run_gui``, nothing was on the
+        screen until all of it had loaded.
+        """
+        heavy = ("optiland_gui.main_window", "optiland", "vtk", "vtkmodules", "torch")
+        code = (
+            "import sys\n"
+            "import optiland_gui.run_gui\n"
+            f"print(sorted(m for m in {heavy!r} if m in sys.modules))\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
+        )
+
+        assert result.stdout.strip() == "[]"

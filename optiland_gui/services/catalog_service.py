@@ -168,12 +168,17 @@ class CatalogService:
         self._metadata_page_cache: dict[tuple[str, str], dict[str, object]] = {}
         self._product_url_cache: dict[tuple[str, str], str | None] = {}
         self._record_by_id: dict[str, CatalogLensRecord] = {}
+        self._first_record_by_id: dict[str, CatalogLensRecord] = {}
         self._surface_records: list[CatalogLensRecord] = []
         self._surface_records_by_part: dict[str, list[CatalogLensRecord]] = {}
         self._winlens_records: list[CatalogLensRecord] = []
         self._winlens_match_links_cache: dict[str, list[dict[str, object]]] | None = (
             None
         )
+        # (link map it was built from, target id -> [(source id, link), ...])
+        self._winlens_links_by_target_cache: (
+            tuple[dict, dict[str, list[tuple[str, dict]]]] | None
+        ) = None
         self._winlens_alias_groups_cache: list | None = None
         self._insertable_record_cache: dict[str, CatalogLensRecord | None] = {}
         self._importers = {
@@ -871,8 +876,8 @@ class CatalogService:
 
         linked_candidate = _resolve_insertable_record_from_winlens_links(
             record,
-            self._records,
-            self._load_winlens_match_links(),
+            self._first_record_by_id,
+            self._winlens_links_by_target(),
         )
         if linked_candidate is not None:
             self._insertable_record_cache[catalog_id] = linked_candidate
@@ -884,22 +889,8 @@ class CatalogService:
             self._winlens_records,
             alias_groups,
         )
-        if family_candidate is not None:
-            self._insertable_record_cache[catalog_id] = family_candidate
-            return family_candidate
-
-        if record.manufacturer.casefold() != "winlens library 2002":
-            self._insertable_record_cache[catalog_id] = None
-            return None
-
-        if not any(
-            candidate.manufacturer.casefold() == "winlens library 2002"
-            for candidate in self._surface_records
-        ):
-            self._insertable_record_cache[catalog_id] = None
-            return None
-        self._insertable_record_cache[catalog_id] = None
-        return None
+        self._insertable_record_cache[catalog_id] = family_candidate
+        return family_candidate
 
     def get_record_details(self, catalog_id: str) -> dict | None:
         """Return a full record payload for GUI detail display."""
@@ -1121,6 +1112,28 @@ class CatalogService:
         self._winlens_match_links_cache = links if isinstance(links, dict) else {}
         return self._winlens_match_links_cache
 
+    def _winlens_links_by_target(self) -> dict[str, list[tuple[str, dict]]]:
+        """Index the cached WinLens links by the record they point at.
+
+        Every source contributes, in link-map order, its first link to each
+        target. The index follows the link map: a reloaded map rebuilds it.
+        """
+        link_map = self._load_winlens_match_links()
+        cached = self._winlens_links_by_target_cache
+        if cached is not None and cached[0] is link_map:
+            return cached[1]
+        index: dict[str, list[tuple[str, dict]]] = {}
+        for source_id, links in link_map.items():
+            seen_targets: set[str] = set()
+            for link in links:
+                target_id = str(link.get("catalog_id", ""))
+                if target_id in seen_targets:
+                    continue
+                seen_targets.add(target_id)
+                index.setdefault(target_id, []).append((source_id, link))
+        self._winlens_links_by_target_cache = (link_map, index)
+        return index
+
     def _load_winlens_alias_groups(self, winlens_records: list[CatalogLensRecord]):
         """Load auxiliary WinLens alias groups near the imported SPD files."""
         if self._winlens_alias_groups_cache is not None:
@@ -1144,6 +1157,10 @@ class CatalogService:
     def _rebuild_record_indexes(self) -> None:
         """Prepare in-memory indexes used on hot catalog search paths."""
         self._record_by_id = {record.catalog_id: record for record in self._records}
+        # Link resolution takes the first record of a repeated id.
+        self._first_record_by_id = {}
+        for record in self._records:
+            self._first_record_by_id.setdefault(record.catalog_id, record)
         self._surface_records = [record for record in self._records if record.surfaces]
         self._surface_records_by_part = {}
         for record in self._surface_records:
@@ -1846,34 +1863,23 @@ def _alias_tokens_for_record(record: CatalogLensRecord, alias_groups: list) -> s
 
 def _resolve_insertable_record_from_winlens_links(
     record: CatalogLensRecord,
-    records: list[CatalogLensRecord],
-    link_map: dict[str, list[dict[str, object]]],
+    records_by_id: dict[str, CatalogLensRecord],
+    links_by_target: dict[str, list[tuple[str, dict]]],
 ) -> CatalogLensRecord | None:
     candidates: list[tuple[int, int, str, CatalogLensRecord]] = []
-    for winlens_catalog_id, links in link_map.items():
-        for link in links:
-            if str(link.get("catalog_id", "")) != record.catalog_id:
-                continue
-            source_record = next(
-                (
-                    candidate
-                    for candidate in records
-                    if candidate.catalog_id == winlens_catalog_id
-                ),
-                None,
+    for winlens_catalog_id, link in links_by_target.get(record.catalog_id, []):
+        source_record = records_by_id.get(winlens_catalog_id)
+        if source_record is None or not source_record.surfaces:
+            continue
+        match_type = str(link.get("match_type", "")).casefold()
+        candidates.append(
+            (
+                0 if match_type == "confirmed" else 1,
+                -len(source_record.surfaces),
+                source_record.part_number.casefold(),
+                source_record,
             )
-            if source_record is None or not source_record.surfaces:
-                continue
-            match_type = str(link.get("match_type", "")).casefold()
-            candidates.append(
-                (
-                    0 if match_type == "confirmed" else 1,
-                    -len(source_record.surfaces),
-                    source_record.part_number.casefold(),
-                    source_record,
-                )
-            )
-            break
+        )
 
     if not candidates:
         return None

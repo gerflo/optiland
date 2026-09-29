@@ -503,6 +503,11 @@ class MaterialBrowserPanel(QWidget):
         material_id = self._selected_material_id()
         if not material_id:
             return None
+        # The shown rows are search results already; asking the connector
+        # would search the whole material database once per selection.
+        for record in self._current_results:
+            if record.get("material_id") == material_id:
+                return record
         return self.connector.get_material_details(material_id)
 
     def _update_details(self) -> None:

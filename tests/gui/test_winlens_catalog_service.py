@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import struct
+import time
 from pathlib import Path
 from uuid import uuid4
 from unittest.mock import MagicMock
@@ -541,6 +542,128 @@ def test_search_reuses_cached_winlens_links_during_insertable_resolution(monkeyp
     assert any(row["insertable_surface_count"] == 1 for row in first)
     assert any(row["insertable_surface_count"] == 1 for row in second)
     assert load_calls.count("winlens_record_links") == 1
+
+
+@pytest.fixture()
+def service_with_records(monkeypatch):
+    """Factory: a service over given records whose WinLens link map is given."""
+    tmp_path = _workspace_tmp_dir()
+    monkeypatch.setattr(
+        "optiland_gui.catalogs.storage.QStandardPaths.writableLocation",
+        lambda *_args, **_kwargs: str(tmp_path),
+    )
+
+    def _make(
+        records: list[CatalogLensRecord],
+        links: dict[str, list[dict[str, object]]],
+    ) -> CatalogService:
+        service = CatalogService(MagicMock())
+        service._records = records
+        service._rebuild_record_indexes()
+        monkeypatch.setattr(
+            service._storage,
+            "load_cache_payload",
+            lambda name: {"links": links} if name == "winlens_record_links" else {},
+        )
+        return service
+
+    yield _make
+    shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+def _lens(
+    catalog_id: str, manufacturer: str, part: str, surfaces: int = 0
+) -> CatalogLensRecord:
+    return CatalogLensRecord(
+        catalog_id=catalog_id,
+        manufacturer=manufacturer,
+        part_number=part,
+        product_name=part,
+        surfaces=[LensSurfaceSpec() for _ in range(surfaces)],
+    )
+
+
+def test_resolving_every_record_of_a_large_catalog_does_not_scan_it_per_record(
+    service_with_records,
+) -> None:
+    """The catalog browser resolves every record once while the GUI starts.
+
+    With a 31 000-record catalog that took about 11 s of the start-up: each
+    linked record walked the whole link map and looked its WinLens source up
+    with a linear search, and each unresolved WinLens record ran an ``any``
+    over all surface records whose result was never used.
+    """
+    count = 3000
+    winlens = "WinLens Library 2002"
+    excelitas = "Excelitas LINOS"
+    wl = "winlens library 2002"
+    records = [
+        *(_lens(f"thorlabs:t{i}", "Thorlabs", f"T-{i}", 1) for i in range(count)),
+        *(_lens(f"excelitas linos:g{i}", excelitas, f"G-{i}") for i in range(count)),
+        *(_lens(f"{wl}:x{i}", winlens, f"X-{i}") for i in range(count)),
+        *(_lens(f"{wl}:w{i}", winlens, f"W-{i}", 2) for i in range(count)),
+    ]
+    links = {
+        f"{wl}:w{i}": [
+            {"catalog_id": f"excelitas linos:g{i}", "match_type": "confirmed"}
+        ]
+        for i in range(count)
+    }
+    service = service_with_records(records, links)
+
+    start = time.perf_counter()
+    resolved = {
+        record.catalog_id: service.resolve_insertable_record(record.catalog_id)
+        for record in records
+    }
+    elapsed = time.perf_counter() - start
+
+    assert resolved["excelitas linos:g7"].catalog_id == "winlens library 2002:w7"
+    assert resolved[f"excelitas linos:g{count - 1}"].catalog_id == (
+        f"winlens library 2002:w{count - 1}"
+    )
+    assert resolved["winlens library 2002:x7"] is None
+    assert resolved["thorlabs:t7"].catalog_id == "thorlabs:t7"
+    # Linear work is a few milliseconds here; the per-record scans took
+    # several seconds.
+    assert elapsed < 0.5, f"resolving {len(records)} records took {elapsed:.2f} s"
+
+
+def test_linked_insertable_record_prefers_confirmed_then_most_surfaces(
+    service_with_records,
+) -> None:
+    """The link index picks the same WinLens source as the full scan did.
+
+    A confirmed link beats a candidate with more surfaces; among confirmed
+    links the source with more surfaces wins; a link further down a source's
+    list counts; and of two records sharing an id the first one is the source.
+    """
+    winlens = "WinLens Library 2002"
+    wl = "winlens library 2002"
+    target = "excelitas linos:g1"
+    confirmed = {"catalog_id": target, "match_type": "confirmed"}
+    records = [
+        _lens(target, "Excelitas LINOS", "G-1"),
+        _lens(f"{wl}:dup", winlens, "DUP"),
+        _lens(f"{wl}:cand", winlens, "CAND", 9),
+        _lens(f"{wl}:conf1", winlens, "CONF1", 1),
+        _lens(f"{wl}:conf2", winlens, "CONF2", 2),
+        _lens(f"{wl}:dup", winlens, "DUP", 5),
+    ]
+    links = {
+        f"{wl}:dup": [confirmed],
+        f"{wl}:cand": [{"catalog_id": target, "match_type": "candidate"}],
+        f"{wl}:conf1": [confirmed],
+        f"{wl}:conf2": [
+            {"catalog_id": "excelitas linos:g2", "match_type": "confirmed"},
+            confirmed,
+        ],
+    }
+    service = service_with_records(records, links)
+
+    insertable = service.resolve_insertable_record(target)
+
+    assert insertable is records[4]
 
 
 def test_load_winlens_dat_records_parses_sh_l1_plano_convex_singlet_family() -> None:

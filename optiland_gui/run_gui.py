@@ -20,7 +20,6 @@ from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import QApplication, QSplashScreen
 
 from .config import APPLICATION_NAME, OPTILAND_ICON_PATH, ORGANIZATION_NAME
-from .main_window import MainWindow
 from .resources import resources_rc  # noqa: F401
 from .utils import logging_handler as _log_handler
 
@@ -103,6 +102,11 @@ def main() -> None:
     )
     splash.show()
     app.processEvents()
+
+    # The main window pulls in Optiland, VTK and the analysis stack, which
+    # takes seconds (far longer on a cold start of the packaged app); it is
+    # imported only now so that the splash screen is up in the meantime.
+    from .main_window import MainWindow
 
     # Initialize the main window while splash is visible.  The time taken
     # here is the actual loading time the user experiences.

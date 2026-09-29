@@ -426,7 +426,7 @@ class CatalogBrowserPanel(QWidget):
         header.sectionMoved.connect(self._sync_filter_row_geometry)
         header.sortIndicatorChanged.connect(self._save_table_state)
         header.sortIndicatorChanged.connect(self._update_sort_header_labels)
-        header.sortIndicatorChanged.connect(lambda *_args: self.refresh())
+        header.sortIndicatorChanged.connect(self._refresh_after_sort_change)
         self.results_table.installEventFilter(self)
         self.copy_cell_shortcut.activated.connect(self._copy_current_cell_to_clipboard)
         self.copy_insert_shortcut.activated.connect(
@@ -914,6 +914,16 @@ class CatalogBrowserPanel(QWidget):
             header.sortIndicatorSection(),
             header.sortIndicatorOrder(),
         )
+
+    def _refresh_after_sort_change(self, *args) -> None:  # noqa: ANN002
+        """Search again for a new sort order, but not while it is restored.
+
+        The panel searches right after restoring its table state; a search
+        from the restore itself would pass over the whole catalog twice.
+        """
+        if self._restoring_table_state:
+            return
+        self.refresh()
 
     def _save_table_state(self, *args) -> None:  # noqa: ANN002
         """Persist current column widths and sort state."""

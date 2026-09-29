@@ -117,6 +117,39 @@ def test_material_browser_panel_renders_result_and_details(qapp) -> None:
     assert panel.details_box.isHidden() is False
 
 
+def test_material_browser_selection_shows_details_without_a_new_search(qapp) -> None:
+    """The details of a shown row come from the row, not from the database.
+
+    A details lookup searched the whole material database (about 0.4 s with
+    the full catalog) at every selection change, twice during start-up.
+    """
+
+    class _CountingConnector(_DummyConnector):
+        def __init__(self) -> None:
+            super().__init__()
+            self.search_calls = 0
+            self.details_calls = 0
+
+        def search_materials(self, query: dict | None = None) -> list[dict]:
+            self.search_calls += 1
+            return super().search_materials(query)
+
+        def get_material_details(self, material_id: str) -> dict | None:
+            self.details_calls += 1
+            return super().get_material_details(material_id)
+
+    connector = _CountingConnector()
+    panel = MaterialBrowserPanel(connector)
+    searches_after_build = connector.search_calls
+
+    panel.results_table.selectRow(1)
+
+    assert "ADC1" in panel.details_text.text()
+    assert "WinLens Import" in panel.details_text.text()
+    assert connector.search_calls == searches_after_build
+    assert connector.details_calls == 0
+
+
 def test_material_browser_selection_details_can_be_collapsed(qapp) -> None:
     panel = MaterialBrowserPanel(_DummyConnector())
 

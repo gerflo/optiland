@@ -69,3 +69,22 @@ def test_spec_bundles_every_savefig_backend(monkeypatch):
         for fmt in FigureCanvasBase.get_supported_filetypes()
     }
     assert required <= hiddenimports, sorted(required - hiddenimports)
+
+
+def test_spec_leaves_torch_out_by_default(monkeypatch):
+    """The GUI never uses the PyTorch backend, so the build does not carry it.
+
+    torch was 310 MB and about 2000 files of the packaged app and took about
+    2 s of every start (much more on a cold start); ``optiland.backend``
+    falls back to NumPy when it is missing.
+    """
+    monkeypatch.delenv("OPTILAND_WITH_TORCH", raising=False)
+
+    assert "torch" in _spec_analysis_kwargs(monkeypatch)["excludes"]
+
+
+def test_spec_keeps_torch_on_request(monkeypatch):
+    """``OPTILAND_WITH_TORCH=1`` (``make_windows_bin.cmd --with-torch``)."""
+    monkeypatch.setenv("OPTILAND_WITH_TORCH", "1")
+
+    assert "torch" not in _spec_analysis_kwargs(monkeypatch)["excludes"]

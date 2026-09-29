@@ -5,11 +5,17 @@ set "ROOT=%~dp0.."
 pushd "%ROOT%" >nul
 
 set "ONEFILE=0"
+set "OPTILAND_WITH_TORCH=0"
 
 :parse_args
 if "%~1"=="" goto args_done
 if /I "%~1"=="--onefile" (
     set "ONEFILE=1"
+    shift
+    goto parse_args
+)
+if /I "%~1"=="--with-torch" (
+    set "OPTILAND_WITH_TORCH=1"
     shift
     goto parse_args
 )
@@ -68,16 +74,17 @@ exit /b 0
 
 :usage
 echo Usage:
-echo   tools\make_windows_bin.cmd [--onefile]
+echo   tools\make_windows_bin.cmd [--onefile] [--with-torch]
 echo.
 echo Default builds dist\Optiland\Optiland.exe.
 echo --onefile builds dist\Optiland.exe.
+echo --with-torch bundles PyTorch (the GUI does not need it; slower start).
 popd >nul
 exit /b 0
 
 :usage_error
 echo.
 echo Usage:
-echo   tools\make_windows_bin.cmd [--onefile]
+echo   tools\make_windows_bin.cmd [--onefile] [--with-torch]
 popd >nul
 exit /b 2
