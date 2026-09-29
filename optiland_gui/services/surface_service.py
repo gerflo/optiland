@@ -701,7 +701,9 @@ class SurfaceService:
         self, insert_idx: int, material, thickness: float, old_state
     ) -> None:
         """Low-level helper: insert one surface and emit change signals."""
-        self._connector._optic.surfaces.add(
+        surfaces = self._connector._optic.surfaces
+        first_z = surfaces.first_surface_z() if insert_idx == 1 else None
+        surfaces.add(
             surface_type="standard",
             radius=float("inf"),
             thickness=thickness,
@@ -709,6 +711,18 @@ class SurfaceService:
             comment="New Surface",
             index=insert_idx,
         )
+        if (
+            first_z is not None
+            and float(thickness) != 0.0
+            and not surfaces.surface_factory.use_absolute_cs
+        ):
+            # A surface added at index 1 takes the place of surface 1 and the
+            # chain behind it moves by the new thickness (O16). The editor's
+            # inserts keep every surface where it lies: the new surface goes
+            # in front of the old surface 1 (O23).
+            surfaces._update_coordinate_systems(
+                start_index=1, first_z=first_z - float(thickness)
+            )
         self._connector._optic.updater.update()
         self._connector._undo_redo_manager.add_state(old_state)
         self._connector.set_modified(True)
@@ -765,7 +779,9 @@ class SurfaceService:
 
         *surface_index*'s thickness is reduced to *gap* (clamped to its current
         value); the new surface receives the remaining thickness so the next
-        surface's z-position is preserved.
+        surface's z-position is preserved. An object at infinity keeps its
+        distance: after it, the new surface goes directly in front of
+        surface 1.
 
         Args:
             surface_index: Index of the surface that will precede the new one.
@@ -781,6 +797,10 @@ class SurfaceService:
             material = "Air"
 
         current = surfaces[surface_index]
+        if surface_index == 0 and not math.isfinite(float(current.thickness)):
+            # The object's distance stays infinite (O23).
+            self._do_insert(1, material, 0.0, old_state)
+            return
         T = max(0.0, float(current.thickness))
         actual_gap = min(float(gap), T)
         current.thickness = actual_gap
