@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
     QObject,
@@ -11,11 +11,13 @@ from PySide6.QtCore import (
     Qt,
     QThread,
     QTimer,
+    QUrl,
     Signal,
     Slot,
 )
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QFrame,
     QGroupBox,
@@ -32,15 +34,15 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
-    QComboBox,
 )
-from PySide6.QtCore import QUrl
 
 from .config import APPLICATION_NAME, ORGANIZATION_NAME
 from .theme_manager import get_icon_theme_id
 from .utils.table_copy import TableCopySupport
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from .optiland_connector import OptilandConnector
 
 
@@ -131,7 +133,9 @@ class MaterialBrowserPanel(QWidget):
         controls_box = QGroupBox("Material Tools")
         controls_layout = QHBoxLayout(controls_box)
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("Search by reference, glass name, category...")
+        self.search_edit.setPlaceholderText(
+            "Search by reference, glass name, category..."
+        )
         controls_layout.addWidget(QLabel("Search"))
         controls_layout.addWidget(self.search_edit, 1)
 
@@ -219,7 +223,9 @@ class MaterialBrowserPanel(QWidget):
         self.details_toggle_button.setText("Selection Details")
         self.details_toggle_button.setCheckable(True)
         self.details_toggle_button.setChecked(True)
-        self.details_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.details_toggle_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
         self.details_toggle_button.setArrowType(Qt.ArrowType.DownArrow)
         layout.addWidget(self.details_toggle_button)
 
@@ -264,13 +270,19 @@ class MaterialBrowserPanel(QWidget):
     def update_theme(self, theme_name: str) -> None:
         """Refresh toolbar icons after an application theme change."""
         self._configure_toolbar_action_button(
-            self.mark_filtered_button, "mark_all.svg", self.mark_filtered_button.toolTip()
+            self.mark_filtered_button,
+            "mark_all.svg",
+            self.mark_filtered_button.toolTip(),
         )
         self._configure_toolbar_action_button(
-            self.clear_marks_button, "clear_marks.svg", self.clear_marks_button.toolTip()
+            self.clear_marks_button,
+            "clear_marks.svg",
+            self.clear_marks_button.toolTip(),
         )
         self._configure_toolbar_action_button(
-            self.delete_marked_button, "delete_marks.svg", self.delete_marked_button.toolTip()
+            self.delete_marked_button,
+            "delete_marks.svg",
+            self.delete_marked_button.toolTip(),
         )
 
     def _set_details_expanded(self, expanded: bool) -> None:
@@ -288,14 +300,18 @@ class MaterialBrowserPanel(QWidget):
         self.clear_marks_button.clicked.connect(self._clear_marked_results)
         self.delete_marked_button.clicked.connect(self._delete_marked_results)
         self.import_winlens_button.clicked.connect(self._import_winlens_materials)
-        self.open_material_file_button.clicked.connect(self._open_selected_material_file)
+        self.open_material_file_button.clicked.connect(
+            self._open_selected_material_file
+        )
         self.results_table.itemSelectionChanged.connect(self._update_details)
         header = self.results_table.horizontalHeader()
         header.sectionClicked.connect(self._toggle_sort_column)
         header.sectionResized.connect(self._sync_filter_row_geometry)
         header.sectionMoved.connect(self._sync_filter_row_geometry)
         self.connector.materialsChanged.connect(self.refresh)
-        self._task_finished.connect(self._handle_task_finished, Qt.ConnectionType.QueuedConnection)
+        self._task_finished.connect(
+            self._handle_task_finished, Qt.ConnectionType.QueuedConnection
+        )
 
     @Slot()
     def refresh(self) -> None:
@@ -334,7 +350,10 @@ class MaterialBrowserPanel(QWidget):
         )
 
     def _toggle_sort_column(self, column: int) -> None:
-        if self._sort_column == column and self._sort_order == Qt.SortOrder.AscendingOrder:
+        if (
+            self._sort_column == column
+            and self._sort_order == Qt.SortOrder.AscendingOrder
+        ):
             next_order = Qt.SortOrder.DescendingOrder
         else:
             next_order = Qt.SortOrder.AscendingOrder
@@ -346,8 +365,10 @@ class MaterialBrowserPanel(QWidget):
         self._update_sort_header_labels(column, next_order)
         self.refresh()
 
-    def _update_sort_header_labels(self, column: int | None, order: Qt.SortOrder) -> None:
-        for index, base_label in enumerate(self.RESULT_COLUMNS):
+    def _update_sort_header_labels(
+        self, column: int | None, order: Qt.SortOrder
+    ) -> None:
+        for index in range(len(self.RESULT_COLUMNS)):
             label = self.HEADER_LABELS[index]
             if column is not None and index == column:
                 arrow = (
@@ -358,7 +379,9 @@ class MaterialBrowserPanel(QWidget):
                 label = f"{label} {arrow}"
             item = self.results_table.horizontalHeaderItem(index)
             if item is None:
-                self.results_table.setHorizontalHeaderItem(index, QTableWidgetItem(label))
+                self.results_table.setHorizontalHeaderItem(
+                    index, QTableWidgetItem(label)
+                )
             else:
                 item.setText(label)
 
@@ -403,7 +426,9 @@ class MaterialBrowserPanel(QWidget):
 
         self._sync_filter_row_geometry()
         count = len(self._current_results)
-        self.status_label.setText(f"{count} material entries found." if count else "No materials found.")
+        self.status_label.setText(
+            f"{count} material entries found." if count else "No materials found."
+        )
         if count:
             self.results_table.selectRow(0)
             self._update_details()
@@ -486,12 +511,13 @@ class MaterialBrowserPanel(QWidget):
             self.details_text.clear()
             self.open_material_file_button.setEnabled(False)
             return
+        category = details.get("category_full", details.get("category", "-"))
         self.details_text.setText(
             "<br>".join(
                 [
                     f"<b>{details.get('name', '-')}</b>",
                     f"Reference: {details.get('reference', '-')}",
-                    f"Category: {details.get('category_full', details.get('category', '-'))}",
+                    f"Category: {category}",
                     f"Source: {details.get('source', '-')}",
                     (
                         "Wavelength range: "
@@ -502,7 +528,9 @@ class MaterialBrowserPanel(QWidget):
                 ]
             )
         )
-        self.open_material_file_button.setEnabled(bool(details.get("absolute_filename")))
+        self.open_material_file_button.setEnabled(
+            bool(details.get("absolute_filename"))
+        )
 
     def _import_winlens_materials(self) -> None:
         folder_path = QFileDialog.getExistingDirectory(
@@ -535,7 +563,10 @@ class MaterialBrowserPanel(QWidget):
             finally:
                 self._updating_mark_column = False
             self._notify(
-                "Built-in material entries cannot be marked for deletion. Only local WinLens imports can be deleted.",
+                (
+                    "Built-in material entries cannot be marked for deletion. "
+                    "Only local WinLens imports can be deleted."
+                ),
                 "warning",
             )
             return
@@ -579,7 +610,9 @@ class MaterialBrowserPanel(QWidget):
         self._marked_material_ids.difference_update(deleted_ids)
         self.refresh()
         self._notify(
-            f"Deleted {deleted} imported material(s)." if deleted else "No imported materials were deleted.",
+            f"Deleted {deleted} imported material(s)."
+            if deleted
+            else "No imported materials were deleted.",
             "success" if deleted else "info",
         )
 
@@ -647,7 +680,9 @@ class MaterialBrowserPanel(QWidget):
         self.delete_marked_button.setEnabled(not busy)
         if busy:
             self._busy_frame_index = 0
-            self.import_busy_indicator.setText(self._busy_frames[self._busy_frame_index])
+            self.import_busy_indicator.setText(
+                self._busy_frames[self._busy_frame_index]
+            )
             self.import_busy_indicator.setVisible(True)
             self._busy_timer.start()
             return
@@ -664,10 +699,13 @@ class MaterialBrowserPanel(QWidget):
             return
         header = self.results_table.horizontalHeader()
         total_width = sum(
-            header.sectionSize(column) for column in range(self.results_table.columnCount())
+            header.sectionSize(column)
+            for column in range(self.results_table.columnCount())
         )
         frame_width = self.results_table.frameWidth() * 2
-        vertical_scrollbar_width = self.results_table.verticalScrollBar().sizeHint().width()
+        vertical_scrollbar_width = (
+            self.results_table.verticalScrollBar().sizeHint().width()
+        )
         content_width = total_width + frame_width + vertical_scrollbar_width
         self.filter_row_container.setMinimumWidth(content_width)
         self.results_table.setMinimumWidth(content_width)

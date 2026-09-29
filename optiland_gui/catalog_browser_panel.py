@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from typing import Callable
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import (
@@ -22,15 +21,17 @@ from PySide6.QtGui import QDesktopServices, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFrame,
-    QHeaderView,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -43,12 +44,11 @@ from PySide6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
-    QComboBox,
-    QMenu,
 )
 
 if TYPE_CHECKING:
-    from .main_window import MainWindow
+    from collections.abc import Callable
+
     from .optiland_connector import OptilandConnector
 
 from .config import APPLICATION_NAME, ORGANIZATION_NAME
@@ -283,7 +283,9 @@ class CatalogBrowserPanel(QWidget):
             self.results_table, enable_context_menu=False
         )
         self.copy_cell_shortcut = QShortcut(QKeySequence("Ctrl+C"), self.results_table)
-        self.copy_insert_shortcut = QShortcut(QKeySequence("Ctrl+Insert"), self.results_table)
+        self.copy_insert_shortcut = QShortcut(
+            QKeySequence("Ctrl+Insert"), self.results_table
+        )
         self.copy_cell_shortcut.setContext(
             Qt.ShortcutContext.WidgetWithChildrenShortcut
         )
@@ -302,7 +304,9 @@ class CatalogBrowserPanel(QWidget):
         self.details_toggle_button.setText("Selection Details")
         self.details_toggle_button.setCheckable(True)
         self.details_toggle_button.setChecked(True)
-        self.details_toggle_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.details_toggle_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
         self.details_toggle_button.setArrowType(Qt.ArrowType.DownArrow)
         layout.addWidget(self.details_toggle_button)
 
@@ -368,13 +372,19 @@ class CatalogBrowserPanel(QWidget):
     def update_theme(self, theme_name: str) -> None:
         """Refresh toolbar icons after an application theme change."""
         self._configure_toolbar_action_button(
-            self.mark_filtered_button, "mark_all.svg", self.mark_filtered_button.toolTip()
+            self.mark_filtered_button,
+            "mark_all.svg",
+            self.mark_filtered_button.toolTip(),
         )
         self._configure_toolbar_action_button(
-            self.clear_marks_button, "clear_marks.svg", self.clear_marks_button.toolTip()
+            self.clear_marks_button,
+            "clear_marks.svg",
+            self.clear_marks_button.toolTip(),
         )
         self._configure_toolbar_action_button(
-            self.delete_marked_button, "delete_marks.svg", self.delete_marked_button.toolTip()
+            self.delete_marked_button,
+            "delete_marks.svg",
+            self.delete_marked_button.toolTip(),
         )
         icon_theme = self._icon_theme(theme_name)
         checked = self.insertable_only_button.isChecked()
@@ -406,7 +416,9 @@ class CatalogBrowserPanel(QWidget):
         )
         self.insertable_only_button.toggled.connect(self.refresh)
         self.results_table.itemSelectionChanged.connect(self._update_details)
-        self.results_table.customContextMenuRequested.connect(self._show_results_context_menu)
+        self.results_table.customContextMenuRequested.connect(
+            self._show_results_context_menu
+        )
         self.results_table.itemChanged.connect(self._handle_results_item_changed)
         header = self.results_table.horizontalHeader()
         header.sectionMoved.connect(self._save_table_state)
@@ -417,15 +429,21 @@ class CatalogBrowserPanel(QWidget):
         header.sortIndicatorChanged.connect(lambda *_args: self.refresh())
         self.results_table.installEventFilter(self)
         self.copy_cell_shortcut.activated.connect(self._copy_current_cell_to_clipboard)
-        self.copy_insert_shortcut.activated.connect(self._copy_current_cell_to_clipboard)
-        self.insert_before_button.clicked.connect(lambda: self._insert_selected("before"))
+        self.copy_insert_shortcut.activated.connect(
+            self._copy_current_cell_to_clipboard
+        )
+        self.insert_before_button.clicked.connect(
+            lambda: self._insert_selected("before")
+        )
         self.insert_after_button.clicked.connect(lambda: self._insert_selected("after"))
         self.replace_button.clicked.connect(self._replace_selected)
         self.mark_filtered_button.clicked.connect(self._mark_filtered_results)
         self.clear_marks_button.clicked.connect(self._clear_marked_results)
         self.delete_marked_button.clicked.connect(self._delete_marked_results)
         self.connector.catalogChanged.connect(self.refresh)
-        self._task_finished.connect(self._handle_task_finished, Qt.ConnectionType.QueuedConnection)
+        self._task_finished.connect(
+            self._handle_task_finished, Qt.ConnectionType.QueuedConnection
+        )
 
     def _build_catalog_menus(self) -> None:
         """Build the online-download dropdown menu."""
@@ -663,11 +681,14 @@ class CatalogBrowserPanel(QWidget):
         header = self.results_table.horizontalHeader()
         column = header.sortIndicatorSection()
         reverse = header.sortIndicatorOrder() == Qt.SortOrder.DescendingOrder
-        default_priority = lambda record: (
-            -int(record.get("insertable_surface_count", 0) or 0),
-            -int(record.get("surface_count", 0) or 0),
-            str(record.get("catalog_id", "")).casefold(),
-        )
+
+        def default_priority(record: dict) -> tuple[int, int, str]:
+            return (
+                -int(record.get("insertable_surface_count", 0) or 0),
+                -int(record.get("surface_count", 0) or 0),
+                str(record.get("catalog_id", "")).casefold(),
+            )
+
         key_funcs = {
             0: default_priority,
             1: lambda record: str(record.get("manufacturer", "")).casefold(),
@@ -678,7 +699,9 @@ class CatalogBrowserPanel(QWidget):
             6: lambda record: _sortable_number(record.get("diameter_mm")),
             7: lambda record: str(record.get("material_summary", "") or "").casefold(),
             8: lambda record: str(record.get("coating", "") or "").casefold(),
-            9: lambda record: str(record.get("availability_status", "") or "").casefold(),
+            9: lambda record: str(
+                record.get("availability_status", "") or ""
+            ).casefold(),
             10: lambda record: str(record.get("match_type", "") or "").casefold(),
         }
         key_func = key_funcs.get(column, key_funcs[0])
@@ -687,7 +710,7 @@ class CatalogBrowserPanel(QWidget):
     @Slot(int, Qt.SortOrder)
     def _update_sort_header_labels(self, column: int, order: Qt.SortOrder) -> None:
         """Append a small arrow to the actively sorted column label."""
-        for index, base_label in enumerate(self.RESULT_COLUMNS):
+        for index in range(len(self.RESULT_COLUMNS)):
             label = self.HEADER_LABELS[index]
             if index == column:
                 arrow = (
@@ -698,7 +721,9 @@ class CatalogBrowserPanel(QWidget):
                 label = f"{label} {arrow}"
             item = self.results_table.horizontalHeaderItem(index)
             if item is None:
-                self.results_table.setHorizontalHeaderItem(index, QTableWidgetItem(label))
+                self.results_table.setHorizontalHeaderItem(
+                    index, QTableWidgetItem(label)
+                )
             else:
                 item.setText(label)
 
@@ -732,12 +757,15 @@ class CatalogBrowserPanel(QWidget):
         if not details:
             self.details_text.clear()
             return
-        source = details.get("source", {}) if isinstance(details.get("source"), dict) else {}
+        source = (
+            details.get("source", {}) if isinstance(details.get("source"), dict) else {}
+        )
         imported_at = str(source.get("imported_at", "-")).replace("T", " ")
         links = self.connector.get_catalog_record_links(catalog_id)
         lines = [
             (
-                f"<b>{details.get('manufacturer', '')} {details.get('part_number', '')}</b>"
+                f"<b>{details.get('manufacturer', '')} "
+                f"{details.get('part_number', '')}</b>"
                 f" | {details.get('product_name', '')}"
             ),
             (
@@ -758,13 +786,16 @@ class CatalogBrowserPanel(QWidget):
             top_link = links[0]
             lines.append(
                 "<small>"
-                f"Top link: {top_link.get('manufacturer', '-')} {top_link.get('part_number', '-')}"
+                f"Top link: {top_link.get('manufacturer', '-')} "
+                f"{top_link.get('part_number', '-')}"
                 f" [{top_link.get('match_type', 'candidate')}]"
                 f" (score {top_link.get('score', 0)})"
                 "</small>"
             )
         elif str(source.get("source_type", "")).casefold().startswith("winlens_"):
-            lines.append("<small>Top link: no current catalog match suggestion.</small>")
+            lines.append(
+                "<small>Top link: no current catalog match suggestion.</small>"
+            )
         self.details_text.setTextFormat(Qt.TextFormat.RichText)
         self.details_text.setText("<br>".join(lines))
 
@@ -814,7 +845,9 @@ class CatalogBrowserPanel(QWidget):
             return
         removed = self.connector.delete_catalog_records(marked)
         self._marked_catalog_ids.clear()
-        self._notify(f"Deleted {removed} catalog entries.", "success" if removed else "info")
+        self._notify(
+            f"Deleted {removed} catalog entries.", "success" if removed else "info"
+        )
 
     def _reset_filters(self) -> None:
         """Reset all catalog search filters to their default state."""
@@ -842,9 +875,11 @@ class CatalogBrowserPanel(QWidget):
         try:
             header = self.results_table.horizontalHeader()
             header_state = self.settings.value(self._settings_key("HeaderState"))
-            if isinstance(header_state, bytes):
-                header.restoreState(header_state)
-            elif header_state is not None and hasattr(header_state, "data"):
+            if (
+                isinstance(header_state, bytes)
+                or header_state is not None
+                and hasattr(header_state, "data")
+            ):
                 header.restoreState(header_state)
             else:
                 default_widths = [54, 130, 110, 260, 120, 90, 90, 140, 140, 100, 100]
@@ -872,7 +907,9 @@ class CatalogBrowserPanel(QWidget):
     def _apply_saved_sort(self) -> None:
         """Apply the persisted sort order to the current result table."""
         header = self.results_table.horizontalHeader()
-        header.setSortIndicator(header.sortIndicatorSection(), header.sortIndicatorOrder())
+        header.setSortIndicator(
+            header.sortIndicatorSection(), header.sortIndicatorOrder()
+        )
         self._update_sort_header_labels(
             header.sortIndicatorSection(),
             header.sortIndicatorOrder(),
@@ -899,7 +936,14 @@ class CatalogBrowserPanel(QWidget):
             self,
             f"Import {manufacturer} Catalog",
             "",
-            "Catalog Files (*.zip *.zmx *.zmf *.json);;Catalog Archives (*.zip);;Zemax Files (*.zmx);;Zemax Catalog Files (*.zmf);;Normalized Catalog JSON (*.json);;All Files (*)",
+            (
+                "Catalog Files (*.zip *.zmx *.zmf *.json);;"
+                "Catalog Archives (*.zip);;"
+                "Zemax Files (*.zmx);;"
+                "Zemax Catalog Files (*.zmf);;"
+                "Normalized Catalog JSON (*.json);;"
+                "All Files (*)"
+            ),
         )
         if not filepaths:
             return
@@ -1047,14 +1091,19 @@ class CatalogBrowserPanel(QWidget):
                     continue
                 selections.append(
                     {
-                        "winlens_catalog_id": str(payload.get("winlens_catalog_id", "")),
+                        "winlens_catalog_id": str(
+                            payload.get("winlens_catalog_id", "")
+                        ),
                         "target_catalog_id": str(payload.get("target_catalog_id", "")),
                     }
                 )
         if not selections:
             return
         confirmed = self.connector.confirm_winlens_links(selections)
-        self._notify(f"Confirmed {confirmed} WinLens link(s).", "success" if confirmed else "info")
+        self._notify(
+            f"Confirmed {confirmed} WinLens link(s).",
+            "success" if confirmed else "info",
+        )
 
     def _set_review_tree_checked(self, tree: QTreeWidget, checked: bool) -> None:
         self._updating_review_tree_checks = True
@@ -1067,7 +1116,9 @@ class CatalogBrowserPanel(QWidget):
                 parent_item.child(child_index).setCheckState(0, state)
         self._updating_review_tree_checks = False
 
-    def _handle_review_tree_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+    def _handle_review_tree_item_changed(
+        self, item: QTreeWidgetItem, column: int
+    ) -> None:
         if column != 0 or self._updating_review_tree_checks:
             return
         self._updating_review_tree_checks = True
@@ -1193,7 +1244,8 @@ class CatalogBrowserPanel(QWidget):
         dialog.setText("Automatic download was not available from Thorlabs.")
         dialog.setInformativeText(
             "Open the official Thorlabs Zemax page in your browser, download the "
-            "catalog package manually, and then import the downloaded ZIP, ZMX, or ZMF file."
+            "catalog package manually, and then import the downloaded ZIP, ZMX, "
+            "or ZMF file."
         )
         dialog.setDetailedText(error_text)
         open_button = dialog.addButton(
@@ -1328,18 +1380,24 @@ class CatalogBrowserPanel(QWidget):
             return
         urls = self.connector.get_catalog_document_urls(catalog_id)
         if not urls:
-            self._notify("No vendor document available for this catalog entry.", "warning")
+            self._notify(
+                "No vendor document available for this catalog entry.", "warning"
+            )
             return
         QDesktopServices.openUrl(QUrl(urls[0]))
 
     def _open_vendor_document_url(self, url: str) -> None:
         """Open a specific vendor-document URL."""
         if not url:
-            self._notify("No vendor document available for this catalog entry.", "warning")
+            self._notify(
+                "No vendor document available for this catalog entry.", "warning"
+            )
             return
         QDesktopServices.openUrl(QUrl(url))
 
-    def _populate_vendor_document_menu(self, menu: QMenu, document_urls: list[str]) -> None:
+    def _populate_vendor_document_menu(
+        self, menu: QMenu, document_urls: list[str]
+    ) -> None:
         """Populate *menu* with one action per vendor-document URL."""
         for index, url in enumerate(document_urls, start=1):
             label = f"Document {index}"
@@ -1351,7 +1409,7 @@ class CatalogBrowserPanel(QWidget):
             )
 
     def _show_results_context_menu(self, pos) -> None:  # noqa: ANN001
-        """Show a context menu with copy and product-link actions for the result table."""
+        """Show the result table's context menu with copy and product-link actions."""
         item = self.results_table.itemAt(pos)
         if item is not None:
             self.results_table.setCurrentItem(item)
@@ -1369,8 +1427,12 @@ class CatalogBrowserPanel(QWidget):
         current_item = self.results_table.currentItem()
         has_item = current_item is not None and current_item.row() >= 0
         catalog_id = self._selected_catalog_id() if has_item else ""
-        product_url = self.connector.resolve_catalog_product_url(catalog_id) if catalog_id else ""
-        document_urls = self.connector.get_catalog_document_urls(catalog_id) if catalog_id else []
+        product_url = (
+            self.connector.resolve_catalog_product_url(catalog_id) if catalog_id else ""
+        )
+        document_urls = (
+            self.connector.get_catalog_document_urls(catalog_id) if catalog_id else []
+        )
         insert_before_action.setEnabled(has_item)
         insert_after_action.setEnabled(has_item)
         replace_action.setEnabled(has_item)
@@ -1411,10 +1473,13 @@ class CatalogBrowserPanel(QWidget):
             return
         header = self.results_table.horizontalHeader()
         total_width = sum(
-            header.sectionSize(column) for column in range(self.results_table.columnCount())
+            header.sectionSize(column)
+            for column in range(self.results_table.columnCount())
         )
         frame_width = self.results_table.frameWidth() * 2
-        vertical_scrollbar_width = self.results_table.verticalScrollBar().sizeHint().width()
+        vertical_scrollbar_width = (
+            self.results_table.verticalScrollBar().sizeHint().width()
+        )
         content_width = total_width + frame_width + vertical_scrollbar_width
         self.filter_row_container.setMinimumWidth(content_width)
         self.results_table.setMinimumWidth(content_width)
@@ -1520,7 +1585,9 @@ class CatalogBrowserPanel(QWidget):
         self.reset_filters_button.setEnabled(not busy)
         if busy:
             self._busy_frame_index = 0
-            self.import_busy_indicator.setText(self._busy_frames[self._busy_frame_index])
+            self.import_busy_indicator.setText(
+                self._busy_frames[self._busy_frame_index]
+            )
             self.import_busy_indicator.setVisible(True)
             self._busy_timer.start()
             return
@@ -1543,7 +1610,11 @@ class CatalogBrowserPanel(QWidget):
         self._set_task_busy(False)
         self._result_population_timer.stop()
         thread = self._task_thread
-        if thread is not None and thread.isRunning() and thread != QThread.currentThread():
+        if (
+            thread is not None
+            and thread.isRunning()
+            and thread != QThread.currentThread()
+        ):
             thread.quit()
             thread.wait(5000)
         super().closeEvent(event)

@@ -9,41 +9,50 @@ import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, quote_plus, urljoin, urlparse
 
 import requests
 
 from optiland_gui.catalogs.importers import (
-    ExcelitasCatalogImporter,
     EdmundCatalogImporter,
+    ExcelitasCatalogImporter,
     ThorlabsCatalogImporter,
     WinLensCatalogImporter,
 )
-from optiland_gui.catalogs.importers.winlens_spd import (
-    is_winlens_catalog_path,
-    load_winlens_alias_groups,
-)
 from optiland_gui.catalogs.importers.excelitas_linos import (
-    EXCELITAS_DISCOVERY_PAGE_URLS,
     EXCELITAS_DEFAULT_FAMILY_URLS,
+    EXCELITAS_DISCOVERY_PAGE_URLS,
     extract_excelitas_document_urls,
     extract_excelitas_family_urls,
     extract_excelitas_zemax_urls,
     looks_like_excelitas_family_page,
 )
+from optiland_gui.catalogs.importers.winlens_spd import (
+    is_winlens_catalog_path,
+    load_winlens_alias_groups,
+)
 from optiland_gui.catalogs.matching import build_winlens_match_map
+from optiland_gui.catalogs.schema import (
+    CatalogLensRecord,
+    CatalogSource,
+    LensSurfaceSpec,
+)
 from optiland_gui.catalogs.search import (
     CatalogSearchQuery,
     CatalogSearchService,
     TextFilter,
 )
 from optiland_gui.catalogs.storage import CatalogStorage
-from optiland_gui.catalogs.schema import CatalogLensRecord, CatalogSource, LensSurfaceSpec
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 EDMUND_ZEMAX_PAGE_URL = "https://www.edmundoptics.com/products/services/zemax-catalog/"
 EDMUND_PRODUCTS_PAGE_URL = "https://www.edmundoptics.com/products/"
-THORLABS_ZEMAX_PAGE_URL = "https://www.thorlabs.com/software_pages/ViewSoftwarePage.cfm?Code=Zemax"
+THORLABS_ZEMAX_PAGE_URL = (
+    "https://www.thorlabs.com/software_pages/ViewSoftwarePage.cfm?Code=Zemax"
+)
 THORLABS_PRODUCTS_PAGE_URL = "https://www.thorlabs.com/navigation.cfm?guide_id=1"
 EXCELITAS_SHOP_ROOT_URL = "https://linosoptics.excelitas.com/"
 EDMUND_FALLBACK_ARCHIVE_URL = (
@@ -148,7 +157,9 @@ class CatalogImportResult:
 class CatalogService:
     """Manage locally cached stock-lens records and vendor importers."""
 
-    def __init__(self, connector: object, session: requests.Session | None = None) -> None:
+    def __init__(
+        self, connector: object, session: requests.Session | None = None
+    ) -> None:
         self._connector = connector
         self._storage = CatalogStorage()
         self._search_service = CatalogSearchService()
@@ -160,7 +171,9 @@ class CatalogService:
         self._surface_records: list[CatalogLensRecord] = []
         self._surface_records_by_part: dict[str, list[CatalogLensRecord]] = {}
         self._winlens_records: list[CatalogLensRecord] = []
-        self._winlens_match_links_cache: dict[str, list[dict[str, object]]] | None = None
+        self._winlens_match_links_cache: dict[str, list[dict[str, object]]] | None = (
+            None
+        )
         self._winlens_alias_groups_cache: list | None = None
         self._insertable_record_cache: dict[str, CatalogLensRecord | None] = {}
         self._importers = {
@@ -229,7 +242,10 @@ class CatalogService:
         self,
         family_urls: list[str] | None = None,
     ) -> CatalogDownloadResult:
-        """Download Excelitas / LINOS official family metadata and linked Zemax files."""
+        """Download Excelitas / LINOS family metadata and linked Zemax files.
+
+        Everything comes from the official vendor pages.
+        """
         importer = self._importers["excelitas"]
         download_dir = self._storage.downloads_root / "excelitas"
         download_dir.mkdir(parents=True, exist_ok=True)
@@ -304,10 +320,16 @@ class CatalogService:
 
         optical_records: list[CatalogLensRecord] = []
         if download_paths:
-            optical_records = self._load_records_from_import_paths(importer, download_paths)
+            optical_records = self._load_records_from_import_paths(
+                importer, download_paths
+            )
 
-        combined_records = self._merge_excelitas_records(metadata_records, optical_records)
-        combined_records = self._enrich_imported_records(importer.manufacturer, combined_records)
+        combined_records = self._merge_excelitas_records(
+            metadata_records, optical_records
+        )
+        combined_records = self._enrich_imported_records(
+            importer.manufacturer, combined_records
+        )
         self._persist_manufacturer_records(importer.manufacturer, combined_records)
         self._save_excelitas_document_manifest(document_manifest)
 
@@ -318,11 +340,13 @@ class CatalogService:
             )
         else:
             message = (
-                "Downloaded Excelitas / LINOS catalog metadata. No linked Zemax files were "
-                f"available, so {len(combined_records)} metadata-only records were cached."
+                "Downloaded Excelitas / LINOS catalog metadata. No linked Zemax "
+                f"files were available, so {len(combined_records)} metadata-only "
+                "records were cached."
             )
         if document_manifest:
-            message += f" Found {sum(len(urls) for urls in document_manifest.values())} official document link(s)."
+            link_count = sum(len(urls) for urls in document_manifest.values())
+            message += f" Found {link_count} official document link(s)."
 
         return CatalogDownloadResult(
             manufacturer=importer.manufacturer,
@@ -333,7 +357,9 @@ class CatalogService:
             message=message,
         )
 
-    def _discover_excelitas_family_pages(self) -> tuple[list[str], dict[str, tuple[str, str]]]:
+    def _discover_excelitas_family_pages(
+        self,
+    ) -> tuple[list[str], dict[str, tuple[str, str]]]:
         """Discover likely LINOS family pages and reuse already fetched HTML."""
         discovered: list[str] = []
         prefetched_pages: dict[str, tuple[str, str]] = {}
@@ -436,19 +462,25 @@ class CatalogService:
         importer,
         filepath: str | list[str],
     ) -> list[CatalogLensRecord]:
-        """Load records from files/folders for a concrete importer without persisting yet."""
-        supported_suffixes = set(getattr(importer, "supported_suffixes", {".json", ".zmx", ".zmf"}))
+        """Load records from files or folders for one importer without persisting."""
+        supported_suffixes = set(
+            getattr(importer, "supported_suffixes", {".json", ".zmx", ".zmf"})
+        )
         input_paths = [filepath] if isinstance(filepath, str) else filepath
         extracted_dirs = self._extract_zip_archives(importer.manufacturer, input_paths)
         search_paths = [*input_paths, *[str(path) for path in extracted_dirs]]
-        zmf_paths = self._find_zmf_paths(search_paths) if ".zmf" in supported_suffixes else []
+        zmf_paths = (
+            self._find_zmf_paths(search_paths) if ".zmf" in supported_suffixes else []
+        )
         expanded_paths = self._expand_import_paths(
             search_paths,
             supported_suffixes - {".zmf"},
         )
         import_paths = [*expanded_paths, *zmf_paths]
         if importer.manufacturer.casefold() == "winlens library 2002":
-            import_paths = [path for path in import_paths if is_winlens_catalog_path(path)]
+            import_paths = [
+                path for path in import_paths if is_winlens_catalog_path(path)
+            ]
         if not import_paths:
             raise ValueError(
                 "No supported catalog files were selected. "
@@ -468,10 +500,13 @@ class CatalogService:
                 continue
 
         if not imported_records:
-            summary = "; ".join(failures[:3]) if failures else "No readable catalog records found."
+            summary = (
+                "; ".join(failures[:3])
+                if failures
+                else "No readable catalog records found."
+            )
             raise ValueError(
-                "No catalog entries could be imported. "
-                f"Sample failures: {summary}"
+                f"No catalog entries could be imported. Sample failures: {summary}"
             )
         return self._enrich_imported_records(importer.manufacturer, imported_records)
 
@@ -540,7 +575,7 @@ class CatalogService:
         return list(merged.values())
 
     def download_edmund_catalog(self) -> CatalogDownloadResult:
-        """Download Edmund's official Zemax catalog archive and import supported files."""
+        """Download Edmund's official Zemax archive and import the supported files."""
         importer = self._importers["edmund"]
         download_dir = self._storage.downloads_root / "edmund"
         download_dir.mkdir(parents=True, exist_ok=True)
@@ -560,12 +595,15 @@ class CatalogService:
             archive_response.raise_for_status()
         except requests.HTTPError as exc:
             raise ValueError(
-                "Edmund blocked the catalog download request. The official Zemax page is "
-                "reachable, but the archive itself returned an access error. "
-                "Try importing a manually downloaded archive or .zmx files instead."
+                "Edmund blocked the catalog download request. The official Zemax "
+                "page is reachable, but the archive itself returned an access "
+                "error. Try importing a manually downloaded archive or .zmx "
+                "files instead."
             ) from exc
 
-        archive_name = _download_filename_from_url(archive_url, "edmund_zemax_catalog.zip")
+        archive_name = _download_filename_from_url(
+            archive_url, "edmund_zemax_catalog.zip"
+        )
         archive_path = download_dir / archive_name
         archive_path.write_bytes(archive_response.content)
 
@@ -591,16 +629,20 @@ class CatalogService:
         zmf_paths = self._find_zmf_paths([str(extract_dir)])
         imported_count = 0
         if supported_paths:
-            imported_count = self.import_catalog_file(importer.manufacturer, [str(path) for path in supported_paths])
+            imported_count = self.import_catalog_file(
+                importer.manufacturer, [str(path) for path in supported_paths]
+            )
             if zmf_paths:
                 message = (
                     "Downloaded Edmund catalog archive, imported "
                     f"{imported_count} supported catalog files, and detected "
-                    f"{len(zmf_paths)} ZMF catalog file(s) that were also saved locally."
+                    f"{len(zmf_paths)} ZMF catalog file(s) that were also saved "
+                    "locally."
                 )
             else:
                 message = (
-                    f"Downloaded Edmund catalog archive and imported {imported_count} supported catalog files."
+                    "Downloaded Edmund catalog archive and imported "
+                    f"{imported_count} supported catalog files."
                 )
         elif zmf_paths:
             imported_count = self.import_catalog_file(
@@ -609,12 +651,13 @@ class CatalogService:
             )
             message = (
                 "Downloaded the official Edmund catalog archive and imported "
-                f"{imported_count} catalog entries from {len(zmf_paths)} ZMF catalog file(s)."
+                f"{imported_count} catalog entries from {len(zmf_paths)} ZMF "
+                "catalog file(s)."
             )
         else:
             message = (
-                "Downloaded the official Edmund catalog archive, but it did not contain "
-                "directly importable .zmx or normalized .json files. "
+                "Downloaded the official Edmund catalog archive, but it did not "
+                "contain directly importable .zmx or normalized .json files. "
                 "The archive was saved locally for manual inspection."
             )
 
@@ -628,7 +671,7 @@ class CatalogService:
         )
 
     def download_thorlabs_catalog(self) -> CatalogDownloadResult:
-        """Download Thorlabs' official Zemax catalog package and import supported files."""
+        """Download Thorlabs' official Zemax package and import the supported files."""
         importer = self._importers["thorlabs"]
         download_dir = self._storage.downloads_root / "thorlabs"
         download_dir.mkdir(parents=True, exist_ok=True)
@@ -651,7 +694,9 @@ class CatalogService:
                 "Try importing a manually downloaded archive or .zmx files instead."
             ) from exc
 
-        archive_name = _download_filename_from_url(archive_url, "thorlabs_zemax_catalog.zip")
+        archive_name = _download_filename_from_url(
+            archive_url, "thorlabs_zemax_catalog.zip"
+        )
         archive_path = download_dir / archive_name
         archive_path.write_bytes(archive_response.content)
 
@@ -679,16 +724,20 @@ class CatalogService:
             supported_paths = self._expand_import_paths([str(extract_dir)])
             zmf_paths = self._find_zmf_paths([str(extract_dir)])
             if supported_paths:
-                imported_count = self.import_catalog_file(importer.manufacturer, [str(path) for path in supported_paths])
+                imported_count = self.import_catalog_file(
+                    importer.manufacturer, [str(path) for path in supported_paths]
+                )
                 if zmf_paths:
                     message = (
                         "Downloaded Thorlabs catalog archive, imported "
                         f"{imported_count} supported catalog files, and detected "
-                        f"{len(zmf_paths)} ZMF catalog file(s) that were also saved locally."
+                        f"{len(zmf_paths)} ZMF catalog file(s) that were also "
+                        "saved locally."
                     )
                 else:
                     message = (
-                        f"Downloaded Thorlabs catalog archive and imported {imported_count} supported catalog files."
+                        "Downloaded Thorlabs catalog archive and imported "
+                        f"{imported_count} supported catalog files."
                     )
             elif zmf_paths:
                 imported_count = self.import_catalog_file(
@@ -697,16 +746,20 @@ class CatalogService:
                 )
                 message = (
                     "Downloaded the official Thorlabs catalog archive and imported "
-                    f"{imported_count} catalog entries from {len(zmf_paths)} ZMF catalog file(s)."
+                    f"{imported_count} catalog entries from {len(zmf_paths)} ZMF "
+                    "catalog file(s)."
                 )
             else:
                 message = (
-                    "Downloaded the official Thorlabs catalog archive, but it did not contain "
-                    "directly importable .zmx or normalized .json files. "
+                    "Downloaded the official Thorlabs catalog archive, but it did "
+                    "not contain directly importable .zmx or normalized .json "
+                    "files. "
                     "The archive was saved locally for manual inspection."
                 )
         else:
-            imported_count = self.import_catalog_file(importer.manufacturer, [str(archive_path)])
+            imported_count = self.import_catalog_file(
+                importer.manufacturer, [str(archive_path)]
+            )
             message = (
                 "Downloaded the official Thorlabs catalog file and imported "
                 f"{imported_count} catalog entries."
@@ -745,11 +798,15 @@ class CatalogService:
             headers=_BROWSER_HEADERS,
         )
         page_response.raise_for_status()
-        return extract_thorlabs_download_url(page_response.text, page_response.url or THORLABS_ZEMAX_PAGE_URL)
+        return extract_thorlabs_download_url(
+            page_response.text, page_response.url or THORLABS_ZEMAX_PAGE_URL
+        )
 
     def get_manufacturers(self) -> list[str]:
         """Return manufacturer names currently available in the local cache."""
-        return sorted({record.manufacturer for record in self._records if record.manufacturer})
+        return sorted(
+            {record.manufacturer for record in self._records if record.manufacturer}
+        )
 
     def search(self, query_dict: dict | None = None) -> list[dict]:
         """Return GUI summary dicts matching *query_dict*."""
@@ -868,7 +925,9 @@ class CatalogService:
         """Return cached candidate record links for *catalog_id*."""
         return list(self._load_winlens_match_links().get(catalog_id, []))
 
-    def get_winlens_review_candidates(self, min_confidence_percent: int = 76) -> list[dict[str, object]]:
+    def get_winlens_review_candidates(
+        self, min_confidence_percent: int = 76
+    ) -> list[dict[str, object]]:
         """Return WinLens candidate matches that are strong enough for manual review."""
         link_map = self._load_winlens_match_links()
         review_rows: list[dict[str, object]] = []
@@ -910,7 +969,9 @@ class CatalogService:
             ),
         )
 
-    def _review_family_key(self, record: CatalogLensRecord, top_link: dict[str, object]) -> str:
+    def _review_family_key(
+        self, record: CatalogLensRecord, top_link: dict[str, object]
+    ) -> str:
         winlens_digits = re.sub(r"[^0-9]+", "", record.part_number)
         target_digits = re.sub(r"[^0-9]+", "", str(top_link.get("part_number", "")))
         if len(target_digits) >= 6:
@@ -919,7 +980,9 @@ class CatalogService:
             return winlens_digits[:6]
         return winlens_digits or record.part_number
 
-    def _build_review_preview(self, record: CatalogLensRecord, top_link: dict[str, object]) -> str:
+    def _build_review_preview(
+        self, record: CatalogLensRecord, top_link: dict[str, object]
+    ) -> str:
         target_part = str(top_link.get("part_number", ""))
         family_key = self._review_family_key(record, top_link)
         return f"Confirm family {family_key} -> {target_part}"
@@ -930,7 +993,11 @@ class CatalogService:
             return 0
         current_map = self._load_winlens_match_links()
         persisted_payload = self._storage.load_cache_payload("winlens_confirmed_links")
-        persisted_links = persisted_payload.get("links", {}) if isinstance(persisted_payload, dict) else {}
+        persisted_links = (
+            persisted_payload.get("links", {})
+            if isinstance(persisted_payload, dict)
+            else {}
+        )
         if not isinstance(persisted_links, dict):
             persisted_links = {}
         applied = 0
@@ -969,7 +1036,9 @@ class CatalogService:
 
     def delete_records(self, catalog_ids: list[str]) -> int:
         """Delete cached catalog records by id and persist the remaining records."""
-        to_delete = {str(catalog_id) for catalog_id in catalog_ids if str(catalog_id).strip()}
+        to_delete = {
+            str(catalog_id) for catalog_id in catalog_ids if str(catalog_id).strip()
+        }
         if not to_delete:
             return 0
         removed = 0
@@ -981,7 +1050,9 @@ class CatalogService:
                 continue
             manufacturers.setdefault(record.manufacturer, []).append(record)
         for manufacturer in seen_manufacturers:
-            self._storage.save_records(manufacturer, manufacturers.get(manufacturer, []))
+            self._storage.save_records(
+                manufacturer, manufacturers.get(manufacturer, [])
+            )
         self._reload_all()
         self._refresh_winlens_record_links()
         return removed
@@ -1095,13 +1166,18 @@ class CatalogService:
         link_map: dict[str, list[dict[str, object]]],
         alias_groups: list,
     ) -> list[CatalogLensRecord]:
-        """Assign `legacy`/`unknown` to WinLens-only records without a confirmed current match."""
+        """Assign `legacy`/`unknown` to WinLens-only records.
+
+        Only records without a confirmed current match are affected.
+        """
         alias_tokens = self._build_winlens_alias_token_set(alias_groups)
         updated: list[CatalogLensRecord] = []
         for record in winlens_records:
             links = link_map.get(record.catalog_id, [])
             confirmed_links = [
-                link for link in links if str(link.get("match_type", "")).casefold() == "confirmed"
+                link
+                for link in links
+                if str(link.get("match_type", "")).casefold() == "confirmed"
             ]
             if confirmed_links:
                 record.availability_status = None
@@ -1118,19 +1194,22 @@ class CatalogService:
     def _build_winlens_alias_token_set(self, alias_groups: list) -> set[str]:
         tokens: set[str] = set()
         for group in alias_groups:
-            for token in [*getattr(group, "part_numbers", []), *getattr(group, "family_numbers", [])]:
+            for token in [
+                *getattr(group, "part_numbers", []),
+                *getattr(group, "family_numbers", []),
+            ]:
                 clean = re.sub(r"[^0-9]+", "", str(token))
                 if clean:
                     tokens.add(clean)
         return tokens
 
-    def _record_has_alias_context(self, record: CatalogLensRecord, alias_tokens: set[str]) -> bool:
+    def _record_has_alias_context(
+        self, record: CatalogLensRecord, alias_tokens: set[str]
+    ) -> bool:
         record_digits = re.sub(r"[^0-9]+", "", record.part_number)
         if record_digits and record_digits in alias_tokens:
             return True
-        if len(record_digits) >= 6 and record_digits[:6] in alias_tokens:
-            return True
-        return False
+        return len(record_digits) >= 6 and record_digits[:6] in alias_tokens
 
     def _save_persisted_confirmed_links(
         self,
@@ -1140,7 +1219,8 @@ class CatalogService:
         for catalog_id, links in link_map.items():
             confirmed = next(
                 (
-                    link for link in links
+                    link
+                    for link in links
                     if str(link.get("match_type", "")).casefold() == "confirmed"
                 ),
                 None,
@@ -1175,7 +1255,8 @@ class CatalogService:
                 continue
             current_links = merged.setdefault(winlens_catalog_id, [])
             current_links = [
-                item for item in current_links
+                item
+                for item in current_links
                 if str(item.get("catalog_id", "")) != target_catalog_id
             ]
             current_links.insert(0, dict(link))
@@ -1220,11 +1301,13 @@ class CatalogService:
 
     def _can_attempt_online_enrichment(self, record: CatalogLensRecord) -> bool:
         """Return whether a record has enough identity to justify a live lookup."""
-        if _looks_like_product_url(record.url) or _looks_like_product_url(record.source.source_url):
-            return True
-        if _looks_like_thorlabs_product_url(record.url) or _looks_like_thorlabs_product_url(
+        if _looks_like_product_url(record.url) or _looks_like_product_url(
             record.source.source_url
         ):
+            return True
+        if _looks_like_thorlabs_product_url(
+            record.url
+        ) or _looks_like_thorlabs_product_url(record.source.source_url):
             return True
         if record.manufacturer.casefold() == "edmund":
             return bool(_EDMUND_PART_RE.fullmatch(record.part_number.strip()))
@@ -1232,7 +1315,9 @@ class CatalogService:
             return bool(_THORLABS_PART_RE.fullmatch(record.part_number.strip()))
         return False
 
-    def _apply_local_metadata_fallbacks(self, record: CatalogLensRecord, text: str) -> None:
+    def _apply_local_metadata_fallbacks(
+        self, record: CatalogLensRecord, text: str
+    ) -> None:
         """Populate still-missing metadata using local heuristic parsing."""
         if not record.category:
             record.category = _infer_category_from_text(text)
@@ -1245,8 +1330,13 @@ class CatalogService:
         if not record.coating:
             record.coating = _infer_coating_from_text(text)
 
-    def _fetch_official_product_metadata(self, record: CatalogLensRecord) -> dict[str, object] | None:
-        """Return parsed official-page metadata for *record*, cached by manufacturer/part no."""
+    def _fetch_official_product_metadata(
+        self, record: CatalogLensRecord
+    ) -> dict[str, object] | None:
+        """Return parsed official-page metadata for *record*.
+
+        The result is cached per manufacturer and part number.
+        """
         cache_key = (record.manufacturer.casefold(), record.part_number.casefold())
         if cache_key in self._metadata_page_cache:
             return self._metadata_page_cache[cache_key]
@@ -1313,7 +1403,9 @@ class CatalogService:
         self._product_url_cache[cache_key] = resolved
         return resolved
 
-    def _apply_online_metadata(self, record: CatalogLensRecord, data: dict[str, object]) -> None:
+    def _apply_online_metadata(
+        self, record: CatalogLensRecord, data: dict[str, object]
+    ) -> None:
         """Apply parsed online metadata only to fields that are still missing."""
         if not record.category and data.get("category"):
             record.category = str(data["category"])
@@ -1327,7 +1419,7 @@ class CatalogService:
             record.coating = str(data["coating"])
 
     def _resolve_edmund_product_url(self, part_number: str) -> str:
-        """Resolve Edmund's live product page for *part_number* using official search."""
+        """Find Edmund's live product page for *part_number* via the official search."""
         for query in _edmund_part_number_queries(part_number):
             search_url = _build_edmund_search_url(query)
             try:
@@ -1362,14 +1454,16 @@ class CatalogService:
         raw_paths: Iterable[str],
         suffixes: set[str] | None = None,
     ) -> list[Path]:
-        """Return supported files from *raw_paths*, expanding directories recursively."""
+        """Return the supported files in *raw_paths*, walking folders recursively."""
         return self._collect_paths(raw_paths, suffixes or {".json", ".zmx"})
 
     def _find_zmf_paths(self, raw_paths: Iterable[str]) -> list[Path]:
         """Return ZMF files from *raw_paths*, expanding directories recursively."""
         return self._collect_paths(raw_paths, {".zmf"})
 
-    def _collect_paths(self, raw_paths: Iterable[str], suffixes: set[str]) -> list[Path]:
+    def _collect_paths(
+        self, raw_paths: Iterable[str], suffixes: set[str]
+    ) -> list[Path]:
         """Return matching files from *raw_paths*, expanding directories recursively."""
         seen: set[Path] = set()
         expanded: list[Path] = []
@@ -1408,7 +1502,9 @@ class CatalogService:
         if not zip_paths:
             return []
 
-        extract_root = self._storage.downloads_root / manufacturer.strip().lower() / "imports"
+        extract_root = (
+            self._storage.downloads_root / manufacturer.strip().lower() / "imports"
+        )
         extract_root.mkdir(parents=True, exist_ok=True)
         extracted_dirs: list[Path] = []
         for zip_path in zip_paths:
@@ -1435,19 +1531,27 @@ def _float_or_none(value) -> float | None:  # noqa: ANN001
         return None
 
 
-def extract_edmund_download_url(html: str, base_url: str = EDMUND_ZEMAX_PAGE_URL) -> str:
+def extract_edmund_download_url(
+    html: str, base_url: str = EDMUND_ZEMAX_PAGE_URL
+) -> str:
     """Return Edmund's official catalog archive URL from the Zemax catalog page."""
     matches = _ZIP_HREF_RE.findall(html)
     prioritized = [
-        href for href in matches if "zemax" in href.casefold() or "zmf" in href.casefold()
+        href
+        for href in matches
+        if "zemax" in href.casefold() or "zmf" in href.casefold()
     ]
     candidate = prioritized[0] if prioritized else (matches[0] if matches else "")
     if not candidate:
-        raise ValueError("Could not find an official Edmund catalog download link on the Zemax page.")
+        raise ValueError(
+            "Could not find an official Edmund catalog download link on the Zemax page."
+        )
     return urljoin(base_url, candidate)
 
 
-def extract_thorlabs_download_url(html: str, base_url: str = THORLABS_ZEMAX_PAGE_URL) -> str:
+def extract_thorlabs_download_url(
+    html: str, base_url: str = THORLABS_ZEMAX_PAGE_URL
+) -> str:
     """Return Thorlabs' official catalog file URL from the Zemax software page."""
     matches = _CATALOG_FILE_HREF_RE.findall(html)
     prioritized = [
@@ -1457,7 +1561,10 @@ def extract_thorlabs_download_url(html: str, base_url: str = THORLABS_ZEMAX_PAGE
     ]
     candidate = prioritized[0] if prioritized else (matches[0] if matches else "")
     if not candidate:
-        raise ValueError("Could not find an official Thorlabs catalog download link on the Zemax page.")
+        raise ValueError(
+            "Could not find an official Thorlabs catalog download link on the "
+            "Zemax page."
+        )
     return urljoin(base_url, candidate)
 
 
@@ -1485,7 +1592,9 @@ def _edmund_part_number_queries(part_number: str) -> list[str]:
     return queries
 
 
-def _extract_edmund_product_url_from_html(html: str, base_url: str, part_number: str) -> str | None:
+def _extract_edmund_product_url_from_html(
+    html: str, base_url: str, part_number: str
+) -> str | None:
     """Extract a matching Edmund product URL for *part_number* from HTML."""
     normalized_part = _normalize_stock_number(part_number)
     for match in _EDMUND_PRODUCT_HREF_RE.finditer(html):
@@ -1553,25 +1662,40 @@ def _infer_category_from_text(text: str) -> str:
 
 def _infer_efl_from_text(text: str) -> float | None:
     """Infer EFL in mm from free-form text."""
-    return _extract_named_float(_FOCAL_MM_RE, text) or _extract_named_float(
-        _FOCAL_MM_ALT_RE,
-        text,
-    ) or _extract_pair_value(text, 1)
+    return (
+        _extract_named_float(_FOCAL_MM_RE, text)
+        or _extract_named_float(
+            _FOCAL_MM_ALT_RE,
+            text,
+        )
+        or _extract_pair_value(text, 1)
+    )
 
 
 def _infer_diameter_from_text(text: str) -> float | None:
     """Infer diameter in mm from free-form text."""
-    return _extract_named_float(_DIAMETER_MM_ALT_RE, text) or _extract_named_float(
-        _DIAMETER_MM_RE,
-        text,
-    ) or _extract_pair_value(text, 0)
- 
- 
+    return (
+        _extract_named_float(_DIAMETER_MM_ALT_RE, text)
+        or _extract_named_float(
+            _DIAMETER_MM_RE,
+            text,
+        )
+        or _extract_pair_value(text, 0)
+    )
+
+
 def _infer_material_from_text(text: str) -> str | None:
     """Infer substrate/material from free-form text."""
     match = _MATERIAL_RE.search(text)
     if not match:
-        for candidate in ("N-BK7", "UVFS", "Fused Silica", "Silicon", "Germanium", "Calcium Fluoride"):
+        for candidate in (
+            "N-BK7",
+            "UVFS",
+            "Fused Silica",
+            "Silicon",
+            "Germanium",
+            "Calcium Fluoride",
+        ):
             if candidate.casefold() in text.casefold():
                 return candidate
         return None
@@ -1642,14 +1766,18 @@ def _merge_catalog_record_pair(
         center_thickness_mm=(
             optical_record.center_thickness_mm or metadata_record.center_thickness_mm
         ),
-        edge_thickness_mm=optical_record.edge_thickness_mm or metadata_record.edge_thickness_mm,
-        material_summary=metadata_record.material_summary or optical_record.material_summary,
+        edge_thickness_mm=optical_record.edge_thickness_mm
+        or metadata_record.edge_thickness_mm,
+        material_summary=metadata_record.material_summary
+        or optical_record.material_summary,
         coating=metadata_record.coating or optical_record.coating,
         availability_status=(
             metadata_record.availability_status or optical_record.availability_status
         ),
-        wavelength_min_um=optical_record.wavelength_min_um or metadata_record.wavelength_min_um,
-        wavelength_max_um=optical_record.wavelength_max_um or metadata_record.wavelength_max_um,
+        wavelength_min_um=optical_record.wavelength_min_um
+        or metadata_record.wavelength_min_um,
+        wavelength_max_um=optical_record.wavelength_max_um
+        or metadata_record.wavelength_max_um,
         surfaces=optical_record.surfaces or metadata_record.surfaces,
         stop_surface_offset=(
             optical_record.stop_surface_offset
@@ -1686,7 +1814,9 @@ def _normalize_catalog_part_token(value: str) -> str:
     return token
 
 
-def _record_matches_alias_tokens(record: CatalogLensRecord, alias_tokens: set[str]) -> bool:
+def _record_matches_alias_tokens(
+    record: CatalogLensRecord, alias_tokens: set[str]
+) -> bool:
     record_digits = re.sub(r"[^0-9]+", "", record.part_number)
     if record_digits in alias_tokens:
         return True
@@ -1700,7 +1830,10 @@ def _alias_tokens_for_record(record: CatalogLensRecord, alias_groups: list) -> s
     for group in alias_groups:
         group_tokens = {
             re.sub(r"[^0-9]+", "", str(token))
-            for token in [*getattr(group, "part_numbers", []), *getattr(group, "family_numbers", [])]
+            for token in [
+                *getattr(group, "part_numbers", []),
+                *getattr(group, "family_numbers", []),
+            ]
         }
         group_tokens.discard("")
         if record_digits and record_digits in group_tokens:
@@ -1722,7 +1855,11 @@ def _resolve_insertable_record_from_winlens_links(
             if str(link.get("catalog_id", "")) != record.catalog_id:
                 continue
             source_record = next(
-                (candidate for candidate in records if candidate.catalog_id == winlens_catalog_id),
+                (
+                    candidate
+                    for candidate in records
+                    if candidate.catalog_id == winlens_catalog_id
+                ),
                 None,
             )
             if source_record is None or not source_record.surfaces:
@@ -1760,7 +1897,9 @@ def _resolve_insertable_record_from_winlens_family(
     if not family_candidates:
         return None
 
-    surface_candidates = [candidate for candidate in family_candidates if candidate.surfaces]
+    surface_candidates = [
+        candidate for candidate in family_candidates if candidate.surfaces
+    ]
     if surface_candidates:
         return sorted(
             surface_candidates,
@@ -1771,7 +1910,9 @@ def _resolve_insertable_record_from_winlens_family(
         )[0]
 
     metadata_candidates = [
-        candidate for candidate in family_candidates if _can_build_paraxial_surrogate(candidate)
+        candidate
+        for candidate in family_candidates
+        if _can_build_paraxial_surrogate(candidate)
     ]
     if not metadata_candidates:
         return None
@@ -1799,7 +1940,9 @@ def _can_build_paraxial_surrogate(record: CatalogLensRecord) -> bool:
 
 def _build_paraxial_surrogate_record(record: CatalogLensRecord) -> CatalogLensRecord:
     semi_diameter = (
-        float(record.diameter_mm) / 2.0 if record.diameter_mm not in (None, 0.0) else None
+        float(record.diameter_mm) / 2.0
+        if record.diameter_mm not in (None, 0.0)
+        else None
     )
     return CatalogLensRecord(
         catalog_id=record.catalog_id,
@@ -1839,14 +1982,20 @@ def _build_paraxial_surrogate_record(record: CatalogLensRecord) -> CatalogLensRe
     )
 
 
-def _winlens_family_distance(record: CatalogLensRecord, candidate: CatalogLensRecord) -> tuple[float, float]:
+def _winlens_family_distance(
+    record: CatalogLensRecord, candidate: CatalogLensRecord
+) -> tuple[float, float]:
     record_efl = float(record.efl_mm) if record.efl_mm is not None else float("inf")
-    candidate_efl = float(candidate.efl_mm) if candidate.efl_mm is not None else float("inf")
+    candidate_efl = (
+        float(candidate.efl_mm) if candidate.efl_mm is not None else float("inf")
+    )
     record_diameter = (
         float(record.diameter_mm) if record.diameter_mm is not None else float("inf")
     )
     candidate_diameter = (
-        float(candidate.diameter_mm) if candidate.diameter_mm is not None else float("inf")
+        float(candidate.diameter_mm)
+        if candidate.diameter_mm is not None
+        else float("inf")
     )
     return (
         abs(record_efl - candidate_efl),
